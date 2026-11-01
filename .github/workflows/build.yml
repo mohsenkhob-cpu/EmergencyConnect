@@ -1,3 +1,5 @@
+
+
 name: Build EmergencyConnect APK
 
 on:
@@ -11,7 +13,22 @@ jobs:
 
     steps:
       - name: Get project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Extract project ZIP
         run: |
@@ -22,19 +39,7 @@ jobs:
           fi
           mkdir extracted
           unzip -q "$ZIP_FILE" -d extracted
-          cp -R extracted/EmergencyConnect/. .
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          find extracted -name build.gradle -type f
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -42,10 +47,13 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build APK
-        run: gradle assembleDebug
+        run: |
+          PROJECT_DIR=$(dirname "$(find extracted -name settings.gradle -type f | head -n 1)")
+          cd "$PROJECT_DIR"
+          gradle assembleDebug
 
       - name: Save APK
         uses: actions/upload-artifact@v4
         with:
           name: EmergencyConnect-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: extracted/**/app/build/outputs/apk/debug/*.apk
