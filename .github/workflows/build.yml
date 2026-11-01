@@ -32,11 +32,11 @@ jobs:
 
       - name: Extract project ZIP
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ZIP file not found"
-            exit 1
-          fi
+          ZIP_FILE="./RahYabVPN-v1.1-GitHub-Project.zip"
+if [ ! -f "$ZIP_FILE" ]; then
+  echo "RahYabVPN project ZIP file not found"
+  exit 1
+fi
           mkdir extracted
           unzip -q "$ZIP_FILE" -d extracted
           find extracted -name build.gradle -type f
