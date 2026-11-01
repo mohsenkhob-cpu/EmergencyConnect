@@ -21,8 +21,21 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+     
       - name: Install Android SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -f "$SDKMANAGER" ]; then
+            SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f | head -n 1)
+          fi
+          if [ -z "$SDKMANAGER" ] || [ ! -f "$SDKMANAGER" ]; then
+            echo "sdkmanager not found"
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
+ 
 
       - name: Extract project ZIP
         run: |
