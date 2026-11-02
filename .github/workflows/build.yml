@@ -7,6 +7,9 @@ on:
       - main
       - v2-engine-starter
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,7 +36,7 @@ jobs:
           unzip -q "$ZIP_FILE" -d extracted
       - name: Apply maintained overlay
         run: |
-          SETTINGS_FILE=$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
+          SETTINGS_FILE=$(find extracted -type f \\( -name settings.gradle -o -name settings.gradle.kts \\) | head -n 1)
           test -n "$SETTINGS_FILE" || { echo "Gradle settings file not found"; exit 1; }
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           if [ -d overlay ]; then cp -a overlay/. "$PROJECT_DIR/"; fi
@@ -42,8 +45,8 @@ jobs:
       - name: Inspect and package Android project sources
         run: |
           mkdir -p source-inspection
-          find "$PROJECT_DIR" -maxdepth 8 -type f \
-            \( -name '*.java' -o -name '*.kt' -o -name '*.gradle' -o -name '*.kts' -o -name 'AndroidManifest.xml' -o -name '*.xml' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) \
+          find "$PROJECT_DIR" -maxdepth 8 -type f \\
+            \\( -name '*.java' -o -name '*.kt' -o -name '*.gradle' -o -name '*.kts' -o -name 'AndroidManifest.xml' -o -name '*.xml' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \\) \\
             | sort > source-inspection/file-list.txt
           while IFS= read -r f; do
             rel="${f#"$PROJECT_DIR"/}"
@@ -57,6 +60,28 @@ jobs:
             if [ -f "$f" ]; then echo "=== $f ==="; sed -n '1,220p' "$f"; fi
           done
           (cd source-inspection && zip -qr ../RahYabVPN-v2-source-inspection.zip .)
+      - name: Publish source files to inspection branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -d source-inspection/files
+          mkdir -p source-export
+          cp -a source-inspection/files source-export/
+          cp source-inspection/file-list.txt source-export/
+          cat > source-export/README_FA.md <<'EOF'
+          # سورس استخراج‌شده RahYabVPN v2
+          این شاخه فقط برای بررسی فایل‌های واقعی پروژه پایه و overlay ساخته شده است.
+          فایل‌ها از ZIP پروژه در اجرای خودکار GitHub Actions استخراج شده‌اند.
+          این خروجی به معنی وجود موتور VPN مستقل نیست.
+          EOF
+          git -C source-export init
+          git -C source-export config user.name "github-actions[bot]"
+          git -C source-export config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C source-export add .
+          git -C source-export commit -m "Publish extracted Android sources for inspection"
+          git -C source-export remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C source-export push --force origin HEAD:v2-source-inspection
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
