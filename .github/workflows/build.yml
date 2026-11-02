@@ -31,7 +31,11 @@ jobs:
       - name: Fetch pinned OpenVPN 3 source for audit
         run: |
           set -euo pipefail
-          source overlay/native/openvpn3-source-pin.txt
+          PIN_FILE="overlay/native/openvpn3-source-pin.txt"
+          OPENVPN3_REPOSITORY=$(sed -n 's/^OPENVPN3_REPOSITORY=//p' "$PIN_FILE")
+          OPENVPN3_COMMIT=$(sed -n 's/^OPENVPN3_COMMIT=//p' "$PIN_FILE")
+          OPENVPN3_LICENSE=$(sed -n 's/^OPENVPN3_LICENSE=//p' "$PIN_FILE")
+          test -n "$OPENVPN3_REPOSITORY" && test -n "$OPENVPN3_COMMIT" && test -n "$OPENVPN3_LICENSE"
           git clone --filter=blob:none "$OPENVPN3_REPOSITORY" openvpn3-upstream
           git -C openvpn3-upstream checkout --detach "$OPENVPN3_COMMIT"
           ACTUAL=$(git -C openvpn3-upstream rev-parse HEAD)
