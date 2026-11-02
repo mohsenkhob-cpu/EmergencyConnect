@@ -7,14 +7,22 @@ endif()
 if(NOT DEFINED VCPKG_INSTALLED_DIR)
   get_filename_component(VCPKG_INSTALLED_DIR "${CMAKE_PREFIX_PATH}" ABSOLUTE)
 endif()
-
-find_package(fmt CONFIG REQUIRED)
-find_package(OpenSSL REQUIRED)
-find_package(unofficial-lz4 CONFIG REQUIRED)
+set(VCPKG_TRIPLET_ROOT "${VCPKG_INSTALLED_DIR}/arm64-android")
+if(NOT EXISTS "${VCPKG_TRIPLET_ROOT}/include")
+  set(VCPKG_TRIPLET_ROOT "${VCPKG_INSTALLED_DIR}")
+endif()
 
 add_library(asio_headers INTERFACE)
-target_include_directories(asio_headers INTERFACE "${VCPKG_INSTALLED_DIR}/include")
+target_include_directories(asio_headers INTERFACE "${VCPKG_TRIPLET_ROOT}/include")
 add_library(asio::asio ALIAS asio_headers)
+
+add_library(fmt_headers INTERFACE)
+target_include_directories(fmt_headers INTERFACE "${VCPKG_TRIPLET_ROOT}/include")
+add_library(fmt::fmt ALIAS fmt_headers)
+
+find_package(OpenSSL REQUIRED)
+find_package(unofficial-lz4 CONFIG REQUIRED
+  PATHS "${VCPKG_TRIPLET_ROOT}/share/unofficial-lz4" NO_DEFAULT_PATH)
 
 add_library(openvpn3_core_probe SHARED
   "${OPENVPN3_SOURCE_DIR}/client/ovpncli.cpp"
