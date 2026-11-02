@@ -1,6 +1,8 @@
 package ir.emergencyconnect.engine;
 
 import android.net.VpnService;
+import android.net.IpPrefix;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 
 import java.net.InetAddress;
@@ -52,6 +54,25 @@ public final class RahYabVpnService extends VpnService {
             String[] routeAddresses,
             int[] routePrefixes,
             int mtu) throws Exception {
+        return establishTun(sessionName, addresses, prefixes, dnsServers,
+                routeAddresses, routePrefixes, new String[0], new int[0], mtu);
+    }
+
+    /**
+     * Full route form used by the embedded engine. Excluded routes are
+     * supported only on Android 13/API 33 and newer; older versions fail
+     * explicitly rather than silently routing traffic differently.
+     */
+    public synchronized int establishTun(
+            String sessionName,
+            String[] addresses,
+            int[] prefixes,
+            String[] dnsServers,
+            String[] routeAddresses,
+            int[] routePrefixes,
+            String[] excludedRouteAddresses,
+            int[] excludedRoutePrefixes,
+            int mtu) throws Exception {
 
         closeTun();
 
@@ -60,8 +81,14 @@ public final class RahYabVpnService extends VpnService {
             throw new IllegalArgumentException("TUN addresses/prefixes are missing or mismatched");
         }
         if (dnsServers == null || routeAddresses == null || routePrefixes == null
-                || routeAddresses.length != routePrefixes.length) {
+                || routeAddresses.length != routePrefixes.length
+                || excludedRouteAddresses == null || excludedRoutePrefixes == null
+                || excludedRouteAddresses.length != excludedRoutePrefixes.length) {
             throw new IllegalArgumentException("TUN DNS/routes are invalid");
+        }
+        if (excludedRouteAddresses.length > 0 && Build.VERSION.SDK_INT < 33) {
+            throw new UnsupportedOperationException(
+                    "Excluded VPN routes require Android 13 or newer");
         }
 
         Builder builder = new Builder()
@@ -88,6 +115,16 @@ public final class RahYabVpnService extends VpnService {
                 throw new IllegalArgumentException("Invalid route prefix");
             }
             builder.addRoute(route, routePrefixes[i]);
+        }
+
+        for (int i = 0; i < excludedRouteAddresses.length; i++) {
+            InetAddress route = parseNumericAddress(
+                    excludedRouteAddresses[i], "excluded route");
+            int maxPrefix = route.getAddress().length * 8;
+            if (excludedRoutePrefixes[i] < 0 || excludedRoutePrefixes[i] > maxPrefix) {
+                throw new IllegalArgumentException("Invalid excluded route prefix");
+            }
+            builder.excludeRoute(new IpPrefix(route, excludedRoutePrefixes[i]));
         }
 
         if (mtu >= 576 && mtu <= 65535) {
