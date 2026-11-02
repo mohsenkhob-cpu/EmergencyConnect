@@ -8,6 +8,14 @@ if(NOT DEFINED VCPKG_INSTALLED_DIR)
   message(FATAL_ERROR "VCPKG_INSTALLED_DIR is required")
 endif()
 
+set(VCPKG_ANDROID_INCLUDE "${VCPKG_INSTALLED_DIR}/arm64-android/include")
+if(NOT EXISTS "${VCPKG_ANDROID_INCLUDE}/asio.hpp")
+  message(FATAL_ERROR "Standalone Asio headers not found under ${VCPKG_ANDROID_INCLUDE}")
+endif()
+# OpenVPN's Findasio.cmake does not consistently discover the vcpkg
+# arm64-android include directory from CMAKE_PREFIX_PATH alone.
+set(ASIO_INCLUDE_DIR "${VCPKG_ANDROID_INCLUDE}" CACHE PATH "Standalone Asio include directory" FORCE)
+
 list(APPEND CMAKE_MODULE_PATH "${OPENVPN3_SOURCE_DIR}/cmake")
 include(findcoredeps)
 
@@ -26,7 +34,7 @@ target_include_directories(openvpn3_jni PRIVATE
   "${OPENVPN3_SOURCE_DIR}"
   "${OPENVPN3_SOURCE_DIR}/client"
   "${CMAKE_CURRENT_SOURCE_DIR}"
-  "${VCPKG_INSTALLED_DIR}/arm64-android/include"
+  "${VCPKG_ANDROID_INCLUDE}"
 )
 target_link_directories(openvpn3_jni PRIVATE
   "${VCPKG_INSTALLED_DIR}/arm64-android/lib"
