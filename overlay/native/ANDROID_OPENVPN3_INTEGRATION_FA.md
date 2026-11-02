@@ -107,3 +107,17 @@ The pinned upstream `client/CMakeLists.txt` only creates the SWIG Python module 
 4. a deliberate decision about the upstream external transport/tun factories, with unsupported profile features rejected until implemented.
 
 No JNI library is claimed by this commit. The next engineering gate is to establish a minimal reproducible Android CMake compilation of the pinned upstream client/core sources before implementing JNI behavior. This avoids creating a misleading placeholder shared library that merely exports JNI names without a working OpenVPN core.
+
+
+## Latest integration decision and remaining blocker (2026-11-03)
+
+The Android JNI CMake target no longer defines `OPENVPN_EXTERNAL_TUN_FACTORY`. This selects the upstream standard `TunBuilderBase` implementation path in `client/ovpncli.cpp`, which is the intended route for an Android `VpnService.Builder` adapter. This is a build-configuration decision only; it does not create a Java-to-native TUN bridge.
+
+A further source-level detail was confirmed directly in the pinned headers:
+- `OpenVPNClient` still inherits both `ExternalTun::Factory` and `ExternalTransport::Factory` in its class declaration, even when the external-TUN compile definition is not enabled.
+- Their pure virtual methods remain part of the concrete subclass contract: `new_tun_factory(const Config &, const OptionList &)` and `new_transport_factory(const Config &)`.
+- Consequently, removing `OPENVPN_EXTERNAL_TUN_FACTORY` does **not** by itself make a concrete subclass instantiable. The JNI client subclass must deliberately implement both factory methods and verify the standard transport/TunBuilder path used by this pinned build. Returning null or a dummy factory without checking the upstream call path would be unsafe.
+
+The current CI run after this CMake change is run `41525113728`; it had completed SDK setup and source audit and was still building Android native dependencies at the last status check. The next gate is to let this build finish, then compile a minimal concrete subclass with explicit callback/factory implementations against the pinned headers before adding Java callbacks or claiming session support.
+
+The earlier paragraph above describing `RahYabVpnService.establishTun()` as single-address/single-route/single-DNS is outdated: the service prototype now has a multi-address, multi-DNS, multi-route overload with IPv4/IPv6 handling. It is still not wired to OpenVPN's native callback interface.
