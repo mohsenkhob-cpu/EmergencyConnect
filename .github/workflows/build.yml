@@ -1,5 +1,5 @@
 
-
+  
 name: Build RahYabVPN APK
 
 on:
@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - main
+      - v2-engine-starter
 
 jobs:
   build:
@@ -21,21 +22,21 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-     
+
       - name: Install Android SDK
         run: |
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -f "$SDKMANAGER" ]; then
-            SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f | head -n 1)
-          fi
-          if [ -z "$SDKMANAGER" ] || [ ! -f "$SDKMANAGER" ]; then
-            echo "sdkmanager not found"
+          SDKMANAGER=$(find "$SDK_ROOT" -type f -name sdkmanager 2>/dev/null | head -n 1)
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "Android sdkmanager not found"
+            echo "ANDROID_HOME=$SDK_ROOT"
             exit 1
           fi
+
+          echo "Using $SDKMANAGER"
           yes | "$SDKMANAGER" --licenses
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
- 
 
       - name: Extract project ZIP
         run: |
@@ -55,6 +56,10 @@ jobs:
       - name: Build APK
         run: |
           PROJECT_DIR=$(dirname "$(find extracted -name settings.gradle -type f | head -n 1)")
+          if [ -z "$PROJECT_DIR" ] || [ "$PROJECT_DIR" = "extracted" ]; then
+            echo "Gradle project not found"
+            exit 1
+          fi
           cd "$PROJECT_DIR"
           gradle assembleDebug
 
@@ -63,3 +68,4 @@ jobs:
         with:
           name: RahYabVPN-APK
           path: extracted/**/app/build/outputs/apk/debug/*.apk
+  
