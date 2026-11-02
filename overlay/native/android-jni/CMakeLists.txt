@@ -51,7 +51,9 @@ target_include_directories(openvpn3_jni PRIVATE
 target_link_directories(openvpn3_jni PRIVATE
   "${VCPKG_INSTALLED_DIR}/arm64-android/lib"
 )
-target_link_libraries(openvpn3_jni PRIVATE log android)
+# add_core_dependencies() uses the plain target_link_libraries signature.
+# Keep this target's remaining link additions on the same signature.
+target_link_libraries(openvpn3_jni log android)
 set_target_properties(openvpn3_jni PROPERTIES
   CXX_STANDARD 20
   CXX_STANDARD_REQUIRED YES
