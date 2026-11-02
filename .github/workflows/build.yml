@@ -156,7 +156,13 @@ jobs:
           test -n "$APK" || { echo "Debug APK was not produced"; exit 1; }
           echo "APK produced: $APK"
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
-      - name: Upload native core probe report\n        uses: actions/upload-artifact@v4\n        with:\n          name: RahYabVPN-v2-native-core-probe\n          path: native-core-probe/\n          if-no-files-found: warn\n      - name: Upload source inspection bundle\n        uses: actions/upload-artifact@v4
+      - name: Upload native core probe report
+        uses: actions/upload-artifact@v4
+        with:
+          name: RahYabVPN-v2-native-core-probe
+          path: native-core-probe/
+          if-no-files-found: warn
+      - name: Upload source inspection bundle\n        uses: actions/upload-artifact@v4
         with:
           name: RahYabVPN-v2-source-inspection
           path: RahYabVPN-v2-source-inspection.zip
