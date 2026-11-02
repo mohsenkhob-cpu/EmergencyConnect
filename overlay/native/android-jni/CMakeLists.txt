@@ -28,6 +28,18 @@ if(NOT EXISTS "${LZ4_INCLUDE_DIR}/lz4.h" OR NOT EXISTS "${LZ4_LIBRARY}")
   message(FATAL_ERROR "Pinned Android LZ4 headers/library were not found")
 endif()
 
+# OpenVPN's upstream helper adds -lpthread whenever CMake reports UNIX.
+# Android's bionic libc already provides pthread APIs; there is no separate
+# libpthread to link on Android. Patch only this pinned helper copy at configure time.
+set(_openvpn_findcoredeps "${OPENVPN3_SOURCE_DIR}/cmake/findcoredeps.cmake")
+file(READ "${_openvpn_findcoredeps}" _openvpn_findcoredeps_text)
+if(ANDROID)
+  string(REPLACE
+    "if(UNIX)\n        target_link_libraries(${target} pthread)\n    endif()"
+    "if(UNIX AND NOT ANDROID)\n        target_link_libraries(${target} pthread)\n    endif()"
+    _openvpn_findcoredeps_text "${_openvpn_findcoredeps_text}")
+  file(WRITE "${_openvpn_findcoredeps}" "${_openvpn_findcoredeps_text}")
+endif()
 list(APPEND CMAKE_MODULE_PATH "${OPENVPN3_SOURCE_DIR}/cmake")
 include(findcoredeps)
 
