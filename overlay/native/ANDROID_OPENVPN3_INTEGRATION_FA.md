@@ -171,3 +171,28 @@ The current native subclass only implements the six abstract `OpenVPNClient` cal
 Android documents that `VpnService.Builder.establish()` creates the TUN descriptor and that the application must exchange packets through it; `VpnService.protect(int)` keeps the transport socket outside the VPN route to prevent a loop. See:
 - https://developer.android.com/reference/android/net/VpnService
 - https://developer.android.com/develop/connectivity/vpn
+
+
+## SWIG/Java binding feasibility audit (2026-11-03)
+
+The pinned upstream SWIG interface was inspected at the exact OpenVPN 3 source pin:
+
+- `client/ovpncli.i` declares `%module(directors="1") ovpncli`.
+- It enables directors for `OpenVPNClient` specifically with `%feature("director") OpenVPNClient;`.
+- It renames and exposes `TunBuilderBase`, `DnsOptions`, and the client API types to SWIG.
+- Under `SWIGJAVA`, it additionally includes `swiginterface.i` and declares `LogReceiver` as a Java interface.
+- The pinned repository tree contains only one Android-specific source file, `javacli/android/cpu.cpp`; that file exports a CPU-usage JNI method and is not an OpenVPN session wrapper.
+- The pinned `client/CMakeLists.txt` only defines a Python SWIG target when `BUILD_SWIG_LIB` is enabled. It does not define an Android Java/JNI target.
+
+### Engineering conclusion
+
+The existence of `ovpncli.i` is not sufficient evidence that the pinned upstream release provides a ready-to-build Android Java binding. In particular, its explicit director declaration covers `OpenVPNClient`; it does not explicitly enable directors for `TunBuilderBase`. The Java-specific include `swiginterface.i` also needs to be resolved and validated for this exact source/build environment before relying on it.
+
+Do not switch the app to SWIG or mark the engine available based only on generated proxy classes. Before adopting SWIG, a CI proof must:
+1. resolve every SWIG Java include from the pinned source/toolchain;
+2. generate Java proxies and the JNI wrapper using the pinned `ovpncli.i`;
+3. compile and link the generated wrapper for Android arm64-v8a;
+4. prove that Java overrides of the required `TunBuilderBase` callbacks are actually dispatched from native OpenVPN code;
+5. prove that `OpenVPNClient` lifecycle, event/log callbacks, and socket protection can be driven safely from Java.
+
+If any of these gates fails, retain a project-owned JNI adapter rather than shipping a partial SWIG binding. The current app remains unavailable as an embedded VPN until the complete path is implemented and device-tested.
