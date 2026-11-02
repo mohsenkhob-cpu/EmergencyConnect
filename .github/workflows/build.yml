@@ -13,70 +13,70 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
       - name: Install Android SDK
         run: |
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f | head -n 1)
-          if [ -z "$SDKMANAGER" ]; then
-            echo "sdkmanager not found"
-            exit 1
-          fi
+          test -n "$SDKMANAGER" || { echo "sdkmanager not found"; exit 1; }
           yes | "$SDKMANAGER" --licenses || true
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
-
       - name: Extract project ZIP
         run: |
           ZIP_FILE="./RahYabVPN-v2-Engine-Starter-Root-1.zip"
           test -f "$ZIP_FILE" || { echo "V2 ZIP file not found"; exit 1; }
           mkdir -p extracted
           unzip -q "$ZIP_FILE" -d extracted
-
       - name: Apply maintained overlay
         run: |
           SETTINGS_FILE=$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
           test -n "$SETTINGS_FILE" || { echo "Gradle settings file not found"; exit 1; }
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-          if [ -d overlay ]; then
-            cp -a overlay/. "$PROJECT_DIR/"
-          fi
+          if [ -d overlay ]; then cp -a overlay/. "$PROJECT_DIR/"; fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Project overlay applied to $PROJECT_DIR"
-
-      - name: Inspect Android project sources
+      - name: Inspect and package Android project sources
         run: |
-          echo "=== PROJECT FILES ==="
-          find "$PROJECT_DIR" -maxdepth 6 -type f | sort | head -n 160
-          for f in settings.gradle settings.gradle.kts build.gradle build.gradle.kts gradle.properties app/build.gradle app/build.gradle.kts app/src/main/AndroidManifest.xml app/src/main/java/ir/emergencyconnect/MainActivity.java app/src/main/java/ir/emergencyconnect/engine/OpenVpn3Bridge.java app/src/main/java/ir/emergencyconnect/engine/VpnEngine.java; do
-            if [ -f "$PROJECT_DIR/$f" ]; then
-              echo "=== SOURCE: $f ==="
-              sed -n '1,260p' "$PROJECT_DIR/$f"
-            fi
+          mkdir -p source-inspection
+          find "$PROJECT_DIR" -maxdepth 8 -type f \
+            \( -name '*.java' -o -name '*.kt' -o -name '*.gradle' -o -name '*.kts' -o -name 'AndroidManifest.xml' -o -name '*.xml' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) \
+            | sort > source-inspection/file-list.txt
+          while IFS= read -r f; do
+            rel="${f#"$PROJECT_DIR"/}"
+            mkdir -p "source-inspection/files/$(dirname "$rel")"
+            cp "$f" "source-inspection/files/$rel"
+          done < source-inspection/file-list.txt
+          echo "=== PROJECT SOURCE INVENTORY ==="
+          cat source-inspection/file-list.txt
+          echo "=== KEY BUILD CONFIGURATION ==="
+          for f in "$PROJECT_DIR/settings.gradle" "$PROJECT_DIR/settings.gradle.kts" "$PROJECT_DIR/build.gradle" "$PROJECT_DIR/build.gradle.kts" "$PROJECT_DIR/app/build.gradle" "$PROJECT_DIR/app/build.gradle.kts" "$PROJECT_DIR/gradle.properties"; do
+            if [ -f "$f" ]; then echo "=== $f ==="; sed -n '1,220p' "$f"; fi
           done
-
+          (cd source-inspection && zip -qr ../RahYabVPN-v2-source-inspection.zip .)
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-
       - name: Build APK
         run: |
           cd "$PROJECT_DIR"
           gradle assembleDebug
-
       - name: Verify APK
         run: |
           APK=$(find "$PROJECT_DIR" -type f -path "*/build/outputs/apk/debug/*.apk" | head -n 1)
           test -n "$APK" || { echo "Debug APK was not produced"; exit 1; }
           echo "APK produced: $APK"
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
-
+      - name: Upload source inspection bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: RahYabVPN-v2-source-inspection
+          path: RahYabVPN-v2-source-inspection.zip
+          if-no-files-found: error
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
