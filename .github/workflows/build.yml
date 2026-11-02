@@ -36,7 +36,77 @@ jobs:
           unzip -q "$ZIP_FILE" -d extracted
       - name: Apply maintained overlay
         run: |
-          SETTINGS_FILE=$(find extracted -type f \\( -name settings.gradle -o -name settings.gradle.kts \\) | head -n 1)
+          SETTINGS_FILE=$(find extracted -type f | grep -E '/settings\\.gradle(\\.kts)?
+          test -n "$SETTINGS_FILE" || { echo "Gradle settings file not found"; exit 1; }
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          if [ -d overlay ]; then cp -a overlay/. "$PROJECT_DIR/"; fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project overlay applied to $PROJECT_DIR"
+      - name: Inspect and package Android project sources
+        run: |
+          mkdir -p source-inspection
+          find "$PROJECT_DIR" -maxdepth 8 -type f | grep -E '\\.(java|kt|gradle|kts|xml|cpp|h|hpp)$' | sort > source-inspection/file-list.txt
+          while IFS= read -r f; do
+            rel="${f#"$PROJECT_DIR"/}"
+            mkdir -p "source-inspection/files/$(dirname "$rel")"
+            cp "$f" "source-inspection/files/$rel"
+          done < source-inspection/file-list.txt
+          echo "=== PROJECT SOURCE INVENTORY ==="
+          cat source-inspection/file-list.txt
+          echo "=== KEY BUILD CONFIGURATION ==="
+          for f in "$PROJECT_DIR/settings.gradle" "$PROJECT_DIR/settings.gradle.kts" "$PROJECT_DIR/build.gradle" "$PROJECT_DIR/build.gradle.kts" "$PROJECT_DIR/app/build.gradle" "$PROJECT_DIR/app/build.gradle.kts" "$PROJECT_DIR/gradle.properties"; do
+            if [ -f "$f" ]; then echo "=== $f ==="; sed -n '1,220p' "$f"; fi
+          done
+          (cd source-inspection && zip -qr ../RahYabVPN-v2-source-inspection.zip .)
+      - name: Publish source files to inspection branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -d source-inspection/files
+          mkdir -p source-export
+          cp -a source-inspection/files source-export/
+          cp source-inspection/file-list.txt source-export/
+          cat > source-export/README_FA.md <<'EOF'
+          # سورس استخراج‌شده RahYabVPN v2
+          این شاخه فقط برای بررسی فایل‌های واقعی پروژه پایه و overlay ساخته شده است.
+          فایل‌ها از ZIP پروژه در اجرای خودکار GitHub Actions استخراج شده‌اند.
+          این خروجی به معنی وجود موتور VPN مستقل نیست.
+          EOF
+          git -C source-export init
+          git -C source-export config user.name "github-actions[bot]"
+          git -C source-export config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C source-export add .
+          git -C source-export commit -m "Publish extracted Android sources for inspection"
+          git -C source-export remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C source-export push --force origin HEAD:v2-source-inspection
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build APK
+        run: |
+          cd "$PROJECT_DIR"
+          gradle assembleDebug
+      - name: Verify APK
+        run: |
+          APK=$(find "$PROJECT_DIR" -type f -path "*/build/outputs/apk/debug/*.apk" | head -n 1)
+          test -n "$APK" || { echo "Debug APK was not produced"; exit 1; }
+          echo "APK produced: $APK"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+      - name: Upload source inspection bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: RahYabVPN-v2-source-inspection
+          path: RahYabVPN-v2-source-inspection.zip
+          if-no-files-found: error
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RahYabVPN-v2-APK
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+ | head -n 1)
           test -n "$SETTINGS_FILE" || { echo "Gradle settings file not found"; exit 1; }
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           if [ -d overlay ]; then cp -a overlay/. "$PROJECT_DIR/"; fi
