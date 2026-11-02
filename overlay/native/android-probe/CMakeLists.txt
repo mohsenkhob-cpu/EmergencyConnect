@@ -20,7 +20,19 @@ add_library(fmt_headers INTERFACE)
 target_include_directories(fmt_headers INTERFACE "${VCPKG_TRIPLET_ROOT}/include")
 add_library(fmt::fmt ALIAS fmt_headers)
 
-find_package(OpenSSL REQUIRED)
+add_library(OpenSSL::SSL STATIC IMPORTED GLOBAL)
+set_target_properties(OpenSSL::SSL PROPERTIES
+  IMPORTED_LOCATION "${VCPKG_TRIPLET_ROOT}/lib/libssl.a"
+  INTERFACE_INCLUDE_DIRECTORIES "${VCPKG_TRIPLET_ROOT}/include"
+)
+add_library(OpenSSL::Crypto STATIC IMPORTED GLOBAL)
+set_target_properties(OpenSSL::Crypto PROPERTIES
+  IMPORTED_LOCATION "${VCPKG_TRIPLET_ROOT}/lib/libcrypto.a"
+  INTERFACE_INCLUDE_DIRECTORIES "${VCPKG_TRIPLET_ROOT}/include"
+)
+if(NOT EXISTS "${VCPKG_TRIPLET_ROOT}/lib/libssl.a" OR NOT EXISTS "${VCPKG_TRIPLET_ROOT}/lib/libcrypto.a")
+  message(FATAL_ERROR "Pinned vcpkg OpenSSL static libraries were not found under ${VCPKG_TRIPLET_ROOT}/lib")
+endif()
 find_package(unofficial-lz4 CONFIG REQUIRED
   PATHS "${VCPKG_TRIPLET_ROOT}/share/unofficial-lz4" NO_DEFAULT_PATH)
 
