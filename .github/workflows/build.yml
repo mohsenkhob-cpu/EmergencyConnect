@@ -64,6 +64,32 @@ jobs:
           test -f vcpkg_installed/arm64-android/lib/libfmt.a
           test -d vcpkg_installed/arm64-android/include/asio
           echo "Pinned Android static dependencies built and verified"
+      - name: Probe pinned OpenVPN 3 core with Android NDK
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          mkdir -p native-core-probe
+          set +e
+          cmake -S overlay/native/android-probe -B native-core-probe/build \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-23 \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/vcpkg_installed/arm64-android" \
+            -DOPENVPN3_SOURCE_DIR="$GITHUB_WORKSPACE/openvpn3-upstream" \
+            -DCMAKE_BUILD_TYPE=Release > native-core-probe/configure.log 2>&1
+          CONFIGURE_STATUS=$?
+          if [ "$CONFIGURE_STATUS" -eq 0 ]; then
+            cmake --build native-core-probe/build --config Release -j2 > native-core-probe/build.log 2>&1
+            BUILD_STATUS=$?
+          else
+            BUILD_STATUS=not-run
+          fi
+          printf 'configure_exit=%s\\nbuild_exit=%s\\n' "$CONFIGURE_STATUS" "$BUILD_STATUS" > native-core-probe/RESULT.txt
+          cat native-core-probe/RESULT.txt
+          tail -n 100 native-core-probe/configure.log || true
+          if [ -f native-core-probe/build.log ]; then tail -n 160 native-core-probe/build.log; fi
+          if [ "$CONFIGURE_STATUS" -eq 0 ] && [ "$BUILD_STATUS" = "0" ]; then
+            find native-core-probe/build -name 'libopenvpn3_core_probe.so' -print
+          fi
       - name: Extract project ZIP
         run: |
           ZIP_FILE="./RahYabVPN-v2-Engine-Starter-Root-1.zip"
@@ -130,8 +156,7 @@ jobs:
           test -n "$APK" || { echo "Debug APK was not produced"; exit 1; }
           echo "APK produced: $APK"
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
-      - name: Upload source inspection bundle
-        uses: actions/upload-artifact@v4
+      - name: Upload native core probe report\n        uses: actions/upload-artifact@v4\n        with:\n          name: RahYabVPN-v2-native-core-probe\n          path: native-core-probe/\n          if-no-files-found: warn\n      - name: Upload source inspection bundle\n        uses: actions/upload-artifact@v4
         with:
           name: RahYabVPN-v2-source-inspection
           path: RahYabVPN-v2-source-inspection.zip
