@@ -1,12 +1,22 @@
 package ir.emergencyconnect.engine;
 
 /**
- * JNI boundary reserved for OpenVPN 3 Core.
- * This class deliberately reports unavailable until libopenvpn3.so is built
- * and packaged for the Android ABIs. It never reports a false connected state.
+ * Availability gate for the embedded OpenVPN 3 engine.
+ *
+ * Loading libopenvpn3_jni.so only proves that the shared library can be
+ * loaded. It does not prove that a session can be created, that Android's
+ * VpnService TUN is connected to the core, or that transport sockets are
+ * protected. Keep the engine unavailable until the complete JNI session
+ * lifecycle and TunBuilder adapter are implemented and tested.
  */
 public final class OpenVpn3Bridge {
-    private static final boolean LOADED;
+    private static final boolean LIBRARY_LOADED;
+
+    // Deliberately false: the current native library exports JNI_OnLoad only.
+    // Change this only in the same change that adds and verifies the complete
+    // session API, TUN callbacks, socket protection, and lifecycle handling.
+    private static final boolean SESSION_API_READY = false;
+
     static {
         boolean loaded;
         try {
@@ -15,20 +25,21 @@ public final class OpenVpn3Bridge {
         } catch (UnsatisfiedLinkError | SecurityException e) {
             loaded = false;
         }
-        LOADED = loaded;
+        LIBRARY_LOADED = loaded;
     }
 
     private OpenVpn3Bridge() {}
 
-    public static boolean isAvailable() { return LOADED; }
-
-    public static String availabilityMessage() {
-        return LOADED
-                ? "موتور بومی بارگذاری شده است؛ اتصال فقط پس از تکمیل رابط TUN قابل استفاده است."
-                : "موتور OpenVPN 3 هنوز در این نسخه بسته‌بندی نشده است.";
+    /** True only when a usable embedded session engine is available. */
+    public static boolean isAvailable() {
+        return LIBRARY_LOADED && SESSION_API_READY;
     }
 
-    // Native methods will be implemented by the OpenVPN 3 JNI/TunBuilder layer.
-    public static native long createSession(String inlineProfile);
-    public static native void stopSession(long sessionHandle);
+    /** Diagnostic distinction between a packaged library and a usable engine. */
+    public static String availabilityMessage() {
+        if (!LIBRARY_LOADED) {
+            return "کتابخانه بومی OpenVPN 3 در این نسخه بارگذاری نشده است.";
+        }
+        return "کتابخانه بومی بارگذاری شده، اما رابط نشست و تونل اندروید هنوز کامل و آزمایش نشده است.";
+    }
 }
