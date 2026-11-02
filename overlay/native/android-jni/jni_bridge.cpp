@@ -55,7 +55,17 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeCryptoSelfTest(
         JNIEnv *env, jclass) {
     try {
         openvpn::ClientAPI::OpenVPNClientHelper helper;
-        return to_java_string(env, helper.crypto_self_test());
+        const std::string platform = openvpn::ClientAPI::OpenVPNClientHelper::platform();
+        const std::string crypto = helper.crypto_self_test();
+
+        std::string report = "OpenVPN 3 core helper: OK\\n";
+        report += "Platform: " + platform + "\\n";
+        if (crypto.empty()) {
+            report += "Crypto self-test: no output from this build; cryptographic self-test is not verified.";
+        } else {
+            report += "Crypto self-test output:\\n" + crypto;
+        }
+        return to_java_string(env, report);
     } catch (const std::exception &e) {
         return to_java_string(env, std::string("OpenVPN core self-test exception: ") + e.what());
     } catch (...) {
