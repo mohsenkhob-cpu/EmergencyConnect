@@ -37,26 +37,26 @@ jobs:
           echo "Using $SDKMANAGER"
           yes | "$SDKMANAGER" --licenses
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
-
       - name: Extract project ZIP
         run: |
-          ZIP_FILE="./RahYabVPN-v1.1-GitHub-Project.zip"
+          ZIP_FILE="./RahYabVPN-v2-Engine-Starter-Root.zip"
           if [ ! -f "$ZIP_FILE" ]; then
-            echo "Project ZIP file not found"
+            echo "V2 ZIP file not found"
             exit 1
           fi
           mkdir extracted
           unzip -q "$ZIP_FILE" -d extracted
+      
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Build APK
+      -       - name: Build APK
         run: |
           PROJECT_DIR=$(dirname "$(find extracted -name settings.gradle -type f | head -n 1)")
-          if [ -z "$PROJECT_DIR" ] || [ "$PROJECT_DIR" = "extracted" ]; then
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ]; then
             echo "Gradle project not found"
             exit 1
           fi
