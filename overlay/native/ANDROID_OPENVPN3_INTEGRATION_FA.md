@@ -68,7 +68,7 @@ The pinned upstream API and license material are audited and archived by CI. The
 
 ## Client API details verified from ovpncli.hpp
 
-The pinned `OpenVPNClient` is itself derived from `TunBuilderBase`, `LogReceiver`, `ExternalTun::Factory`, and `ExternalTransport::Factory`. The integration must subclass it (or use an equivalent concrete adapter) and implement the required abstract callbacks, not merely call a nonexistent standalone JNI entry point.
+The pinned `OpenVPNClient` is itself derived from `TunBuilderBase`, `LogReceiver`, `ExternalTun::Factory`, and `ExternalTransport::Factory`. With the Android target's current feature macros, the two factory bases are empty; the subclass still must implement the abstract client callbacks and must not assume that JNI session APIs already exist.
 
 Verified lifecycle/API sequence:
 1. Construct a client/session object and call `eval_config(Config)`; reject profiles whose returned `EvalConfig.error` is true.
@@ -92,11 +92,7 @@ Inspection of `client/ovpncli.hpp`, `openvpn/tun/extern/fw.hpp`, and `openvpn/tr
 - `external_pki_cert_request(ExternalPKICertRequest &)`;
 - `external_pki_sign_request(ExternalPKISignRequest &)`.
 
-The inherited factory interfaces also require:
-- `ExternalTun::Factory::new_tun_factory(const Config &, const OptionList &)`;
-- `ExternalTransport::Factory::new_transport_factory(const Config &)`.
-
-This is important for the implementation design: even a profile that does not use external PKI or custom transport must provide deliberate callback behavior, and the default factory cannot be assumed to exist. For the first supported profile subset, unsupported external-PKI and custom transport requests should be rejected during validation rather than silently accepted. The Android adapter should use the standard OpenVPN transport path unless a concrete transport factory is intentionally implemented.
+The OpenVPNClient declaration inherits both factory base types, but the pinned forward headers define their pure virtual methods only when `OPENVPN_EXTERNAL_TUN_FACTORY` and `OPENVPN_EXTERNAL_TRANSPORT_FACTORY` are enabled. The Android CMake target intentionally leaves both definitions disabled, so those base classes are empty and do not add pure-virtual factory obligations in this build. If either feature macro is enabled later, the corresponding factory method must be implemented and the selected path re-audited. For the first supported profile subset, external PKI and custom transport remain unsupported and must be rejected during validation rather than silently accepted.
 
 ## Build strategy decision from source inspection
 
@@ -106,7 +102,7 @@ The pinned upstream `client/CMakeLists.txt` only creates the SWIG Python module 
 3. an Android TunBuilder adapter that translates the complete callback set to `VpnService.Builder`, including multiple addresses/routes/DNS and family policy;
 4. a deliberate decision about the upstream external transport/tun factories, with unsupported profile features rejected until implemented.
 
-No JNI library is claimed by this commit. The next engineering gate is to establish a minimal reproducible Android CMake compilation of the pinned upstream client/core sources before implementing JNI behavior. This avoids creating a misleading placeholder shared library that merely exports JNI names without a working OpenVPN core.
+No JNI library is claimed by this commit. The Android CMake target now compiles the pinned upstream `client/ovpncli.cpp` translation unit together with the project JNI translation unit and links the Android core dependencies in CI. This validates the native build path, not a working session. The next engineering gate is a concrete JNI client subclass plus a complete TunBuilder-to-`VpnService.Builder` adapter, followed by device-level tunnel tests.
 
 
 ## Latest integration decision and remaining blocker (2026-11-03)
@@ -121,3 +117,12 @@ A further source-level detail was confirmed directly in the pinned headers:
 The current CI run after this CMake change is run `41525113728`; it had completed SDK setup and source audit and was still building Android native dependencies at the last status check. The next gate is to let this build finish, then compile a minimal concrete subclass with explicit callback/factory implementations against the pinned headers before adding Java callbacks or claiming session support.
 
 The earlier paragraph above describing `RahYabVpnService.establishTun()` as single-address/single-route/single-DNS is outdated: the service prototype now has a multi-address, multi-DNS, multi-route overload with IPv4/IPv6 handling. It is still not wired to OpenVPN's native callback interface.
+
+
+## CI verification update (2026-11-03)
+
+- Workflow run `41525113728` completed successfully, including Android dependency build, native core probe, complete `client/ovpncli.cpp` translation-unit compilation, JNI shared-library packaging, APK build, and APK verification.
+- Workflow run `41525427592` also passed the native translation-unit compile step; at the time of this note it was completing artifact/report upload.
+- The JNI source `jni_bridge.cpp` remains an intentional `JNI_OnLoad` placeholder. It does not instantiate `OpenVPNClient`, start a session, establish a TUN, or protect transport sockets.
+- The service's multi-address/multi-DNS/multi-route helper is still not called by a native TunBuilder adapter.
+- Therefore the current APK remains a build/integration scaffold, not a functioning standalone VPN.
