@@ -65,7 +65,6 @@ jobs:
           test -d vcpkg_installed/arm64-android/include/asio
           echo "Pinned Android static dependencies built and verified"
       - name: Probe pinned OpenVPN 3 core with Android NDK
-        continue-on-error: true
         run: |
           set -uo pipefail
           mkdir -p native-core-probe
@@ -93,7 +92,12 @@ jobs:
           tail -n 100 native-core-probe/configure.log || true
           if [ -f native-core-probe/build.log ]; then tail -n 160 native-core-probe/build.log; fi
           if [ "$CONFIGURE_STATUS" -eq 0 ] && [ "$BUILD_STATUS" = "0" ]; then
-            find native-core-probe/build -name 'libopenvpn3_core_probe.so' -print
+            PROBE_LIBRARY=$(find native-core-probe/build -name 'libopenvpn3_core_probe.so' -print -quit)
+            test -n "$PROBE_LIBRARY"
+            echo "Verified Android OpenVPN 3 core probe: $PROBE_LIBRARY"
+          else
+            echo "OpenVPN 3 Android core probe failed; see native-core-probe logs above."
+            exit 1
           fi
       - name: Build complete OpenVPN 3 Android client translation unit
         run: |
