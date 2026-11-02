@@ -29,12 +29,12 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
     }
 
     void external_pki_cert_request(
-            openvpn::ExternalPKICertRequest &) override {
+            openvpn::ClientAPI::ExternalPKICertRequest &) override {
         // External PKI is not supported by the first profile subset.
     }
 
     void external_pki_sign_request(
-            openvpn::ExternalPKISignRequest &) override {
+            openvpn::ClientAPI::ExternalPKISignRequest &) override {
         // External PKI is not supported by the first profile subset.
     }
 };
