@@ -131,3 +131,43 @@ The earlier paragraph above describing `RahYabVpnService.establishTun()` as sing
 ## JNI compile-contract milestone (2026-11-03)
 
 Commit `54b291cb3ec992cfff7c167224f1dc693a1f3fbb` adds a concrete `RahYabOpenVPNClient` subclass with the six pure callback overrides identified in the pinned `ovpncli.hpp`, plus a compile-time non-abstract assertion. This is an API-shape check only: it does not start a client, call `eval_config()`, establish TUN, protect sockets, or expose Java session controls. CI run `41527335666` is validating this change with the Android NDK.
+
+
+## Android callback mapping audit (2026-11-03)
+
+The complete pinned `openvpn/tun/builder/base.hpp` and `openvpn/client/dns_options.hpp` were inspected in full. The adapter must account for the following exact callbacks and semantics:
+
+| OpenVPN callback | Android-side handling | Safety/compatibility rule |
+|---|---|---|
+| `tun_builder_new()` | Reset per-session builder state | Must reject concurrent reuse |
+| `tun_builder_set_layer(3)` | TUN only | Reject TAP/layer values other than 3 |
+| `tun_builder_set_remote_address()` | Record remote endpoint | Needed for diagnostics; do not treat as a substitute for socket protection |
+| `tun_builder_add_address()` | Collect address + prefix | Preserve every IPv4/IPv6 address; validate family/prefix |
+| `tun_builder_set_route_metric_default()` | Store default metric | Android Builder has no direct metric equivalent; document ignored metric semantics |
+| `tun_builder_reroute_gw()` | Add IPv4 and/or IPv6 default route | Must add the requested family-specific default routes |
+| `tun_builder_add_route()` | Collect included route | Preserve every route and prefix |
+| `tun_builder_exclude_route()` | Collect excluded route | Android `excludeRoute(IpPrefix)` requires API 33; older Android must fail or use a separately implemented and tested emulation |
+| `tun_builder_set_dns_options()` | Convert supported plain DNS addresses and search domains | Android Builder accepts numeric DNS IPs, not arbitrary DNS transports or DNS server ports |
+| `tun_builder_set_mtu()` | Apply MTU | Validate supported range before establish |
+| `tun_builder_set_session_name()` | Apply session label | Sanitize/limit label |
+| `tun_builder_set_allow_family()` | Enforce family policy | Android's `allowFamily()` is not a general deny-family API; unsupported deny requests must not be silently treated as enforced |
+| proxy callbacks | No proxy support in initial profile subset | Reject profiles requiring proxy callbacks |
+| WINS callback | No WINS support in initial subset | Reject if required rather than ignore |
+| `tun_builder_establish()` | JNI call into service; detach and return TUN fd | Return -1 on any Java exception or failed establish |
+| `tun_builder_teardown()` | Close per-session TUN/clear builder state | Must be idempotent and respect native fd ownership |
+
+### DNS conversion constraints
+
+Pinned `DnsOptions` contains a priority-keyed map of `DnsServer` values. Each server may include multiple `DnsAddress` entries (address and optional port), domains, DNSSEC mode, transport (Plain/HTTPS/TLS), and SNI; global search domains are also present.
+
+The first Android implementation can safely map only numeric plain DNS addresses with an Android-compatible port (default or 53), plus search domains supported by `VpnService.Builder.addSearchDomain()`. DNS-over-HTTPS, DNS-over-TLS, nonstandard DNS ports, DNSSEC enforcement, and SNI cannot be represented by `addDnsServer(InetAddress)` alone. Such settings must be explicitly rejected until a resolver implementation exists; silently dropping them would change profile security semantics.
+
+### Current code gap
+
+The current native subclass only implements the six abstract `OpenVPNClient` callbacks. It does not yet override the TunBuilder callbacks listed above. Since several `TunBuilderBase` defaults return `false` or `-1`, relying on those defaults causes tunnel setup to fail; changing them to unconditional success would be equally unsafe. The next code change must introduce a per-session stateful adapter and only report success after Android has accepted the corresponding setting.
+
+### Android API reference
+
+Android documents that `VpnService.Builder.establish()` creates the TUN descriptor and that the application must exchange packets through it; `VpnService.protect(int)` keeps the transport socket outside the VPN route to prevent a loop. See:
+- https://developer.android.com/reference/android/net/VpnService
+- https://developer.android.com/develop/connectivity/vpn
