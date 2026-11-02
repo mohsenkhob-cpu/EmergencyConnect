@@ -45,7 +45,8 @@ public final class OpenVpn3Bridge {
         try {
             String result = nativeCryptoSelfTest();
             return result == null || result.isEmpty()
-                    ? "هسته پاسخ خالی برگرداند." : result;
+                    ? "آزمون رمزنگاری در این نسخه خروجی تولید نکرد. رابط JNI اجرا شده، اما نتیجه آزمون رمزنگاری قابل تأیید نیست؛ این وضعیت نه موفقیت آزمون است و نه شکست آن."
+                    : result;
         } catch (UnsatisfiedLinkError | SecurityException e) {
             return "رابط آزمایش بومی در این نسخه در دسترس نیست: " + e.getMessage();
         }
