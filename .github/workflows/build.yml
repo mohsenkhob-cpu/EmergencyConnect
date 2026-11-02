@@ -28,6 +28,21 @@ jobs:
           test -n "$SDKMANAGER" || { echo "sdkmanager not found"; exit 1; }
           yes | "$SDKMANAGER" --licenses || true
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
+      - name: Fetch pinned OpenVPN 3 source for audit
+        run: |
+          set -euo pipefail
+          source overlay/native/openvpn3-source-pin.txt
+          git clone --filter=blob:none "$OPENVPN3_REPOSITORY" openvpn3-upstream
+          git -C openvpn3-upstream checkout --detach "$OPENVPN3_COMMIT"
+          ACTUAL=$(git -C openvpn3-upstream rev-parse HEAD)
+          test "$ACTUAL" = "$OPENVPN3_COMMIT"
+          mkdir -p upstream-audit
+          printf 'repository=%s\ncommit=%s\nlicense=%s\n' "$OPENVPN3_REPOSITORY" "$ACTUAL" "$OPENVPN3_LICENSE" > upstream-audit/UPSTREAM_PIN.txt
+          cp openvpn3-upstream/LICENSE.md upstream-audit/
+          cp openvpn3-upstream/client/ovpncli.hpp upstream-audit/
+          cp openvpn3-upstream/client/ovpncli.i upstream-audit/
+          cp openvpn3-upstream/javacli/android/cpu.cpp upstream-audit/
+          echo "Pinned OpenVPN 3 source verified at $ACTUAL"
       - name: Extract project ZIP
         run: |
           ZIP_FILE="./RahYabVPN-v2-Engine-Starter-Root-1.zip"
@@ -99,6 +114,12 @@ jobs:
         with:
           name: RahYabVPN-v2-source-inspection
           path: RahYabVPN-v2-source-inspection.zip
+          if-no-files-found: error
+      - name: Upload pinned upstream API audit files
+        uses: actions/upload-artifact@v4
+        with:
+          name: RahYabVPN-v2-openvpn3-upstream-audit
+          path: upstream-audit/
           if-no-files-found: error
       - name: Upload APK
         uses: actions/upload-artifact@v4

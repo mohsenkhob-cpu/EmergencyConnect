@@ -1,0 +1,8 @@
+# OpenVPN 3 upstream source pin for RahYabVPN v2
+# Repository: https://github.com/OpenVPN/openvpn3
+# Reviewed upstream commit: 0abc8313b8fe5f63dbebc10d53094952957845d9
+# Commit date: 2026-10-29
+# Do not replace this with a moving branch name such as master.
+OPENVPN3_REPOSITORY=https://github.com/OpenVPN/openvpn3.git
+OPENVPN3_COMMIT=0abc8313b8fe5f63dbebc10d53094952957845d9
+OPENVPN3_LICENSE=MPL-2.0 OR AGPL-3.0-only WITH openvpn3-openssl-exception
