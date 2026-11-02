@@ -15,6 +15,10 @@ public final class RahYabVpnService extends VpnService {
     /**
      * Establish an Android TUN interface from parameters supplied by the
      * future OpenVPN 3 TunBuilder JNI adapter.
+     *
+     * Ownership contract: the returned raw file descriptor is detached from
+     * ParcelFileDescriptor and belongs to the native caller. Native code must
+     * close it exactly once when the tunnel is stopped.
      */
     public synchronized int establishTun(
             String sessionName,
@@ -26,6 +30,15 @@ public final class RahYabVpnService extends VpnService {
             int mtu) throws Exception {
 
         closeTun();
+
+        if (ipv4Address == null || ipv4Address.isEmpty()
+                || prefixLength < 0 || prefixLength > 32) {
+            throw new IllegalArgumentException("Invalid IPv4 TUN address/prefix");
+        }
+        if (routeAddress != null && !routeAddress.isEmpty()
+                && (routePrefix < 0 || routePrefix > 32)) {
+            throw new IllegalArgumentException("Invalid IPv4 route prefix");
+        }
 
         Builder builder = new Builder()
                 .setSession(sessionName == null ? "RahYabVPN" : sessionName)
@@ -42,7 +55,15 @@ public final class RahYabVpnService extends VpnService {
         }
 
         tunInterface = builder.establish();
-        return tunInterface == null ? -1 : tunInterface.detachFd();
+        if (tunInterface == null) {
+            return -1;
+        }
+
+        ParcelFileDescriptor established = tunInterface;
+        int fd = established.detachFd();
+        tunInterface = null;
+        established.close();
+        return fd;
     }
 
     /** Protect the OpenVPN transport socket from being routed into its own TUN. */
