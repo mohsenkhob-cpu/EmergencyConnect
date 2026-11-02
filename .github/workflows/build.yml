@@ -33,12 +33,11 @@ jobs:
             exit 1
           fi
 
-          yes | "$SDKMANAGER" --licenses
+          yes | "$SDKMANAGER" --licenses || true
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
 
-
-              - name: Extract project ZIP
-               run: |
+      - name: Extract project ZIP
+        run: |
           ZIP_FILE="./RahYabVPN-v2-Engine-Starter-Root-1.zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
@@ -47,7 +46,7 @@ jobs:
           fi
 
           mkdir -p extracted
-          unzip -q "$ZIP_FILE" -d extracted
+          unzip -q "$ZIP_FILE" -d extracted 
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
