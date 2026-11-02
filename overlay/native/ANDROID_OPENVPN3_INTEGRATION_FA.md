@@ -41,7 +41,7 @@ The current Java `OpenVpn3Bridge` declarations are placeholders only. The eventu
 - exception translation (clear pending JNI exceptions and return a structured error);
 - no "CONNECTED" state until OpenVPN reports the connected event and the TUN is established.
 
-The existing `RahYabVpnService.establishTun()` method is only a first TUN ownership prototype. It currently accepts a single IPv4 address, one route, and one DNS server. It is not yet the complete callback adapter and must be expanded before native integration.
+The existing `RahYabVpnService.establishTun()` method accepts multiple IPv4/IPv6 addresses, routes, and DNS servers, but it is not yet called by a native TunBuilder callback adapter.
 
 ## Android build plan
 - Use Android NDK + CMake with C++20 and explicit ABI builds (initially `arm64-v8a`; add `armeabi-v7a` only after the first ABI is stable).
@@ -126,3 +126,8 @@ The earlier paragraph above describing `RahYabVpnService.establishTun()` as sing
 - The JNI source `jni_bridge.cpp` remains an intentional `JNI_OnLoad` placeholder. It does not instantiate `OpenVPNClient`, start a session, establish a TUN, or protect transport sockets.
 - The service's multi-address/multi-DNS/multi-route helper is still not called by a native TunBuilder adapter.
 - Therefore the current APK remains a build/integration scaffold, not a functioning standalone VPN.
+
+
+## JNI compile-contract milestone (2026-11-03)
+
+Commit `54b291cb3ec992cfff7c167224f1dc693a1f3fbb` adds a concrete `RahYabOpenVPNClient` subclass with the six pure callback overrides identified in the pinned `ovpncli.hpp`, plus a compile-time non-abstract assertion. This is an API-shape check only: it does not start a client, call `eval_config()`, establish TUN, protect sockets, or expose Java session controls. CI run `41527335666` is validating this change with the Android NDK.
