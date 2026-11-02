@@ -3,22 +3,19 @@ package ir.emergencyconnect.engine;
 import android.net.VpnService;
 import android.os.ParcelFileDescriptor;
 
+import java.net.InetAddress;
+
 /**
  * Android TUN adapter scaffold for the embedded OpenVPN 3 engine.
  *
- * This class only owns Android's VPN interface. It does not implement the
- * OpenVPN protocol and must not be treated as a connected VPN by itself.
+ * This class owns Android's VPN interface. The OpenVPN protocol/session is
+ * managed by the native OpenVPNClient adapter; this class alone is not a VPN.
  */
 public final class RahYabVpnService extends VpnService {
     private ParcelFileDescriptor tunInterface;
 
     /**
-     * Establish an Android TUN interface from parameters supplied by the
-     * future OpenVPN 3 TunBuilder JNI adapter.
-     *
-     * Ownership contract: the returned raw file descriptor is detached from
-     * ParcelFileDescriptor and belongs to the native caller. Native code must
-     * close it exactly once when the tunnel is stopped.
+     * Compatibility entry point retained for the first single-IPv4 prototype.
      */
     public synchronized int establishTun(
             String sessionName,
@@ -28,29 +25,72 @@ public final class RahYabVpnService extends VpnService {
             String routeAddress,
             int routePrefix,
             int mtu) throws Exception {
+        String[] addresses = new String[]{ipv4Address};
+        int[] prefixes = new int[]{prefixLength};
+        String[] dns = dnsServer == null || dnsServer.isEmpty()
+                ? new String[0] : new String[]{dnsServer};
+        String[] routes = routeAddress == null || routeAddress.isEmpty()
+                ? new String[0] : new String[]{routeAddress};
+        int[] routePrefixes = routes.length == 0
+                ? new int[0] : new int[]{routePrefix};
+        return establishTun(sessionName, addresses, prefixes, dns,
+                routes, routePrefixes, mtu);
+    }
+
+    /**
+     * Establish a TUN interface with all addresses, DNS servers and routes
+     * collected by the future OpenVPN 3 TunBuilder JNI adapter.
+     *
+     * The returned detached descriptor is owned by native code and must be
+     * closed exactly once by that session during teardown.
+     */
+    public synchronized int establishTun(
+            String sessionName,
+            String[] addresses,
+            int[] prefixes,
+            String[] dnsServers,
+            String[] routeAddresses,
+            int[] routePrefixes,
+            int mtu) throws Exception {
 
         closeTun();
 
-        if (ipv4Address == null || ipv4Address.isEmpty()
-                || prefixLength < 0 || prefixLength > 32) {
-            throw new IllegalArgumentException("Invalid IPv4 TUN address/prefix");
+        if (addresses == null || prefixes == null
+                || addresses.length == 0 || addresses.length != prefixes.length) {
+            throw new IllegalArgumentException("TUN addresses/prefixes are missing or mismatched");
         }
-        if (routeAddress != null && !routeAddress.isEmpty()
-                && (routePrefix < 0 || routePrefix > 32)) {
-            throw new IllegalArgumentException("Invalid IPv4 route prefix");
+        if (dnsServers == null || routeAddresses == null || routePrefixes == null
+                || routeAddresses.length != routePrefixes.length) {
+            throw new IllegalArgumentException("TUN DNS/routes are invalid");
         }
 
         Builder builder = new Builder()
-                .setSession(sessionName == null ? "RahYabVPN" : sessionName)
-                .addAddress(ipv4Address, prefixLength);
+                .setSession(sessionName == null || sessionName.isEmpty()
+                        ? "RahYabVPN" : sessionName);
 
-        if (dnsServer != null && !dnsServer.isEmpty()) {
-            builder.addDnsServer(dnsServer);
+        for (int i = 0; i < addresses.length; i++) {
+            InetAddress address = parseNumericAddress(addresses[i], "TUN address");
+            int maxPrefix = address.getAddress().length * 8;
+            if (prefixes[i] < 0 || prefixes[i] > maxPrefix) {
+                throw new IllegalArgumentException("Invalid TUN address prefix");
+            }
+            builder.addAddress(address, prefixes[i]);
         }
-        if (routeAddress != null && !routeAddress.isEmpty()) {
-            builder.addRoute(routeAddress, routePrefix);
+
+        for (String dns : dnsServers) {
+            builder.addDnsServer(parseNumericAddress(dns, "DNS server"));
         }
-        if (mtu >= 576) {
+
+        for (int i = 0; i < routeAddresses.length; i++) {
+            InetAddress route = parseNumericAddress(routeAddresses[i], "route");
+            int maxPrefix = route.getAddress().length * 8;
+            if (routePrefixes[i] < 0 || routePrefixes[i] > maxPrefix) {
+                throw new IllegalArgumentException("Invalid route prefix");
+            }
+            builder.addRoute(route, routePrefixes[i]);
+        }
+
+        if (mtu >= 576 && mtu <= 65535) {
             builder.setMtu(mtu);
         }
 
@@ -66,7 +106,24 @@ public final class RahYabVpnService extends VpnService {
         return fd;
     }
 
-    /** Protect the OpenVPN transport socket from being routed into its own TUN. */
+    /**
+     * Reject hostnames here: OpenVPN supplies numeric addresses to the
+     * TunBuilder callbacks and DNS resolution must not occur on this path.
+     */
+    private static InetAddress parseNumericAddress(String value, String field)
+            throws Exception {
+        if (value == null || value.isEmpty()
+                || !(value.indexOf(':') >= 0 || value.matches("[0-9.]+"))) {
+            throw new IllegalArgumentException("Invalid numeric " + field);
+        }
+        InetAddress parsed = InetAddress.getByName(value);
+        if (parsed.getAddress().length != 4 && parsed.getAddress().length != 16) {
+            throw new IllegalArgumentException("Unsupported " + field + " family");
+        }
+        return parsed;
+    }
+
+    /** Protect transport sockets from being routed into their own TUN. */
     public boolean protectTransportSocket(int socketFd) {
         return protect(socketFd);
     }
@@ -76,6 +133,7 @@ public final class RahYabVpnService extends VpnService {
             try {
                 tunInterface.close();
             } catch (Exception ignored) {
+                // Teardown is best-effort; native owns detached descriptors.
             }
             tunInterface = null;
         }
