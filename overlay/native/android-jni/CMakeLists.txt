@@ -15,6 +15,13 @@ endif()
 # OpenVPN's Findasio.cmake does not consistently discover the vcpkg
 # arm64-android include directory from CMAKE_PREFIX_PATH alone.
 set(ASIO_INCLUDE_DIR "${VCPKG_ANDROID_INCLUDE}" CACHE PATH "Standalone Asio include directory" FORCE)
+# OpenVPN ships a Findlz4.cmake module that uses the legacy LZ4_* variables.
+# Point it explicitly at the pinned vcpkg Android release artifacts.
+set(LZ4_INCLUDE_DIR "${VCPKG_ANDROID_INCLUDE}" CACHE PATH "LZ4 include directory" FORCE)
+set(LZ4_LIBRARY "${VCPKG_INSTALLED_DIR}/arm64-android/lib/liblz4.a" CACHE FILEPATH "LZ4 static library" FORCE)
+if(NOT EXISTS "${LZ4_INCLUDE_DIR}/lz4.h" OR NOT EXISTS "${LZ4_LIBRARY}")
+  message(FATAL_ERROR "Pinned Android LZ4 headers/library were not found")
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${OPENVPN3_SOURCE_DIR}/cmake")
 include(findcoredeps)
