@@ -196,3 +196,15 @@ Do not switch the app to SWIG or mark the engine available based only on generat
 5. prove that `OpenVPNClient` lifecycle, event/log callbacks, and socket protection can be driven safely from Java.
 
 If any of these gates fails, retain a project-owned JNI adapter rather than shipping a partial SWIG binding. The current app remains unavailable as an embedded VPN until the complete path is implemented and device-tested.
+
+
+## Conditional external factory API correction (2026-11-03)
+
+A follow-up inspection of the exact pinned headers `openvpn/tun/extern/fw.hpp` and `openvpn/transport/client/extern/fw.hpp` corrects an earlier overly broad note about factory methods:
+
+- `ExternalTun::Factory::new_tun_factory()` is pure virtual only when `OPENVPN_EXTERNAL_TUN_FACTORY` is defined.
+- `ExternalTransport::Factory::new_transport_factory()` is pure virtual only when `OPENVPN_EXTERNAL_TRANSPORT_FACTORY` is defined.
+- The current project JNI CMake target does not define either macro. In this build configuration, both Factory base classes are empty and these methods are not required overrides for the subclass.
+- If either macro is enabled in a future build, the corresponding real factory implementation becomes mandatory; do not add dummy/null factory implementations to satisfy compilation.
+
+Therefore the immediate JNI blocker is not those factory methods in the current configuration. It is the missing stateful TunBuilder callback bridge, session lifecycle, and fail-closed socket protection. The exact pinned `OpenVPNClient` interface confirms `eval_config()`, `provide_creds()`, `connect()`, `stop()`, and `connection_info()` are the intended lifecycle calls; `connect()` is blocking and must run on a managed worker thread. `socket_protect()` is a virtual callback invoked by the connect thread and must synchronously delegate to Android `VpnService.protect(fd)`, returning false if protection fails.
