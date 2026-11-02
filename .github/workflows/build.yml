@@ -37,7 +37,7 @@ jobs:
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
 
 
-            - name: Extract project ZIP
+              - name: Extract project ZIP
         run: |
           ZIP_FILE="./RahYabVPN-v2-Engine-Starter-Root-1.zip"
 
