@@ -162,7 +162,8 @@ jobs:
           name: RahYabVPN-v2-native-core-probe
           path: native-core-probe/
           if-no-files-found: warn
-      - name: Upload source inspection bundle\n        uses: actions/upload-artifact@v4
+      - name: Upload source inspection bundle
+        uses: actions/upload-artifact@v4
         with:
           name: RahYabVPN-v2-source-inspection
           path: RahYabVPN-v2-source-inspection.zip
