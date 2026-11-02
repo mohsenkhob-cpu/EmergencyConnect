@@ -1,27 +1,18 @@
-# وضعیت ادغام موتور داخلی RahYabVPN برای Android
+# Android TUN adapter scaffold
 
-## نقطه شروع تأییدشده
-- پروژه Android داخل فایل ZIP ریشه مخزن نگهداری می‌شود.
-- کلاس OpenVpn3Bridge فقط وجود کتابخانه را بررسی می‌کند؛ JNI واقعی ندارد.
-- VpnEngine صرفاً قرارداد Java است.
-- هنوز VpnService/TUN و موتور OpenVPN 3 در APK وجود ندارد.
-- ساخت موفق Gradle به‌تنهایی اثبات اتصال VPN نیست.
+The extracted Android project has now been inspected. This overlay adds a real Android `VpnService` declaration and a small TUN adapter class.
 
-## مسیر فنی مصوب
-1. دریافت OpenVPN 3 Core از مخزن رسمی و ثبت یک commit مشخص (بدون استفاده از شاخه شناور در build نهایی).
-2. ساخت کتابخانه با Android NDK و CMake برای ABIهای arm64-v8a و armeabi-v7a؛ در صورت نیاز x86_64 برای شبیه‌ساز.
-3. پیاده‌سازی JNI با مدیریت عمر session، رشته کاری و تبدیل خطاهای ClientAPI.
-4. پیاده‌سازی Android VpnService و اتصال واقعی TUN به TunBuilderBase؛ فایل‌دسکریپتور TUN باید از Java به لایه native منتقل شود.
-5. محافظت socket انتقالی با VpnService.protect قبل از اتصال شبکه، تا تونل داخل خودش loop نشود.
-6. اعمال route و DNS از پروفایل، مدیریت IPv4/IPv6 و جلوگیری از نشت در حالت قطع تونل.
-7. اتصال state machine به رابط برنامه؛ فقط رویداد واقعی tunnel-up اجازه نمایش CONNECTED دارد.
-8. تست روی دستگاه واقعی: اتصال، قطع شبکه، تغییر Wi-Fi/داده همراه، توقف سرویس، DNS، IPv6 و reconnect.
+## Implemented in this checkpoint
+- Android recognizes RahYabVpnService as a VPN service.
+- The service can establish an Android TUN interface using Builder.
+- A transport-socket protection entry point delegates to VpnService.protect().
+- TUN descriptor ownership and close behavior are explicit.
 
-## معیار پذیرش
-- بدون نصب OpenVPN for Android متصل شود.
-- ترافیک از TUN عبور کند و IP خروجی پس از اتصال تغییر کند.
-- در قطع تونل، ترافیک حساس به‌صورت fail-closed مدیریت شود.
-- تست‌های بالا روی حداقل یک دستگاه Android واقعی ثبت شوند.
+## Not implemented yet
+- OpenVPN 3 Core C++ source/build and JNI session lifecycle.
+- TunBuilder callback mapping for every route, DNS, IPv4 and IPv6 option.
+- TUN packet read/write loop and native transport integration.
+- Foreground notification/service lifecycle, reconnect and failover.
+- Verified end-to-end tunnel tests and IP/DNS leak tests.
 
-## نکته ایمنی
-سرورهای عمومی VPN Gate ناشناس و ناپایدارند. برای بانکداری یا داده حساس استفاده نشوند.
+This scaffold must not report CONNECTED and is not a standalone VPN by itself.
