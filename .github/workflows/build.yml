@@ -69,6 +69,11 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p native-core-probe
+          echo "=== Installed LZ4 artifacts ==="
+          find "$GITHUB_WORKSPACE/vcpkg_installed/arm64-android" -maxdepth 4 \\
+            \\( -iname '*lz4*' -o -name 'lz4.h' \\) -print | sort | tee native-core-probe/lz4-files.txt
+          test -f "$GITHUB_WORKSPACE/vcpkg_installed/arm64-android/include/lz4.h"
+          test -f "$GITHUB_WORKSPACE/vcpkg_installed/arm64-android/lib/liblz4.a"
           set +e
           cmake -S overlay/native/android-probe -B native-core-probe/build \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
