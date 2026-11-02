@@ -76,7 +76,7 @@ jobs:
           set +e
           cmake -S overlay/native/android-probe -B native-core-probe/build \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-23 \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 \
             -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/vcpkg_installed/arm64-android" \
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
             -DOPENVPN3_SOURCE_DIR="$GITHUB_WORKSPACE/openvpn3-upstream" \
