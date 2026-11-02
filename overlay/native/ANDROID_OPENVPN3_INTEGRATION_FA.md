@@ -208,3 +208,18 @@ A follow-up inspection of the exact pinned headers `openvpn/tun/extern/fw.hpp` a
 - If either macro is enabled in a future build, the corresponding real factory implementation becomes mandatory; do not add dummy/null factory implementations to satisfy compilation.
 
 Therefore the immediate JNI blocker is not those factory methods in the current configuration. It is the missing stateful TunBuilder callback bridge, session lifecycle, and fail-closed socket protection. The exact pinned `OpenVPNClient` interface confirms `eval_config()`, `provide_creds()`, `connect()`, `stop()`, and `connection_info()` are the intended lifecycle calls; `connect()` is blocking and must run on a managed worker thread. `socket_protect()` is a virtual callback invoked by the connect thread and must synchronously delegate to Android `VpnService.protect(fd)`, returning false if protection fails.
+
+
+## Native TunBuilder collector milestone (2026-11-03)
+
+Commit `64ce7911d0a05f0bd191246c279f4ad3beda27b9` adds a per-client native configuration collector to `RahYabOpenVPNClient`. It now overrides the pinned TunBuilder callbacks for:
+- TUN layer validation (layer 3 only);
+- remote endpoint recording;
+- multiple IPv4/IPv6 interface addresses;
+- IPv4/IPv6 default routes and explicit include/exclude routes;
+- route metric, MTU, and session name;
+- builder reset and teardown.
+
+This is intentionally **not** a live Android TUN bridge. `tun_builder_establish()` still returns `-1`, so OpenVPN cannot mistake an unimplemented Java callback for a valid tunnel. DNS options are rejected until the first supported plain-DNS/search-domain mapping is implemented. Address-family deny requests are rejected rather than silently ignored.
+
+The commit is on `v2-engine-starter`; `main` is unchanged. CI has not yet validated this new commit, so no APK is being offered from it. The next gate is an NDK compile of the callback overrides, followed by the JNI-to-service dispatcher and synchronous `VpnService.protect(fd)` bridge.
