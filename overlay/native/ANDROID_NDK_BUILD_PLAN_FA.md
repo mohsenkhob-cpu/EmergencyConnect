@@ -54,3 +54,17 @@
 ## مجوز
 
 پیش از انتشار باید انتخاب و رعایت یکی از مسیرهای مجوز upstream (MPL-2.0 یا AGPL-3.0-only با استثنای OpenSSL طبق فایل مجوز upstream) توسط مسئول انتشار بررسی شود.
+
+## یافته تکمیلی از بررسی فایل‌های CMake در commit ثابت‌شده
+
+بررسی مستقیم `client/CMakeLists.txt`, ریشه `CMakeLists.txt` و `cmake/findcoredeps.cmake` انجام شد:
+
+- ریشه CMake با افزودن تست‌ها و agentهای Windows/macOS اجزای غیرلازم Android را وارد می‌کند؛ استفاده مستقیم از آن برای اپ مناسب نیست.
+- در `client/CMakeLists.txt` فقط وقتی `BUILD_SWIG_LIB` فعال باشد، هدف `ovpnclilib` ساخته می‌شود. این هدف از `swig_add_library(... LANGUAGE python ...)` استفاده می‌کند و Python libraries را لینک می‌کند.
+- `add_core_dependencies(target)`، وابستگی‌های core را به خود target مصرف‌کننده اضافه می‌کند و `openvpn/crypto/data_epoch.cpp` را نیز به سورس‌های همان target می‌افزاید.
+- تابع core، include directory هسته و تعریف‌های `ASIO_STANDALONE`, `USE_ASIO`, `HAVE_LZ4` را اعمال می‌کند و سپس Asio، LZ4، fmt و TLS را لینک می‌کند.
+- مسیر TLS در upstream از `PkgConfig` استفاده می‌کند؛ در Android NDK باید این بخش با imported targets حاصل از vcpkg/toolchain یا adapter CMake جایگزین شود. مسیرهای وابستگی Linux نیز نباید برای Android انتخاب شوند.
+
+### تصمیم پیاده‌سازی
+
+هدف Android باید تنظیمات لازم core را با حفظ compile definitions و source requirements upstream اعمال کند، اما کشف dependency را از مسیر مخصوص Android انجام دهد. کپی‌کردن ساده `client/CMakeLists.txt` یا فعال‌کردن SWIG راه‌حل معتبر نیست. پیش از افزودن JNI، باید build probe واقعی از `ovpncli.cpp` و dependencyها در NDK اجرا و خطاهای compile/link برطرف شود.
