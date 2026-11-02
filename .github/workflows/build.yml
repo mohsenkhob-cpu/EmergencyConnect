@@ -37,13 +37,16 @@ jobs:
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
 
 
-      - name: Extract project ZIP
-        run: ZIP_FILE="./RahYabVPN-v2-Engine-Starter-Root.zip"
+            - name: Extract project ZIP
+        run: |
+          ZIP_FILE="./RahYabVPN-v2-Engine-Starter-Root-1.zip"
+
           if [ ! -f "$ZIP_FILE" ]; then
             echo "V2 ZIP file not found"
             exit 1
           fi
-          mkdir extracted
+
+          mkdir -p extracted
           unzip -q "$ZIP_FILE" -d extracted
 
       - name: Set up Gradle
