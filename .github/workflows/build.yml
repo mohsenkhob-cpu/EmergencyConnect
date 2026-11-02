@@ -70,8 +70,7 @@ jobs:
           set -uo pipefail
           mkdir -p native-core-probe
           echo "=== Installed LZ4 artifacts ==="
-          find "$GITHUB_WORKSPACE/vcpkg_installed/arm64-android" -maxdepth 4 \\
-            \\( -iname '*lz4*' -o -name 'lz4.h' \\) -print | sort | tee native-core-probe/lz4-files.txt
+          find "$GITHUB_WORKSPACE/vcpkg_installed/arm64-android" -maxdepth 4 -type f -iname '*lz4*' -print | sort | tee native-core-probe/lz4-files.txt
           test -f "$GITHUB_WORKSPACE/vcpkg_installed/arm64-android/include/lz4.h"
           test -f "$GITHUB_WORKSPACE/vcpkg_installed/arm64-android/lib/liblz4.a"
           set +e
@@ -89,7 +88,7 @@ jobs:
           else
             BUILD_STATUS=not-run
           fi
-          printf 'configure_exit=%s\\nbuild_exit=%s\\n' "$CONFIGURE_STATUS" "$BUILD_STATUS" > native-core-probe/RESULT.txt
+          printf 'configure_exit=%s\nbuild_exit=%s\n' "$CONFIGURE_STATUS" "$BUILD_STATUS" > native-core-probe/RESULT.txt
           cat native-core-probe/RESULT.txt
           tail -n 100 native-core-probe/configure.log || true
           if [ -f native-core-probe/build.log ]; then tail -n 160 native-core-probe/build.log; fi
