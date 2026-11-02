@@ -64,3 +64,20 @@ Upstream `LICENSE.md` offers MPL-2.0 or AGPL-3.0-only with an OpenSSL exception.
 
 ## Current status
 The pinned upstream API and license material are audited and archived by CI. The Android VPN service and TUN fd ownership are scaffolds. The JNI bridge, complete TunBuilder callback adapter, Android NDK dependency build, linked native core, foreground service lifecycle, and on-device traffic tests are not implemented yet. The generated APK is therefore not an independent VPN client.
+
+
+## Client API details verified from ovpncli.hpp
+
+The pinned `OpenVPNClient` is itself derived from `TunBuilderBase`, `LogReceiver`, `ExternalTun::Factory`, and `ExternalTransport::Factory`. The integration must subclass it (or use an equivalent concrete adapter) and implement the required abstract callbacks, not merely call a nonexistent standalone JNI entry point.
+
+Verified lifecycle/API sequence:
+1. Construct a client/session object and call `eval_config(Config)`; reject profiles whose returned `EvalConfig.error` is true.
+2. Supply credentials with `provide_creds(ProvideCreds)` when required.
+3. Run `connect()` on a dedicated worker thread. The API explicitly says this call blocks until disconnect.
+4. Implement `socket_protect(openvpn_io::detail::socket_type, remote, ipv6)`; it must call Java `VpnService.protect(fd)` and propagate failure.
+5. Forward `event(...)` and `log(...)` callbacks safely to Java. Do not infer connection from worker startup; use the actual CONNECTED event.
+6. Stop asynchronously through `stop()`, then join the worker before destroying the client/session object. `pause()`, `resume()`, and `reconnect(seconds)` are available for network lifecycle management.
+
+The API also exposes `connection_info()` after CONNECTED, `stats_bundle()`, and helper APIs such as `OpenVPNClientHelper::merge_config_string()` and `eval_config()`. JNI implementation must be written against the exact declarations in the pinned header and must not invent signatures.
+
+These findings refine the implementation contract; they are not an implementation. No native target, JNI callbacks, or live tunnel have been added by this review.
