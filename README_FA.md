@@ -1,21 +1,29 @@
-# ادغام موتور OpenVPN 3 در اندروید — مرحله توسعه
+# راه‌یاب VPN — بسته توسعه نسخه ۲ (پیش‌نمونه موتور داخلی)
 
-این پوشه محل کد بومی OpenVPN 3 و لایه JNI پروژه RahYabVPN است. در ZIP فعلی، خود موتور OpenVPN 3 و فایل‌های باینری آن عمداً ادعا نشده‌اند و هنوز وجود ندارند.
+این بسته بر پایه پروژه فعلی RahYabVPN ساخته شده است. برنامه فعلی فهرست VPN Gate را دریافت و پروفایل را به OpenVPN for Android تحویل می‌دهد.
 
-## اجزای لازم برای تکمیل اتصال واقعی
+## وضعیت صادقانه نسخه
 
-1. دریافت سورس رسمی OpenVPN 3 Core از https://github.com/OpenVPN/openvpn3 و ثبت دقیق commit/tag استفاده‌شده.
-2. ساخت برای ABIهای Android مورد پشتیبانی (حداقل `arm64-v8a`) با Android NDK و CMake.
-3. پیاده‌سازی JNI برای `OpenVPNClient` در `client/ovpncli.hpp`.
-4. پیاده‌سازی کلاس مشتق از `openvpn::TunBuilderBase` که آدرس‌ها، routeها، DNS و MTU را با `android.net.VpnService.Builder` برقرار کند.
-5. محافظت از سوکت انتقال با `VpnService.protect()` و انتقال descriptor رابط TUN به موتور.
-6. مدیریت چرخه عمر، اعلان foreground، مجوز VPN، توقف، خطا و پاک‌سازی منابع.
-7. آزمایش اتصال واقعی روی گوشی و چند شبکه؛ سپس افزودن reconnect و failover فقط پس از تأیید قطع واقعی تونل.
+**این بسته هنوز VPN مستقل نیست و موتور OpenVPN 3 داخل APK قرار نگرفته است.** دو فایل Java به‌عنوان قرارداد و مرز JNI برای ادغام موتور اضافه شده‌اند. تا زمانی که OpenVPN 3 Core، لایه JNI و پیاده‌سازی Android TunBuilder ساخته و آزمایش نشوند، اتصال داخلی، اتصال خودکار و تعویض خودکار سرور فعال نیستند.
 
-## نکته مجوز
+- `app/src/main/java/ir/emergencyconnect/engine/VpnEngine.java`: قرارداد موتور اتصال.
+- `app/src/main/java/ir/emergencyconnect/engine/OpenVpn3Bridge.java`: مرز JNI؛ در نبود کتابخانه native اتصال را موجود اعلام نمی‌کند.
+- `native/openvpn3/README_FA.md`: مراحل فنی لازم برای تکمیل موتور.
 
-مخزن OpenVPN 3 مجوزهای MPL-2.0 و AGPL-3.0-only با استثنای مشخص OpenSSL را اعلام می‌کند. مجوز فایل‌های upstream و تغییرات باید حفظ شود. پیش از انتشار، متن مجوز و تعهدات توزیع نسخه انتخابی را بازبینی کنید.
+## ساخت APK آزمایشی فعلی
 
-## وضعیت این بسته
+1. محتویات این پروژه را در ریشه مخزن GitHub قرار دهید.
+2. از تب Actions گردش کار Build Android APK را اجرا کنید.
+3. فایل Artifact را دریافت کنید.
 
-این بسته «اسکلت ادغام» است، نه VPN مستقل آماده استفاده. `OpenVpn3Bridge.isAvailable()` تا زمان ساخت و قرار دادن کتابخانه `libopenvpn3_jni.so` مقدار false می‌دهد. هیچ‌گاه نباید صرف ایجاد VpnService یا بازشدن برنامه به‌عنوان اتصال VPN گزارش شود.
+APK ساخته‌شده همچنان رفتار نسخه فعلی را دارد و برای اتصال به OpenVPN for Android نیازمند است. این بسته را به‌عنوان نسخه مستقل یا آماده انتشار معرفی نکنید.
+
+## منابع فنی
+
+- OpenVPN 3 Core: https://github.com/OpenVPN/openvpn3
+- راهنمای توسعه OpenVPN 3: https://openvpn.github.io/openvpn3/
+- راهنمای رسمی Android VpnService: https://developer.android.com/develop/connectivity/vpn
+
+## ایمنی و حریم خصوصی
+
+سرورهای عمومی داوطلبانه ممکن است ناپایدار باشند و اپراتور آن‌ها می‌تواند فراداده یا ترافیک را مشاهده کند. برای بانکداری یا اطلاعات حساس از سرورهای ناشناس استفاده نکنید.
