@@ -1,4 +1,3 @@
-
 name: Build RahYabVPN APK
 
 on:
@@ -11,7 +10,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,31 +20,32 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      
       - name: Install Android SDK
         run: |
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f | head -n 1)
-
           if [ -z "$SDKMANAGER" ]; then
             echo "sdkmanager not found"
             exit 1
           fi
-
           yes | "$SDKMANAGER" --licenses || true
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
 
       - name: Extract project ZIP
         run: |
           ZIP_FILE="./RahYabVPN-v2-Engine-Starter-Root-1.zip"
-
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "V2 ZIP file not found"
-            exit 1
-          fi
-
+          test -f "$ZIP_FILE" || { echo "V2 ZIP file not found"; exit 1; }
           mkdir -p extracted
-          unzip -q "$ZIP_FILE" -d extracted 
+          unzip -q "$ZIP_FILE" -d extracted
+
+      - name: Apply maintained overlay
+        run: |
+          PROJECT_DIR=$(dirname "$(find extracted -name settings.gradle -type f | head -n 1)")
+          test -f "$PROJECT_DIR/settings.gradle" || { echo "Gradle project not found"; exit 1; }
+          if [ -d overlay ]; then
+            cp -a overlay/. "$PROJECT_DIR/"
+          fi
+          echo "Project overlay applied to $PROJECT_DIR"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -56,10 +55,6 @@ jobs:
       - name: Build APK
         run: |
           PROJECT_DIR=$(dirname "$(find extracted -name settings.gradle -type f | head -n 1)")
-          if [ ! -f "$PROJECT_DIR/settings.gradle" ]; then
-            echo "Gradle project not found"
-            exit 1
-          fi
           cd "$PROJECT_DIR"
           gradle assembleDebug
 
