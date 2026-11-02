@@ -55,7 +55,6 @@ add_core_dependencies(openvpn3_jni)
 
 target_compile_definitions(openvpn3_jni PRIVATE
   OPENVPN_PLATFORM_ANDROID
-  OPENVPN_EXTERNAL_TUN_FACTORY
   OPENVPN_PACKAGE_ID=ir_emergencyconnect_engine
 )
 target_include_directories(openvpn3_jni PRIVATE
