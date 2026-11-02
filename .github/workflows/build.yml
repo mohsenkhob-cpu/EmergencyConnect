@@ -49,6 +49,17 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Project overlay applied to $PROJECT_DIR"
 
+      - name: Inspect Android project sources
+        run: |
+          echo "=== PROJECT FILES ==="
+          find "$PROJECT_DIR" -maxdepth 6 -type f | sort | head -n 160
+          for f in settings.gradle settings.gradle.kts build.gradle build.gradle.kts gradle.properties app/build.gradle app/build.gradle.kts app/src/main/AndroidManifest.xml app/src/main/java/ir/emergencyconnect/MainActivity.java app/src/main/java/ir/emergencyconnect/engine/OpenVpn3Bridge.java app/src/main/java/ir/emergencyconnect/engine/VpnEngine.java; do
+            if [ -f "$PROJECT_DIR/$f" ]; then
+              echo "=== SOURCE: $f ==="
+              sed -n '1,260p' "$PROJECT_DIR/$f"
+            fi
+          done
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
