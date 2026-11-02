@@ -19,6 +19,11 @@ set(ASIO_INCLUDE_DIR "${VCPKG_ANDROID_INCLUDE}" CACHE PATH "Standalone Asio incl
 # Point it explicitly at the pinned vcpkg Android release artifacts.
 set(LZ4_INCLUDE_DIR "${VCPKG_ANDROID_INCLUDE}" CACHE PATH "LZ4 include directory" FORCE)
 set(LZ4_LIBRARY "${VCPKG_INSTALLED_DIR}/arm64-android/lib/liblz4.a" CACHE FILEPATH "LZ4 static library" FORCE)
+# OpenVPN uses find_package(fmt); vcpkg installs its config under share/fmt.
+set(fmt_DIR "${VCPKG_INSTALLED_DIR}/arm64-android/share/fmt" CACHE PATH "fmt package config directory" FORCE)
+if(NOT EXISTS "${fmt_DIR}/fmt-config.cmake" AND NOT EXISTS "${fmt_DIR}/fmtConfig.cmake")
+  message(FATAL_ERROR "Pinned Android fmt CMake package was not found under ${fmt_DIR}")
+endif()
 if(NOT EXISTS "${LZ4_INCLUDE_DIR}/lz4.h" OR NOT EXISTS "${LZ4_LIBRARY}")
   message(FATAL_ERROR "Pinned Android LZ4 headers/library were not found")
 endif()
