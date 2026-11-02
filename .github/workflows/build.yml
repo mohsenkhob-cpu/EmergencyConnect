@@ -27,7 +27,8 @@ jobs:
           SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f | head -n 1)
           test -n "$SDKMANAGER" || { echo "sdkmanager not found"; exit 1; }
           yes | "$SDKMANAGER" --licenses || true
-          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358" "cmake;3.31.6"
+          echo "ANDROID_NDK_HOME=$SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
       - name: Fetch pinned OpenVPN 3 source for audit
         run: |
           set -euo pipefail
@@ -47,6 +48,22 @@ jobs:
           cp openvpn3-upstream/client/ovpncli.i upstream-audit/
           cp openvpn3-upstream/javacli/android/cpu.cpp upstream-audit/
           echo "Pinned OpenVPN 3 source verified at $ACTUAL"
+      - name: Build pinned Android native dependencies
+        run: |
+          set -euo pipefail
+          git clone https://github.com/microsoft/vcpkg.git vcpkg
+          git -C vcpkg checkout --detach 69a1a33b4ba2b21e392c17e215ff637290778a97
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          ./vcpkg/vcpkg install --triplet arm64-android --x-manifest-root=overlay/native --overlay-ports=openvpn3-upstream/deps/vcpkg-ports
+          mkdir -p native-dependency-audit
+          printf 'vcpkg_baseline=%s\ntriplet=arm64-android\nabi=arm64-v8a\n' "69a1a33b4ba2b21e392c17e215ff637290778a97" > native-dependency-audit/BUILD_INFO.txt
+          find vcpkg_installed/arm64-android -maxdepth 3 -type f | sort > native-dependency-audit/installed-files.txt
+          test -f vcpkg_installed/arm64-android/lib/libssl.a
+          test -f vcpkg_installed/arm64-android/lib/libcrypto.a
+          test -f vcpkg_installed/arm64-android/lib/liblz4.a
+          test -f vcpkg_installed/arm64-android/lib/libfmt.a
+          test -d vcpkg_installed/arm64-android/include/asio
+          echo "Pinned Android static dependencies built and verified"
       - name: Extract project ZIP
         run: |
           ZIP_FILE="./RahYabVPN-v2-Engine-Starter-Root-1.zip"
@@ -124,6 +141,12 @@ jobs:
         with:
           name: RahYabVPN-v2-openvpn3-upstream-audit
           path: upstream-audit/
+          if-no-files-found: error
+      - name: Upload Android dependency build audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: RahYabVPN-v2-android-dependencies-arm64
+          path: native-dependency-audit/
           if-no-files-found: error
       - name: Upload APK
         uses: actions/upload-artifact@v4
