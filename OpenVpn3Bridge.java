@@ -1,20 +1,17 @@
 package ir.emergencyconnect.engine;
 
 /**
- * Availability gate for the embedded OpenVPN 3 engine.
+ * Availability gate and diagnostics for the embedded OpenVPN 3 engine.
  *
- * Loading libopenvpn3_jni.so only proves that the shared library can be
- * loaded. It does not prove that a session can be created, that Android's
- * VpnService TUN is connected to the core, or that transport sockets are
- * protected. Keep the engine unavailable until the complete JNI session
- * lifecycle and TunBuilder adapter are implemented and tested.
+ * A successful native self-test proves that the packaged OpenVPN core can be
+ * entered through JNI. It does NOT prove that a VPN session can be connected.
+ * Keep SESSION_API_READY false until session lifecycle, Android TunBuilder
+ * callbacks, socket protection and device traffic tests are complete.
  */
 public final class OpenVpn3Bridge {
     private static final boolean LIBRARY_LOADED;
 
-    // Deliberately false: the current native library exports JNI_OnLoad only.
-    // Change this only in the same change that adds and verifies the complete
-    // session API, TUN callbacks, socket protection, and lifecycle handling.
+    // Deliberately false: no complete JNI session/TUN adapter exists yet.
     private static final boolean SESSION_API_READY = false;
 
     static {
@@ -30,9 +27,28 @@ public final class OpenVpn3Bridge {
 
     private OpenVpn3Bridge() {}
 
-    /** True only when a usable embedded session engine is available. */
+    private static native String nativeCryptoSelfTest();
+
+    /** True only when a usable embedded VPN session engine is available. */
     public static boolean isAvailable() {
         return LIBRARY_LOADED && SESSION_API_READY;
+    }
+
+    /**
+     * Runs the OpenVPN core's own crypto self-test through the packaged JNI
+     * library. This is a diagnostic only; it does not start a VPN connection.
+     */
+    public static String runCoreSelfTest() {
+        if (!LIBRARY_LOADED) {
+            return "کتابخانه بومی OpenVPN 3 بارگذاری نشده است.";
+        }
+        try {
+            String result = nativeCryptoSelfTest();
+            return result == null || result.isEmpty()
+                    ? "هسته پاسخ خالی برگرداند." : result;
+        } catch (UnsatisfiedLinkError | SecurityException e) {
+            return "رابط آزمایش بومی در این نسخه در دسترس نیست: " + e.getMessage();
+        }
     }
 
     /** Diagnostic distinction between a packaged library and a usable engine. */
@@ -40,6 +56,6 @@ public final class OpenVpn3Bridge {
         if (!LIBRARY_LOADED) {
             return "کتابخانه بومی OpenVPN 3 در این نسخه بارگذاری نشده است.";
         }
-        return "کتابخانه بومی بارگذاری شده، اما رابط نشست و تونل اندروید هنوز کامل و آزمایش نشده است.";
+        return "کتابخانه و آزمون بومی در دسترس‌اند، اما رابط نشست و تونل اندروید هنوز کامل و آزمایش نشده است.";
     }
 }

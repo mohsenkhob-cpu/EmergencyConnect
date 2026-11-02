@@ -1,12 +1,14 @@
 #include <jni.h>
 
+#include <exception>
+#include <string>
 #include <type_traits>
 
 #include "ovpncli.hpp"
 
 // Compile-time contract check for the pinned OpenVPN 3 client API.
-// This class is deliberately not exposed as a session API yet: the Android
-// TunBuilder/JNI callbacks and worker lifecycle must be completed first.
+// The class remains intentionally unavailable as a session API until the
+// Android TunBuilder callbacks and managed worker lifecycle are implemented.
 namespace {
 
 class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
@@ -42,7 +44,24 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
 static_assert(!std::is_abstract<RahYabOpenVPNClient>::value,
               "RahYabVPN must implement every pure OpenVPNClient callback");
 
+jstring to_java_string(JNIEnv *env, const std::string &value) {
+    return env->NewStringUTF(value.c_str());
+}
+
 }  // namespace
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeCryptoSelfTest(
+        JNIEnv *env, jclass) {
+    try {
+        openvpn::ClientAPI::OpenVPNClientHelper helper;
+        return to_java_string(env, helper.crypto_self_test());
+    } catch (const std::exception &e) {
+        return to_java_string(env, std::string("OpenVPN core self-test exception: ") + e.what());
+    } catch (...) {
+        return to_java_string(env, "OpenVPN core self-test failed with an unknown native exception");
+    }
+}
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *, void *) {
     return JNI_VERSION_1_6;
