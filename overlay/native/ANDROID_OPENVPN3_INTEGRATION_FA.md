@@ -81,3 +81,29 @@ Verified lifecycle/API sequence:
 The API also exposes `connection_info()` after CONNECTED, `stats_bundle()`, and helper APIs such as `OpenVPNClientHelper::merge_config_string()` and `eval_config()`. JNI implementation must be written against the exact declarations in the pinned header and must not invent signatures.
 
 These findings refine the implementation contract; they are not an implementation. No native target, JNI callbacks, or live tunnel have been added by this review.
+
+## Additional pure-virtual requirements confirmed from the pinned headers
+
+Inspection of `client/ovpncli.hpp`, `openvpn/tun/extern/fw.hpp`, and `openvpn/transport/client/extern/fw.hpp` confirms that a concrete client subclass must implement these OpenVPNClient callbacks:
+- `pause_on_connection_timeout()`;
+- `event(const Event &)`;
+- `acc_event(const AppCustomControlMessageEvent &)`;
+- `log(const LogInfo &)`;
+- `external_pki_cert_request(ExternalPKICertRequest &)`;
+- `external_pki_sign_request(ExternalPKISignRequest &)`.
+
+The inherited factory interfaces also require:
+- `ExternalTun::Factory::new_tun_factory(const Config &, const OptionList &)`;
+- `ExternalTransport::Factory::new_transport_factory(const Config &)`.
+
+This is important for the implementation design: even a profile that does not use external PKI or custom transport must provide deliberate callback behavior, and the default factory cannot be assumed to exist. For the first supported profile subset, unsupported external-PKI and custom transport requests should be rejected during validation rather than silently accepted. The Android adapter should use the standard OpenVPN transport path unless a concrete transport factory is intentionally implemented.
+
+## Build strategy decision from source inspection
+
+The pinned upstream `client/CMakeLists.txt` only creates the SWIG Python module when `BUILD_SWIG_LIB` is enabled; it does not define an Android JNI target. The pinned `ovpncli.hpp` is a client API header, not a self-contained implementation. A valid Android target therefore needs:
+1. an Android-specific CMake target that compiles the upstream core/client implementation with the same feature definitions and dependency targets expected by `add_core_dependencies()`;
+2. a small project-owned JNI translation unit that subclasses `ClientAPI::OpenVPNClient` and implements the pure-virtual callbacks above;
+3. an Android TunBuilder adapter that translates the complete callback set to `VpnService.Builder`, including multiple addresses/routes/DNS and family policy;
+4. a deliberate decision about the upstream external transport/tun factories, with unsupported profile features rejected until implemented.
+
+No JNI library is claimed by this commit. The next engineering gate is to establish a minimal reproducible Android CMake compilation of the pinned upstream client/core sources before implementing JNI behavior. This avoids creating a misleading placeholder shared library that merely exports JNI names without a working OpenVPN core.
