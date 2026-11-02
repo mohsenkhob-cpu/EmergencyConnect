@@ -35,8 +35,12 @@ set(_openvpn_findcoredeps "${OPENVPN3_SOURCE_DIR}/cmake/findcoredeps.cmake")
 file(READ "${_openvpn_findcoredeps}" _openvpn_findcoredeps_text)
 if(ANDROID)
   string(REPLACE
-    "if(UNIX)\n        target_link_libraries(${target} pthread)\n    endif()"
-    "if(UNIX AND NOT ANDROID)\n        target_link_libraries(${target} pthread)\n    endif()"
+    [=[if(UNIX)
+        target_link_libraries(${target} pthread)
+    endif()]=]
+    [=[if(UNIX AND NOT ANDROID)
+        target_link_libraries(${target} pthread)
+    endif()]=]
     _openvpn_findcoredeps_text "${_openvpn_findcoredeps_text}")
   file(WRITE "${_openvpn_findcoredeps}" "${_openvpn_findcoredeps_text}")
 endif()
