@@ -1,0 +1,60 @@
+name: Build RahYab with external OpenVPN engine
+
+on:
+  push:
+    branches:
+      - feature/openvpn-android-aidl
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f | head -n 1)
+          test -n "$SDKMANAGER" || { echo "sdkmanager not found"; exit 1; }
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
+      - name: Extract Android project
+        run: |
+          set -euo pipefail
+          test -f RahYabVPN-v2-Engine-Starter-Root-1.zip
+          mkdir -p extracted
+          unzip -q RahYabVPN-v2-Engine-Starter-Root-1.zip -d extracted
+          SETTINGS_FILE=$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
+          test -n "$SETTINGS_FILE"
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          cp -a overlay/. "$PROJECT_DIR/"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build APK
+        run: |
+          cd "$PROJECT_DIR"
+          gradle assembleDebug
+      - name: Verify APK
+        run: |
+          APK=$(find "$PROJECT_DIR" -type f -path "*/build/outputs/apk/debug/*.apk" | head -n 1)
+          test -n "$APK"
+          test -s "$APK"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RahYabVPN-external-engine-APK
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
