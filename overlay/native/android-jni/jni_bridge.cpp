@@ -6,6 +6,7 @@
 #include <thread>
 #include <string>
 #include <type_traits>
+#include <algorithm>
 #include <vector>
 
 #include "ovpncli.hpp"
@@ -398,8 +399,32 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         // Custom-control messages are not supported by the first profile subset.
     }
 
-    void log(const openvpn::ClientAPI::LogInfo &) override {
-        // Log forwarding is added with the managed JNI lifecycle.
+    void log(const openvpn::ClientAPI::LogInfo &entry) override {
+        // Forward only transport/handshake diagnostics. Never forward raw
+        // credentials, profile text, certificates, or private-key material.
+        std::string line = entry.text;
+        if (line.empty()) return;
+        std::string lower = line;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const bool useful =
+                lower.find("error") != std::string::npos ||
+                lower.find("warning") != std::string::npos ||
+                lower.find("tls") != std::string::npos ||
+                lower.find("resolve") != std::string::npos ||
+                lower.find("tcp") != std::string::npos ||
+                lower.find("udp") != std::string::npos ||
+                lower.find("timeout") != std::string::npos ||
+                lower.find("connection") != std::string::npos;
+        const bool sensitive =
+                lower.find("password") != std::string::npos ||
+                lower.find("username") != std::string::npos ||
+                lower.find("auth-token") != std::string::npos ||
+                lower.find("private key") != std::string::npos ||
+                lower.find("-----begin") != std::string::npos;
+        if (!useful || sensitive) return;
+        if (line.size() > 600) line.resize(600);
+        reportDiagnostic("CORE_LOG", line, false, false);
     }
 
     void external_pki_cert_request(
