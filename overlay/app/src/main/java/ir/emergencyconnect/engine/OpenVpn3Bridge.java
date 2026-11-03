@@ -28,6 +28,28 @@ public final class OpenVpn3Bridge {
     private OpenVpn3Bridge() {}
 
     private static native String nativeCryptoSelfTest();
+    private static native boolean nativeBindTunService(RahYabVpnService service);
+    private static native void nativeUnbindTunService();
+
+    /** Bind Android TUN and socket-protection callbacks for the service lifetime. */
+    public static boolean bindTunService(RahYabVpnService service) {
+        if (!LIBRARY_LOADED || service == null) return false;
+        try {
+            return nativeBindTunService(service);
+        } catch (UnsatisfiedLinkError | SecurityException e) {
+            return false;
+        }
+    }
+
+    /** Release the JNI global reference held for Android service callbacks. */
+    public static void unbindTunService() {
+        if (!LIBRARY_LOADED) return;
+        try {
+            nativeUnbindTunService();
+        } catch (UnsatisfiedLinkError | SecurityException ignored) {
+            // Safe during service teardown if the native library was unavailable.
+        }
+    }
 
     /** True only when a usable embedded VPN session engine is available. */
     public static boolean isAvailable() {
