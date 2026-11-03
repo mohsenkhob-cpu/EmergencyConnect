@@ -361,7 +361,8 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         return false;
     }
 
-    void event(const openvpn::ClientAPI::Event &event) override {
+    void reportDiagnostic(const std::string &name, const std::string &info,
+                          bool error, bool fatal) {
         ScopedJniEnv scoped;
         JNIEnv *env = scoped.get();
         if (!env) return;
@@ -375,17 +376,21 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
             if (service) env->DeleteLocalRef(service);
             return;
         }
-        jstring name = env->NewStringUTF(event.name.c_str());
-        jstring info = env->NewStringUTF(event.info.c_str());
-        if (name && info) {
-            env->CallVoidMethod(service, callback, name, info,
-                    event.error ? JNI_TRUE : JNI_FALSE,
-                    event.fatal ? JNI_TRUE : JNI_FALSE);
+        jstring jname = env->NewStringUTF(name.c_str());
+        jstring jinfo = env->NewStringUTF(info.c_str());
+        if (jname && jinfo) {
+            env->CallVoidMethod(service, callback, jname, jinfo,
+                    error ? JNI_TRUE : JNI_FALSE,
+                    fatal ? JNI_TRUE : JNI_FALSE);
         }
         if (env->ExceptionCheck()) env->ExceptionClear();
-        if (name) env->DeleteLocalRef(name);
-        if (info) env->DeleteLocalRef(info);
+        if (jname) env->DeleteLocalRef(jname);
+        if (jinfo) env->DeleteLocalRef(jinfo);
         env->DeleteLocalRef(service);
+    }
+
+    void event(const openvpn::ClientAPI::Event &event) override {
+        reportDiagnostic(event.name, event.info, event.error, event.fatal);
     }
 
     void acc_event(
@@ -561,11 +566,22 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession(
             session->worker = std::thread([client = session->client]() {
                 try {
                     const auto result = client->connect();
-                    if (result.error) {
-                        // The detailed reason is surfaced through core events.
+                    std::string detail = result.message;
+                    if (detail.empty()) {
+                        detail = result.error
+                                ? "OpenVPN connect() returned an error without a message."
+                                : "OpenVPN connect() returned without an error message.";
                     }
+                    if (detail.size() > 1200) detail.resize(1200);
+                    client->reportDiagnostic("NATIVE_CONNECT_RESULT", detail,
+                            result.error, false);
+                } catch (const std::exception &e) {
+                    std::string detail = e.what() ? e.what() : "std::exception without message";
+                    if (detail.size() > 1200) detail.resize(1200);
+                    client->reportDiagnostic("NATIVE_CONNECT_EXCEPTION", detail, true, true);
                 } catch (...) {
-                    // Never allow a C++ exception to escape the worker thread.
+                    client->reportDiagnostic("NATIVE_CONNECT_EXCEPTION",
+                            "Unknown C++ exception escaped OpenVPN connect().", true, true);
                 }
             });
         } catch (...) {
