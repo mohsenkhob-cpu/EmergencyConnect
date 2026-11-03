@@ -75,16 +75,18 @@ public final class OpenVpn3Bridge {
             return "بررسی فایل با هسته داخلی در دسترس نیست: " + e.getMessage();
         }
     }
-    private static native boolean nativeBindTunService(RahYabVpnService service);
+    private static native String nativeBindTunService(RahYabVpnService service);
     private static native void nativeUnbindTunService();
 
     /** Bind Android TUN and socket-protection callbacks for the service lifetime. */
-    public static boolean bindTunService(RahYabVpnService service) {
-        if (!LIBRARY_LOADED || service == null) return false;
+    public static String bindTunService(RahYabVpnService service) {
+        if (!LIBRARY_LOADED) return "LIBRARY_NOT_LOADED";
+        if (service == null) return "SERVICE_NULL";
         try {
-            return nativeBindTunService(service);
+            String result = nativeBindTunService(service);
+            return result == null ? "JNI_RETURNED_NULL" : result;
         } catch (UnsatisfiedLinkError | SecurityException e) {
-            return false;
+            return "JNI_CALL_FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage();
         }
     }
 
