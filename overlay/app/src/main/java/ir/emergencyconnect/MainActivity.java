@@ -89,7 +89,7 @@ public class MainActivity extends Activity {
                 status.setText("بررسی پروفایل سرور "+s.ip+" انجام شد.");
                 new AlertDialog.Builder(this)
                     .setTitle("گزارش بررسی پروفایل")
-                    .setMessage(report+"\\n\\nتوجه: پذیرفته‌شدن فایل توسط تجزیه‌گر به معنی پشتیبانی همه گزینه‌ها یا اتصال VPN نیست.")
+                    .setMessage(report+"\n\nتوجه: پذیرفته‌شدن فایل توسط تجزیه‌گر به معنی پشتیبانی همه گزینه‌ها یا اتصال VPN نیست.")
                     .setPositiveButton("انتقال به OpenVPN", (dialog,which)->exportProfile(s))
                     .setNegativeButton("بستن",null)
                     .show();
@@ -109,7 +109,7 @@ public class MainActivity extends Activity {
             startActivity(Intent.createChooser(i,"باز کردن پروفایل با برنامه OpenVPN"));
         }catch(Exception e){
             new AlertDialog.Builder(this).setTitle("انتقال پروفایل انجام نشد")
-                .setMessage("برای اتصال فعلی از OpenVPN for Android استفاده کنید.\\n"+e.getMessage())
+                .setMessage("برای اتصال فعلی از OpenVPN for Android استفاده کنید.\n"+e.getMessage())
                 .setPositiveButton("متوجه شدم",null).show();
         }
     }
