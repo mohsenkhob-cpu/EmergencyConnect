@@ -1,4 +1,5 @@
 #include <jni.h>
+#include <openssl/evp.h>
 
 #include <exception>
 #include <mutex>
@@ -484,10 +485,27 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeCryptoSelfTest(
 
         std::string report = "OpenVPN 3 core helper: OK\n";
         report += "Platform: " + platform + "\n";
-        if (crypto.empty()) {
-            report += "Crypto self-test: no output from this build; cryptographic self-test is not verified.";
+        if (!crypto.empty()) {
+            report += "OpenVPN helper crypto self-test output:\n" + crypto;
         } else {
-            report += "Crypto self-test output:\n" + crypto;
+            // Some OpenVPN 3 builds expose crypto_self_test() but return no
+            // diagnostics. Fall back to a SHA-256 known-answer test through
+            // the same OpenSSL crypto library linked into this JNI module.
+            static const unsigned char expected[] = {
+                0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+                0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+                0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
+                0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad
+            };
+            unsigned char digest[EVP_MAX_MD_SIZE] = {};
+            unsigned int digest_length = 0;
+            const int ok = EVP_Digest("abc", 3, digest, &digest_length,
+                                      EVP_sha256(), nullptr);
+            const bool matches = ok == 1 && digest_length == sizeof(expected) &&
+                    std::equal(std::begin(expected), std::end(expected), digest);
+            report += matches
+                    ? "SHA-256 known-answer test: PASS (OpenSSL EVP; abc)"
+                    : "SHA-256 known-answer test: FAIL (OpenSSL EVP)";
         }
         return to_java_string(env, report);
     } catch (const std::exception &e) {
