@@ -113,8 +113,13 @@ public final class RahYabVpnService extends VpnService {
                     stopSelf(startId);
                     return;
                 }
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("session_start_result", "درخواست به موتور ارسال شد؛ منتظر پاسخ…").apply();
                 String result = OpenVpn3Bridge.startSession(profile);
-                updateStatus(result == null ? "هسته پاسخی نداد" : result);
+                String safeResult = result == null ? "هسته پاسخی نداد" : result;
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("session_start_result", safeResult).apply();
+                updateStatus(safeResult);
             });
             return START_NOT_STICKY;
         }
@@ -321,6 +326,10 @@ public final class RahYabVpnService extends VpnService {
     /** Receive OpenVPN core events on its worker thread and reflect them in the foreground notification. */
     public void onNativeEvent(String name, String info, boolean error, boolean fatal) {
         if (name == null) name = "UNKNOWN";
+        String detail = name + (info == null || info.isEmpty() ? "" : " — " + info)
+                + (error || fatal ? " [ERROR]" : "");
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("native_last_event", detail).apply();
         String message;
         if ("CONNECTED".equals(name)) {
             message = "اتصال برقرار شد";
