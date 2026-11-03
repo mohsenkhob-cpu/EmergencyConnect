@@ -2,6 +2,8 @@
 
 #include <exception>
 #include <mutex>
+#include <memory>
+#include <thread>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -409,6 +411,17 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
 static_assert(!std::is_abstract<RahYabOpenVPNClient>::value,
               "RahYabVPN must implement every pure OpenVPNClient callback");
 
+// One native client and one joinable worker per VPN session. The owner keeps
+// the client alive until stop has joined the worker; no detached threads.
+struct NativeSession {
+    std::shared_ptr<RahYabOpenVPNClient> client;
+    std::thread worker;
+};
+std::mutex g_session_mutex;
+std::shared_ptr<NativeSession> g_session;
+bool g_session_stopping = false;
+
+
 jstring to_java_string(JNIEnv *env, const std::string &value) {
     return env->NewStringUTF(value.c_str());
 }
@@ -502,6 +515,91 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeValidateProfile(
         return to_java_string(env, std::string("Profile validation exception: ") + e.what());
     } catch (...) {
         return to_java_string(env, "Profile validation failed with an unknown native exception.");
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession(
+        JNIEnv *env, jclass, jstring profile) {
+    if (!profile) return to_java_string(env, "فایل تنظیمات خالی است.");
+    const char *chars = env->GetStringUTFChars(profile, nullptr);
+    if (!chars) return to_java_string(env, "خواندن فایل تنظیمات ناموفق بود.");
+    const std::string content(chars);
+    env->ReleaseStringUTFChars(profile, chars);
+    if (content.empty() || content.size() > static_cast<size_t>(
+            openvpn::ClientAPI::OpenVPNClientHelper::max_profile_size())) {
+        return to_java_string(env, "حجم یا محتوای فایل تنظیمات معتبر نیست.");
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+        if (g_session || g_session_stopping)
+            return to_java_string(env, "یک نشست VPN در حال اجرا یا توقف است.");
+    }
+
+    try {
+        auto session = std::make_shared<NativeSession>();
+        session->client = std::make_shared<RahYabOpenVPNClient>();
+        openvpn::ClientAPI::Config config;
+        config.content = content;
+        const auto evaluated = session->client->eval_config(config);
+        if (evaluated.error)
+            return to_java_string(env, std::string("پروفایل رد شد: ") + evaluated.message);
+        if (!evaluated.autologin || evaluated.externalPki ||
+            evaluated.privateKeyPasswordRequired || !evaluated.staticChallenge.empty()) {
+            return to_java_string(env,
+                    "این نسخه فقط پروفایل‌های ورود خودکار بدون چالش و کلید رمزدار را می‌پذیرد.");
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(g_session_mutex);
+            if (g_session || g_session_stopping)
+                return to_java_string(env, "یک نشست VPN هم‌زمان شروع شده است.");
+            g_session = session;
+        }
+        try {
+            session->worker = std::thread([client = session->client]() {
+                try {
+                    const auto result = client->connect();
+                    if (result.error) {
+                        // The detailed reason is surfaced through core events.
+                    }
+                } catch (...) {
+                    // Never allow a C++ exception to escape the worker thread.
+                }
+            });
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(g_session_mutex);
+            if (g_session == session) g_session.reset();
+            throw;
+        }
+        return to_java_string(env, "درخواست اتصال به هسته OpenVPN 3 تحویل شد؛ وضعیت نهایی از رویدادهای موتور مشخص می‌شود.");
+    } catch (const std::exception &e) {
+        return to_java_string(env, std::string("شروع نشست ناموفق بود: ") + e.what());
+    } catch (...) {
+        return to_java_string(env, "شروع نشست با خطای ناشناخته روبه‌رو شد.");
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStopSession(
+        JNIEnv *, jclass) {
+    std::shared_ptr<NativeSession> session;
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+        if (!g_session) return;
+        g_session_stopping = true;
+        session = g_session;
+    }
+    session->client->stop();
+    if (session->worker.joinable() &&
+        session->worker.get_id() != std::this_thread::get_id()) {
+        session->worker.join();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_session_mutex);
+        if (g_session == session) g_session.reset();
+        g_session_stopping = false;
     }
 }
 
