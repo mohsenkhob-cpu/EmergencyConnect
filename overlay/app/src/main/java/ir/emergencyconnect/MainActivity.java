@@ -60,7 +60,7 @@ public class MainActivity extends Activity {
         root.addView(selfTest);
 
         TextView note=txt("روش اتصال: پس از بررسی هر سرور، می‌توانید اتصال آزمایشی داخلی راه‌یاب را انتخاب کنید یا فایل را به OpenVPN for Android منتقل کنید. اتصال داخلی تازه به سرویس و موتور OpenVPN 3 متصل شده و هنوز روی گوشی واقعی آزمایش نشده است.",13,Color.DKGRAY,false); note.setBackground(shape(Color.WHITE)); note.setPadding(14,14,14,14); LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,-2); np.setMargins(0,12,0,8); root.addView(note);
-        TextView warning=txt("شفاف‌سازی: اتصال مستقل از داخل این APK هنوز فعال نشده است. سرورهای عمومی داوطلبانه ممکن است قطع، کند یا دارای سیاست ثبت اطلاعات متفاوت باشند. برای بانکداری و اطلاعات حساس استفاده نکنید.",12,Color.rgb(150,70,30),true); root.addView(warning);
+        TextView warning=txt("شفاف‌سازی: اتصال داخلی در حالت آزمایشی است و هنوز روی گوشی واقعی تأیید نشده است. سرورهای عمومی داوطلبانه ممکن است قطع، کند یا دارای سیاست ثبت اطلاعات متفاوت باشند. برای بانکداری و اطلاعات حساس استفاده نکنید.",12,Color.rgb(150,70,30),true); root.addView(warning);
         list=new LinearLayout(this); list.setOrientation(1); root.addView(list);
         TextView foot=txt("منبع فهرست: VPN Gate دانشگاه تسوکوبا",11,Color.GRAY,false); foot.setGravity(Gravity.CENTER); root.addView(foot);
     }
@@ -159,7 +159,7 @@ public class MainActivity extends Activity {
     static long parseLong(String s){try{return Long.parseLong(s.trim());}catch(Exception e){return 0;}}
     List<String> parseCsv(String line){ ArrayList<String> out=new ArrayList<>(); StringBuilder x=new StringBuilder(); boolean q=false; for(int i=0;i<line.length();i++){char ch=line.charAt(i); if(ch=='"'){ if(q&&i+1<line.length()&&line.charAt(i+1)=='"'){x.append('"');i++;}else q=!q;} else if(ch==','&&!q){out.add(x.toString());x.setLength(0);}else x.append(ch);} out.add(x.toString()); return out; }
     void render(){ list.removeAllViews(); int n=Math.min(servers.size(),80); for(int i=0;i<n;i++){ final Server s=servers.get(i); LinearLayout card=new LinearLayout(this); card.setOrientation(1); card.setPadding(12,10,12,10); card.setBackground(shape(Color.WHITE)); LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2); cp.setMargins(0,6,0,6); card.setLayoutParams(cp);
-        card.addView(txt((s.country==null?"نامشخص":s.country)+"  |  "+s.ip,16,navy,true)); card.addView(txt("پینگ گزارش‌شده: "+(s.ping>=9999?"نامشخص":s.ping+" ms")+"   |   سرعت اعلامی: "+(s.speed/1000000)+" Mbps",12,Color.DKGRAY,false)); card.addView(txt("برای انتقال تنظیمات به OpenVPN لمس کنید",12,teal,true)); card.setOnClickListener(v->importProfile(s)); list.addView(card);
+        card.addView(txt((s.country==null?"نامشخص":s.country)+"  |  "+s.ip,16,navy,true)); card.addView(txt("پینگ گزارش‌شده: "+(s.ping>=9999?"نامشخص":s.ping+" ms")+"   |   سرعت اعلامی: "+(s.speed/1000000)+" Mbps",12,Color.DKGRAY,false)); card.addView(txt("برای بررسی و انتخاب روش اتصال لمس کنید",12,teal,true)); card.setOnClickListener(v->importProfile(s)); list.addView(card);
     }}
     void importProfile(Server s){
         status.setText("در حال بررسی فایل سرور با موتور داخلی OpenVPN 3…");
@@ -171,6 +171,7 @@ public class MainActivity extends Activity {
                     .setTitle("گزارش بررسی پروفایل")
                     .setMessage(report+"\n\nتوجه: پذیرفته‌شدن فایل توسط تجزیه‌گر به معنی پشتیبانی همه گزینه‌ها یا اتصال VPN نیست.")
                     .setPositiveButton("انتقال به OpenVPN", (dialog,which)->exportProfile(s))
+                    .setNeutralButton("اتصال آزمایشی داخل راه‌یاب", (dialog,which)->requestInternalVpn(s))
                     .setNegativeButton("بستن",null)
                     .show();
             });
