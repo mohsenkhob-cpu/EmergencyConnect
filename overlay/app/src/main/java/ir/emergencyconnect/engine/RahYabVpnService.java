@@ -82,6 +82,7 @@ public final class RahYabVpnService extends VpnService {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         if (ACTION_STOP.equals(action)) {
+            setLampState("disconnected");
             sessionExecutor.execute(() -> {
                 OpenVpn3Bridge.stopSession();
                 closeTun();
@@ -90,6 +91,7 @@ public final class RahYabVpnService extends VpnService {
             return START_NOT_STICKY;
         }
         if (ACTION_START.equals(action)) {
+            setLampState("searching");
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
                     .edit()
                     .remove("service_start_error")
@@ -321,6 +323,11 @@ public final class RahYabVpnService extends VpnService {
         return parsed;
     }
 
+    private void setLampState(String state) {
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("connection_lamp_state", state).apply();
+    }
+
     private void updateStatus(String message) {
         if (!foregroundStarted) return;
         NotificationManager manager = getSystemService(NotificationManager.class);
@@ -334,6 +341,13 @@ public final class RahYabVpnService extends VpnService {
                 + (error || fatal ? " [ERROR]" : "");
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("native_last_event", detail).apply();
+        if ("CONNECTED".equals(name) && !error && !fatal) {
+            setLampState("connected");
+        } else if (error || fatal || "DISCONNECTED".equals(name) || "EXITING".equals(name)) {
+            setLampState("disconnected");
+        } else if ("CONNECTING".equals(name) || "WAIT".equals(name)) {
+            setLampState("searching");
+        }
         String message;
         if ("CONNECTED".equals(name)) {
             message = "اتصال برقرار شد";
