@@ -29,6 +29,8 @@ jobs:
           yes | "$SDKMANAGER" --licenses || true
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358" "cmake;3.31.6"
           echo "ANDROID_NDK_HOME=$SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
+      - name: Verify VPN session readiness safety gate
+        run: bash overlay/native/android-jni/check_session_gate.sh
       - name: Fetch pinned OpenVPN 3 source for audit
         run: |
           set -euo pipefail
