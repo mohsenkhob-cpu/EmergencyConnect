@@ -267,7 +267,10 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         if (!env) return -1;
         jmethodID establish_method = nullptr;
         jobject service = acquire_service(env, &establish_method, nullptr);
-        if (!service || !establish_method) return -1;
+        if (!service || !establish_method) {
+            if (service) env->DeleteLocalRef(service);
+            return -1;
+        }
 
         std::vector<std::string> address_values, route_values, excluded_values;
         std::vector<jint> address_prefixes, route_prefixes, excluded_prefixes;
@@ -339,7 +342,10 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         if (!env) return false;
         jmethodID protect_method = nullptr;
         jobject service = acquire_service(env, nullptr, &protect_method);
-        if (!service || !protect_method) return false;
+        if (!service || !protect_method) {
+            if (service) env->DeleteLocalRef(service);
+            return false;
+        }
         const jboolean protected_socket = env->CallBooleanMethod(
                 service, protect_method, static_cast<jint>(socket));
         const bool failed = env->ExceptionCheck();
