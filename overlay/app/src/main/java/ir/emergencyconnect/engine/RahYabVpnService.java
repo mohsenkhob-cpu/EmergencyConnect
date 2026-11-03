@@ -84,14 +84,23 @@ public final class RahYabVpnService extends VpnService {
         closeTun();
 
         if (addresses == null || prefixes == null
-                || addresses.length == 0 || addresses.length != prefixes.length) {
-            throw new IllegalArgumentException("TUN addresses/prefixes are missing or mismatched");
+                || addresses.length == 0 || addresses.length > 32
+                || addresses.length != prefixes.length) {
+            throw new IllegalArgumentException("TUN addresses/prefixes are missing, excessive or mismatched");
         }
-        if (dnsServers == null || routeAddresses == null || routePrefixes == null
-                || routeAddresses.length != routePrefixes.length
+        if (dnsServers == null || dnsServers.length > 8
+                || routeAddresses == null || routePrefixes == null
+                || routeAddresses.length > 512 || routeAddresses.length != routePrefixes.length
                 || excludedRouteAddresses == null || excludedRoutePrefixes == null
+                || excludedRouteAddresses.length > 512
                 || excludedRouteAddresses.length != excludedRoutePrefixes.length) {
-            throw new IllegalArgumentException("TUN DNS/routes are invalid");
+            throw new IllegalArgumentException("TUN DNS/routes are invalid or excessive");
+        }
+        if (mtu != 0 && (mtu < 576 || mtu > 65535)) {
+            throw new IllegalArgumentException("Invalid TUN MTU");
+        }
+        if (sessionName != null && sessionName.length() > 128) {
+            throw new IllegalArgumentException("TUN session name is too long");
         }
         if (excludedRouteAddresses.length > 0 && Build.VERSION.SDK_INT < 33) {
             throw new UnsupportedOperationException(
@@ -134,7 +143,7 @@ public final class RahYabVpnService extends VpnService {
             builder.excludeRoute(new IpPrefix(route, excludedRoutePrefixes[i]));
         }
 
-        if (mtu >= 576 && mtu <= 65535) {
+        if (mtu != 0) {
             builder.setMtu(mtu);
         }
 
@@ -156,7 +165,7 @@ public final class RahYabVpnService extends VpnService {
      */
     private static InetAddress parseNumericAddress(String value, String field)
             throws Exception {
-        if (value == null || value.isEmpty()
+        if (value == null || value.isEmpty() || value.length() > 64
                 || !(value.indexOf(':') >= 0 || value.matches("[0-9.]+"))) {
             throw new IllegalArgumentException("Invalid numeric " + field);
         }
