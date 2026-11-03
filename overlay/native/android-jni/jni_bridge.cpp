@@ -99,6 +99,7 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
     std::vector<Route> routes;
     bool builder_active = false;
     bool unsupported_option_seen = false;
+    std::vector<std::string> dns_servers;
 
     bool tun_builder_new() override {
         if (builder_active) {
@@ -110,6 +111,7 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         default_route_metric = -1;
         addresses.clear();
         routes.clear();
+        dns_servers.clear();
         unsupported_option_seen = false;
         builder_active = true;
         return true;
@@ -183,12 +185,37 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         return true;
     }
 
-    // DNS transport/options are intentionally rejected until the complete
-    // plain-DNS and search-domain mapping to VpnService.Builder is implemented.
+    // Android VpnService.Builder supports numeric plain DNS server addresses,
+    // but not per-server ports, DoH/DoT, DNSSEC policy, SNI, or split/search
+    // domains. Accept only the subset that can be represented faithfully.
     bool tun_builder_set_dns_options(
-            const openvpn::DnsOptions &) override {
-        unsupported_option_seen = true;
-        return false;
+            const openvpn::DnsOptions &dns) override {
+        if (!builder_active) return false;
+        std::vector<std::string> parsed;
+        if (!dns.search_domains.empty()) {
+            unsupported_option_seen = true;
+            return false;
+        }
+        for (const auto &entry : dns.servers) {
+            const auto &server = entry.second;
+            if (!server.domains.empty() || !server.sni.empty() ||
+                (server.transport != openvpn::DnsServer::Transport::Unset &&
+                 server.transport != openvpn::DnsServer::Transport::Plain) ||
+                (server.dnssec != openvpn::DnsServer::Security::Unset &&
+                 server.dnssec != openvpn::DnsServer::Security::No)) {
+                unsupported_option_seen = true;
+                return false;
+            }
+            for (const auto &address : server.addresses) {
+                if (address.address.empty() || address.port != 0) {
+                    unsupported_option_seen = true;
+                    return false;
+                }
+                parsed.push_back(address.address);
+            }
+        }
+        dns_servers = std::move(parsed);
+        return true;
     }
 
     // Android's Builder cannot faithfully implement a request to deny a
@@ -226,7 +253,7 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         jstring jname = env->NewStringUTF(session_name.c_str());
         jobjectArray jaddresses = make_string_array(env, address_values);
         jintArray jaddress_prefixes = make_int_array(env, address_prefixes);
-        jobjectArray jdns = make_string_array(env, {});
+        jobjectArray jdns = make_string_array(env, dns_servers);
         jobjectArray jroutes = make_string_array(env, route_values);
         jintArray jroute_prefixes = make_int_array(env, route_prefixes);
         jobjectArray jexcluded = make_string_array(env, excluded_values);
