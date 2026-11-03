@@ -12,6 +12,7 @@ import android.view.Gravity;
 import android.widget.*;
 import androidx.core.content.FileProvider;
 import ir.emergencyconnect.engine.OpenVpn3Bridge;
+import ir.emergencyconnect.engine.OpenVpnAndroidController;
 import ir.emergencyconnect.engine.RahYabVpnService;
 import java.io.*;
 import java.net.*;
@@ -30,9 +31,53 @@ public class MainActivity extends Activity {
     int navy=Color.rgb(16,42,67), teal=Color.rgb(22,125,101);
     private static final int VPN_PERMISSION_REQUEST = 7412;
     private String pendingVpnProfile;
+    private OpenVpnAndroidController externalOpenVpn;
     static class Server { String country, ip, host, config; long speed; int ping; }
 
-    @Override public void onCreate(Bundle b){ super.onCreate(b); getWindow().setStatusBarColor(navy); getWindow().setNavigationBarColor(navy); build(); loadServers(); }
+    @Override public void onCreate(Bundle b){
+        super.onCreate(b);
+        getWindow().setStatusBarColor(navy);
+        getWindow().setNavigationBarColor(navy);
+        build();
+        externalOpenVpn = new OpenVpnAndroidController(this, new OpenVpnAndroidController.Listener() {
+            @Override public void onStatus(String state, String message, String level) {
+                runOnUiThread(() -> {
+                    String normalized = state == null ? "" : state.toUpperCase(Locale.ROOT);
+                    String lamp = "CONNECTED".equals(normalized) ? "connected"
+                            : ("NOPROCESS".equals(normalized) || "DISCONNECTED".equals(normalized)
+                            || "EXITING".equals(normalized) || "NOTCONNECTED".equals(normalized))
+                            ? "disconnected" : "searching";
+                    getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                            .putString("connection_lamp_state", lamp).apply();
+                    updateConnectionLamps();
+                    status.setText("موتور مستقل OpenVPN: " + (state == null ? "وضعیت نامشخص" : state)
+                            + (message == null || message.isEmpty() ? "" : "\\n" + message)
+                            + "\\nتوجه: فقط وضعیت CONNECTED نشانه برقراری نشست است؛ عبور ترافیک باید جداگانه آزمایش شود.");
+                });
+            }
+            @Override public void onError(String message) {
+                runOnUiThread(() -> {
+                    getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                            .putString("connection_lamp_state", "disconnected").apply();
+                    updateConnectionLamps();
+                    status.setText(message);
+                    new AlertDialog.Builder(MainActivity.this).setTitle("خطای موتور OpenVPN")
+                            .setMessage(message).setPositiveButton("بستن", null).show();
+                });
+            }
+            @Override public void onInstallRequired() {
+                runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("نصب موتور اتصال")
+                        .setMessage("برای استفاده از موتور مستقل، ابتدا برنامه OpenVPN for Android را نصب کنید. راه‌یاب پس از نصب، پروفایل انتخابی را به‌صورت امن به آن تحویل می‌دهد.")
+                        .setPositiveButton("صفحه نصب", (dialog, which) -> {
+                            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://f-droid.org/packages/de.blinkt.openvpn/"))); }
+                            catch (RuntimeException ignored) {}
+                        })
+                        .setNegativeButton("فعلاً نه", null).show());
+            }
+        });
+        loadServers();
+    }
     GradientDrawable shape(int c){ GradientDrawable d=new GradientDrawable(); d.setColor(c); d.setCornerRadius(22); return d; }
     TextView txt(String s,int size,int color,boolean bold){ TextView t=new TextView(this); t.setText(s); t.setTextSize(size); t.setTextColor(color); t.setGravity(Gravity.RIGHT); t.setTypeface(Typeface.DEFAULT,bold?Typeface.BOLD:Typeface.NORMAL); t.setPadding(8,7,8,7); return t; }
     void build(){
@@ -105,7 +150,7 @@ public class MainActivity extends Activity {
         });
         root.addView(diagnosticsButton);
 
-        TextView note=txt("روش اتصال: دکمه اصلی «اتصال آزمایشی داخل راه‌یاب» درخواست اتصال از موتور داخلی را می‌فرستد. گزینه «انتقال پروفایل به OpenVPN» فقط فایل را به برنامه OpenVPN می‌دهد و وارد کردن فایل به‌تنهایی اتصال را برقرار نمی‌کند.",13,Color.DKGRAY,false); note.setBackground(shape(Color.WHITE)); note.setPadding(14,14,14,14); LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,-2); np.setMargins(0,12,0,8); root.addView(note);
+        TextView note=txt("روش اتصال پیشنهادی: راه‌یاب پروفایل سرور را به موتور مستقل OpenVPN for Android می‌سپارد. برای این روش، نصب برنامه OpenVPN for Android و تأیید مجوزهای خودش لازم است. موتور داخلی فعلی هنوز آزمایشی است.",13,Color.DKGRAY,false); note.setBackground(shape(Color.WHITE)); note.setPadding(14,14,14,14); LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,-2); np.setMargins(0,12,0,8); root.addView(note);
         TextView warning=txt("شفاف‌سازی: اتصال داخلی در حالت آزمایشی است و هنوز روی گوشی واقعی تأیید نشده است. سرورهای عمومی داوطلبانه ممکن است قطع، کند یا دارای سیاست ثبت اطلاعات متفاوت باشند. برای بانکداری و اطلاعات حساس استفاده نکنید.",12,Color.rgb(150,70,30),true); root.addView(warning);
         list=new LinearLayout(this); list.setOrientation(1); root.addView(list);
         TextView foot=txt("منبع فهرست: VPN Gate دانشگاه تسوکوبا",11,Color.GRAY,false); foot.setGravity(Gravity.CENTER); root.addView(foot);
@@ -252,13 +297,30 @@ public class MainActivity extends Activity {
                 new AlertDialog.Builder(this)
                     .setTitle("گزارش بررسی پروفایل")
                     .setMessage(report+"\n\nتوجه: پذیرفته‌شدن فایل توسط تجزیه‌گر به معنی پشتیبانی همه گزینه‌ها یا اتصال VPN نیست.")
-                    .setPositiveButton("اتصال آزمایشی داخل راه‌یاب", (dialog,which)->requestInternalVpn(s))
-                    .setNeutralButton("انتقال پروفایل به OpenVPN", (dialog,which)->exportProfile(s))
+                    .setPositiveButton("اتصال با موتور مستقل OpenVPN", (dialog,which)->connectExternalOpenVpn(s))
+                    .setNeutralButton("انتقال دستی فایل پروفایل", (dialog,which)->exportProfile(s))
                     .setNegativeButton("بستن",null)
                     .show();
             });
         });
     }
+
+    private void connectExternalOpenVpn(Server server) {
+        if (server == null || server.config == null || server.config.trim().isEmpty()) {
+            status.setText("فایل تنظیمات سرور خالی است.");
+            return;
+        }
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("connection_lamp_state", "searching").apply();
+        updateConnectionLamps();
+        status.setText("در حال تحویل پروفایل به موتور مستقل OpenVPN…");
+        if (externalOpenVpn == null) {
+            status.setText("کنترل‌کننده موتور مستقل هنوز آماده نیست؛ برنامه را دوباره باز کنید.");
+            return;
+        }
+        externalOpenVpn.connect(server.config, "RahYab-" + server.ip);
+    }
+
     private void requestInternalVpn(Server server) {
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("connection_lamp_state", "searching").apply();
@@ -287,6 +349,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (externalOpenVpn != null && externalOpenVpn.onActivityResult(requestCode, resultCode)) return;
         if (requestCode != VPN_PERMISSION_REQUEST) return;
         if (resultCode == RESULT_OK && pendingVpnProfile != null) {
             startInternalVpnService();
@@ -355,5 +418,5 @@ public class MainActivity extends Activity {
                 .setPositiveButton("متوجه شدم",null).show();
         }
     }
-    @Override protected void onDestroy(){super.onDestroy();worker.shutdownNow();}
+    @Override protected void onDestroy(){ if(externalOpenVpn!=null) externalOpenVpn.close(); super.onDestroy(); worker.shutdownNow();}
 }
