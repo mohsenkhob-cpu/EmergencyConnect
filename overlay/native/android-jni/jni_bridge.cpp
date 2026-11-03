@@ -337,6 +337,60 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeCryptoSelfTest(
     }
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeValidateProfile(
+        JNIEnv *env, jclass, jstring profile) {
+    if (!profile) {
+        return to_java_string(env, "Profile is empty.");
+    }
+    const char *chars = env->GetStringUTFChars(profile, nullptr);
+    if (!chars) {
+        return to_java_string(env, "Unable to read profile text.");
+    }
+    const std::string content(chars);
+    env->ReleaseStringUTFChars(profile, chars);
+
+    if (content.empty()) {
+        return to_java_string(env, "Profile is empty.");
+    }
+    if (content.size() > static_cast<size_t>(
+            openvpn::ClientAPI::OpenVPNClientHelper::max_profile_size())) {
+        return to_java_string(env, "Profile exceeds the OpenVPN core size limit.");
+    }
+
+    try {
+        openvpn::ClientAPI::OpenVPNClientHelper helper;
+        openvpn::ClientAPI::Config config;
+        config.content = content;
+        const openvpn::ClientAPI::EvalConfig result = helper.eval_config(config);
+        if (result.error) {
+            return to_java_string(env, std::string("Profile rejected: ") + result.message);
+        }
+
+        std::string report = "Profile syntax: accepted by OpenVPN 3 parser.\n";
+        report += std::string("Authentication: ") +
+                (result.autologin ? "no username/password required" :
+                                    "credentials required; connection path not enabled") +
+                "\n";
+        report += std::string("External PKI: ") +
+                (result.externalPki ? "required; unsupported in initial adapter" : "not required") +
+                "\n";
+        report += std::string("Private-key password: ") +
+                (result.privateKeyPasswordRequired ? "required" : "not reported as required");
+        if (!result.remoteHost.empty()) {
+            report += "\nRemote host: " + result.remoteHost;
+        }
+        if (!result.remotePort.empty()) {
+            report += "\nRemote port: " + result.remotePort;
+        }
+        return to_java_string(env, report);
+    } catch (const std::exception &e) {
+        return to_java_string(env, std::string("Profile validation exception: ") + e.what());
+    } catch (...) {
+        return to_java_string(env, "Profile validation failed with an unknown native exception.");
+    }
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService(
         JNIEnv *env, jclass, jobject service) {
