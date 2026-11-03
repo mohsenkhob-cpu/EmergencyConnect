@@ -110,11 +110,13 @@ public final class RahYabVpnService extends VpnService {
                         + (error.getMessage() == null ? "بدون توضیح" : error.getMessage());
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
                         .edit().putString("service_start_error", detail).apply();
+                setLampState("disconnected");
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
             sessionExecutor.execute(() -> {
                 if (!nativeCallbacksBound) {
+                    setLampState("disconnected");
                     updateStatus("اتصال داخلی در دسترس نیست: اتصال پل JNI برقرار نشد");
                     stopSelf(startId);
                     return;
@@ -389,6 +391,7 @@ public final class RahYabVpnService extends VpnService {
 
     @Override
     public void onDestroy() {
+        setLampState("disconnected");
         closeTun();
         if (foregroundStarted) {
             stopForeground(true);
