@@ -59,7 +59,7 @@ public class MainActivity extends Activity {
         });
         root.addView(selfTest);
 
-        TextView note=txt("روش اتصال: پس از بررسی هر سرور، می‌توانید اتصال آزمایشی داخلی راه‌یاب را انتخاب کنید یا فایل را به OpenVPN for Android منتقل کنید. اتصال داخلی تازه به سرویس و موتور OpenVPN 3 متصل شده و هنوز روی گوشی واقعی آزمایش نشده است.",13,Color.DKGRAY,false); note.setBackground(shape(Color.WHITE)); note.setPadding(14,14,14,14); LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,-2); np.setMargins(0,12,0,8); root.addView(note);
+        TextView note=txt("روش اتصال: دکمه اصلی «اتصال آزمایشی داخل راه‌یاب» درخواست اتصال از موتور داخلی را می‌فرستد. گزینه «انتقال پروفایل به OpenVPN» فقط فایل را به برنامه OpenVPN می‌دهد و وارد کردن فایل به‌تنهایی اتصال را برقرار نمی‌کند.",13,Color.DKGRAY,false); note.setBackground(shape(Color.WHITE)); note.setPadding(14,14,14,14); LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,-2); np.setMargins(0,12,0,8); root.addView(note);
         TextView warning=txt("شفاف‌سازی: اتصال داخلی در حالت آزمایشی است و هنوز روی گوشی واقعی تأیید نشده است. سرورهای عمومی داوطلبانه ممکن است قطع، کند یا دارای سیاست ثبت اطلاعات متفاوت باشند. برای بانکداری و اطلاعات حساس استفاده نکنید.",12,Color.rgb(150,70,30),true); root.addView(warning);
         list=new LinearLayout(this); list.setOrientation(1); root.addView(list);
         TextView foot=txt("منبع فهرست: VPN Gate دانشگاه تسوکوبا",11,Color.GRAY,false); foot.setGravity(Gravity.CENTER); root.addView(foot);
@@ -170,8 +170,8 @@ public class MainActivity extends Activity {
                 new AlertDialog.Builder(this)
                     .setTitle("گزارش بررسی پروفایل")
                     .setMessage(report+"\n\nتوجه: پذیرفته‌شدن فایل توسط تجزیه‌گر به معنی پشتیبانی همه گزینه‌ها یا اتصال VPN نیست.")
-                    .setPositiveButton("انتقال به OpenVPN", (dialog,which)->exportProfile(s))
-                    .setNeutralButton("اتصال آزمایشی داخل راه‌یاب", (dialog,which)->requestInternalVpn(s))
+                    .setPositiveButton("اتصال آزمایشی داخل راه‌یاب", (dialog,which)->requestInternalVpn(s))
+                    .setNeutralButton("انتقال پروفایل به OpenVPN", (dialog,which)->exportProfile(s))
                     .setNegativeButton("بستن",null)
                     .show();
             });
