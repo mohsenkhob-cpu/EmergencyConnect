@@ -24,7 +24,9 @@ public class MainActivity extends Activity {
     final ExecutorService worker = Executors.newSingleThreadExecutor();
     final ArrayList<Server> servers = new ArrayList<>();
     LinearLayout list; TextView status; Button refresh;
-    int navy=Color.rgb(16,42,67), teal=Color.rgb(22,125,101);\n    private static final int VPN_PERMISSION_REQUEST = 7412;\n    private String pendingVpnProfile;
+    int navy=Color.rgb(16,42,67), teal=Color.rgb(22,125,101);
+    private static final int VPN_PERMISSION_REQUEST = 7412;
+    private String pendingVpnProfile;
     static class Server { String country, ip, host, config; long speed; int ping; }
 
     @Override public void onCreate(Bundle b){ super.onCreate(b); getWindow().setStatusBarColor(navy); getWindow().setNavigationBarColor(navy); build(); loadServers(); }
