@@ -35,6 +35,8 @@ done
 # Verify that the JNI bridge requests the exact full TUN callback overload
 # currently implemented by RahYabVpnService.
 grep -Fq 'establishTun' "$SERVICE"
+grep -Fq 'native_bind_result' "$SERVICE"
+grep -Fq 'native_bind_result' overlay/app/src/main/java/ir/emergencyconnect/MainActivity.java
 grep -Fq '(Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[II)I' "$JNI"
 grep -Fq 'protectTransportSocket' "$SERVICE"
 grep -Fq 'protectTransportSocket' "$JNI"
