@@ -67,7 +67,14 @@ jobjectArray make_string_array(JNIEnv *env, const std::vector<std::string> &valu
 jintArray make_int_array(JNIEnv *env, const std::vector<jint> &values) {
     jintArray array = env->NewIntArray(static_cast<jsize>(values.size()));
     if (!array) return nullptr;
-    if (!values.empty()) env->SetIntArrayRegion(array, 0, static_cast<jsize>(values.size()), values.data());
+    if (!values.empty()) {
+        env->SetIntArrayRegion(array, 0, static_cast<jsize>(values.size()), values.data());
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            env->DeleteLocalRef(array);
+            return nullptr;
+        }
+    }
     return array;
 }
 
@@ -265,6 +272,15 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         if (!jname || !jaddresses || !jaddress_prefixes || !jdns || !jroutes ||
             !jroute_prefixes || !jexcluded || !jexcluded_prefixes) {
             if (env->ExceptionCheck()) env->ExceptionClear();
+            if (jname) env->DeleteLocalRef(jname);
+            if (jaddresses) env->DeleteLocalRef(jaddresses);
+            if (jaddress_prefixes) env->DeleteLocalRef(jaddress_prefixes);
+            if (jdns) env->DeleteLocalRef(jdns);
+            if (jroutes) env->DeleteLocalRef(jroutes);
+            if (jroute_prefixes) env->DeleteLocalRef(jroute_prefixes);
+            if (jexcluded) env->DeleteLocalRef(jexcluded);
+            if (jexcluded_prefixes) env->DeleteLocalRef(jexcluded_prefixes);
+            env->DeleteLocalRef(service);
             return -1;
         }
 
