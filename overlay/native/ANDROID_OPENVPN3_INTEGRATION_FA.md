@@ -223,3 +223,12 @@ Commit `64ce7911d0a05f0bd191246c279f4ad3beda27b9` adds a per-client native confi
 This is intentionally **not** a live Android TUN bridge. `tun_builder_establish()` still returns `-1`, so OpenVPN cannot mistake an unimplemented Java callback for a valid tunnel. DNS options are rejected until the first supported plain-DNS/search-domain mapping is implemented. Address-family deny requests are rejected rather than silently ignored.
 
 The commit is on `v2-engine-starter`; `main` is unchanged. CI has not yet validated this new commit, so no APK is being offered from it. The next gate is an NDK compile of the callback overrides, followed by the JNI-to-service dispatcher and synchronous `VpnService.protect(fd)` bridge.
+
+
+## Verified adapter correction (2026-11-03)
+
+The pinned `openvpn/tun/builder/base.hpp` specifies that route metrics are ignored whenever their value is less than zero. The Android adapter therefore now accepts any negative metric as “unspecified” and normalizes it to `-1`; non-negative explicit metrics remain rejected because Android's `VpnService.Builder` does not expose equivalent route-metric control. This avoids rejecting valid upstream defaults while preserving fail-closed behavior for unsupported explicit metrics.
+
+- Source commit: `bd6f730cbf28006f2441ecd4d7f5c8f08bfa77ab`
+- CI run: https://github.com/mohsenkhob-cpu/EmergencyConnect/actions/runs/41578753891 (success)
+- This is a callback-semantics correction and native/Gradle build verification only. The native session worker, Java event bridge, foreground-service lifecycle, and live device tunnel validation remain outstanding. 
