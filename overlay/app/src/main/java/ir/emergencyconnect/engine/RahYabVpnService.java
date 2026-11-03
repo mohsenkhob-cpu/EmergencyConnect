@@ -12,6 +12,8 @@ import android.os.Build;
 import android.os.ParcelFileDescriptor;
 
 import java.net.InetAddress;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Android TUN adapter scaffold for the embedded OpenVPN 3 engine.
@@ -22,11 +24,13 @@ import java.net.InetAddress;
 public final class RahYabVpnService extends VpnService {
     public static final String ACTION_START = "ir.emergencyconnect.engine.START_VPN";
     public static final String ACTION_STOP = "ir.emergencyconnect.engine.STOP_VPN";
+    public static final String EXTRA_PROFILE = "ir.emergencyconnect.engine.PROFILE";
     private static final String CHANNEL_ID = "rah_yab_vpn_status";
     private static final int NOTIFICATION_ID = 7301;
     private ParcelFileDescriptor tunInterface;
     private boolean nativeCallbacksBound;
     private boolean foregroundStarted;
+    private final ExecutorService sessionExecutor = Executors.newSingleThreadExecutor();
 
     private void ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
@@ -63,7 +67,7 @@ public final class RahYabVpnService extends VpnService {
         if (foregroundStarted) return;
         ensureNotificationChannel();
         Notification notification = buildStatusNotification(
-                "سرویس آماده است؛ اتصال داخلی هنوز فعال نشده");
+                "در حال آماده‌سازی اتصال داخلی…");
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED);
@@ -77,22 +81,34 @@ public final class RahYabVpnService extends VpnService {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         if (ACTION_STOP.equals(action)) {
-            closeTun();
-            if (foregroundStarted) {
-                stopForeground(true);
-                foregroundStarted = false;
-            }
-            stopSelf(startId);
+            sessionExecutor.execute(() -> {
+                OpenVpn3Bridge.stopSession();
+                closeTun();
+                stopSelf(startId);
+            });
             return START_NOT_STICKY;
         }
         if (ACTION_START.equals(action)) {
+            final String profile = intent.getStringExtra(EXTRA_PROFILE);
+            if (profile == null || profile.trim().isEmpty()) {
+                stopSelf(startId);
+                return START_NOT_STICKY;
+            }
             try {
                 enterForeground();
             } catch (RuntimeException error) {
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
-            // This scaffold must not claim a VPN session is connected.
+            sessionExecutor.execute(() -> {
+                if (!nativeCallbacksBound) {
+                    updateStatus("اتصال داخلی در دسترس نیست: اتصال پل JNI برقرار نشد");
+                    stopSelf(startId);
+                    return;
+                }
+                String result = OpenVpn3Bridge.startSession(profile);
+                updateStatus(result == null ? "هسته پاسخی نداد" : result);
+            });
             return START_NOT_STICKY;
         }
         stopSelf(startId);
@@ -284,6 +300,12 @@ public final class RahYabVpnService extends VpnService {
             throw new IllegalArgumentException("Invalid IPv6 " + field);
         }
         return parsed;
+    }
+
+    private void updateStatus(String message) {
+        if (!foregroundStarted) return;
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) manager.notify(NOTIFICATION_ID, buildStatusNotification(message));
     }
 
     /** Receive OpenVPN core events on its worker thread and reflect them in the foreground notification. */
