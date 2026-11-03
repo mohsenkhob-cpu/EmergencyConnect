@@ -84,6 +84,8 @@ public class MainActivity extends Activity {
                     + "پل JNI: " + diagnostics.getString("native_bind_result", "ثبت نشده") + "\\n"
                     + "شروع نشست: " + diagnostics.getString("session_start_result", "ثبت نشده") + "\\n"
                     + "آخرین رویداد موتور: " + diagnostics.getString("native_last_event", "هنوز رویدادی ثبت نشده") + "\\n"
+                    + "تاریخچه رویدادها (حداکثر ۲۰ مورد):\\n"
+                    + diagnostics.getString("native_event_history", "هنوز رویدادی ثبت نشده") + "\\n"
                     + "خطای شروع سرویس: " + diagnostics.getString("service_start_error", "ندارد") + "\\n"
                     + "وضعیت قابلیت اتصال: " + OpenVpn3Bridge.availabilityMessage() + "\\n"
                     + "توجه: این گزارش به‌تنهایی اتصال VPN یا عبور ترافیک را تأیید نمی‌کند.";
@@ -316,6 +318,7 @@ public class MainActivity extends Activity {
                 String bindResult = diagnostics.getString("native_bind_result", "ثبت نشده");
                 String startResult = diagnostics.getString("session_start_result", "هنوز پاسخی از شروع نشست ثبت نشده است.");
                 String lastEvent = diagnostics.getString("native_last_event", "هنوز رویدادی از موتور دریافت نشده است.");
+                String eventHistory = diagnostics.getString("native_event_history", "هنوز رویدادی از موتور دریافت نشده است.");
                 if (serviceError != null && !serviceError.isEmpty()) {
                     status.setText("اندروید اجازه شروع سرویس VPN را نداد:\\n" + serviceError);
                 } else if (!"OK".equals(bindResult)) {
@@ -323,6 +326,7 @@ public class MainActivity extends Activity {
                 } else {
                     status.setText("پل JNI: OK\\nنتیجه شروع نشست: " + startResult
                             + "\\nآخرین رویداد موتور: " + lastEvent
+                            + "\\nتاریخچه رویدادها:\\n" + eventHistory
                             + "\\nتوجه: این گزارش به‌تنهایی تأیید اتصال VPN نیست.");
                 }
             }, 2500);
