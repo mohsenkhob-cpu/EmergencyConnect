@@ -415,13 +415,27 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
                 lower.find("tcp") != std::string::npos ||
                 lower.find("udp") != std::string::npos ||
                 lower.find("timeout") != std::string::npos ||
-                lower.find("connection") != std::string::npos;
+                lower.find("connection") != std::string::npos ||
+                lower.find("peer info") != std::string::npos ||
+                lower.find("control channel") != std::string::npos ||
+                lower.find("push_reply") != std::string::npos ||
+                lower.find("push reply") != std::string::npos ||
+                lower.find("auth") != std::string::npos ||
+                lower.find("verify") != std::string::npos ||
+                lower.find("certificate") != std::string::npos ||
+                lower.find("ifconfig") != std::string::npos ||
+                lower.find("tun builder") != std::string::npos ||
+                lower.find("route") != std::string::npos ||
+                lower.find("options error") != std::string::npos ||
+                lower.find("incoming packet") != std::string::npos;
         const bool sensitive =
                 lower.find("password") != std::string::npos ||
                 lower.find("username") != std::string::npos ||
                 lower.find("auth-token") != std::string::npos ||
                 lower.find("private key") != std::string::npos ||
-                lower.find("-----begin") != std::string::npos;
+                lower.find("-----begin") != std::string::npos ||
+                lower.find("access token") != std::string::npos ||
+                lower.find("secret") != std::string::npos;
         if (!useful || sensitive) return;
         if (line.size() > 600) line.resize(600);
         reportDiagnostic("CORE_LOG", line, false, false);
