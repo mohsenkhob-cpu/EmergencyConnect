@@ -224,18 +224,22 @@ public class MainActivity extends Activity {
             status.setText("درخواست اتصال داخلی ارسال شد؛ در حال بررسی نتیجه شروع سرویس…");
             new Handler(Looper.getMainLooper()).postDelayed(() -> {
                 if (isFinishing() || isDestroyed()) return;
-                String serviceError = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
-                        .getString("service_start_error", null);
-                String bindResult = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
-                        .getString("native_bind_result", "ثبت نشده");
+                android.content.SharedPreferences diagnostics =
+                        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+                String serviceError = diagnostics.getString("service_start_error", null);
+                String bindResult = diagnostics.getString("native_bind_result", "ثبت نشده");
+                String startResult = diagnostics.getString("session_start_result", "هنوز پاسخی از شروع نشست ثبت نشده است.");
+                String lastEvent = diagnostics.getString("native_last_event", "هنوز رویدادی از موتور دریافت نشده است.");
                 if (serviceError != null && !serviceError.isEmpty()) {
                     status.setText("اندروید اجازه شروع سرویس VPN را نداد:\\n" + serviceError);
                 } else if (!"OK".equals(bindResult)) {
                     status.setText("اتصال پل موتور OpenVPN به اندروید برقرار نشد.\\nگزارش فنی: " + bindResult);
                 } else {
-                    status.setText("پل JNI برقرار شد؛ اما این به معنی اتصال VPN نیست. موتور هنوز در مرحله آزمایش است.");
+                    status.setText("پل JNI: OK\\nنتیجه شروع نشست: " + startResult
+                            + "\\nآخرین رویداد موتور: " + lastEvent
+                            + "\\nتوجه: این گزارش به‌تنهایی تأیید اتصال VPN نیست.");
                 }
-            }, 1500);
+            }, 2500);
         } catch (RuntimeException error) {
             status.setText("شروع سرویس VPN ناموفق بود: " + error.getMessage());
         }
