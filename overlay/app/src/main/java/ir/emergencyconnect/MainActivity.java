@@ -81,6 +81,37 @@ public class MainActivity extends Activity {
     void render(){ list.removeAllViews(); int n=Math.min(servers.size(),80); for(int i=0;i<n;i++){ final Server s=servers.get(i); LinearLayout card=new LinearLayout(this); card.setOrientation(1); card.setPadding(12,10,12,10); card.setBackground(shape(Color.WHITE)); LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2); cp.setMargins(0,6,0,6); card.setLayoutParams(cp);
         card.addView(txt((s.country==null?"نامشخص":s.country)+"  |  "+s.ip,16,navy,true)); card.addView(txt("پینگ گزارش‌شده: "+(s.ping>=9999?"نامشخص":s.ping+" ms")+"   |   سرعت اعلامی: "+(s.speed/1000000)+" Mbps",12,Color.DKGRAY,false)); card.addView(txt("برای انتقال تنظیمات به OpenVPN لمس کنید",12,teal,true)); card.setOnClickListener(v->importProfile(s)); list.addView(card);
     }}
-    void importProfile(Server s){ try{ File dir=new File(getCacheDir(),"profiles"); dir.mkdirs(); File f=new File(dir,"vpngate-"+s.ip.replace('.','_')+".ovpn"); FileOutputStream o=new FileOutputStream(f); o.write(s.config.getBytes("UTF-8")); o.close(); Uri u=FileProvider.getUriForFile(this,getPackageName()+".provider",f); Intent i=new Intent(Intent.ACTION_VIEW); i.setDataAndType(u,"application/x-openvpn-profile"); i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); startActivity(Intent.createChooser(i,"باز کردن پروفایل با برنامه OpenVPN")); }catch(Exception e){ new AlertDialog.Builder(this).setTitle("برنامه OpenVPN لازم است").setMessage("برای اتصال واقعی، برنامه OpenVPN for Android را از منبع معتبر نصب کنید. سپس دوباره سرور را انتخاب و پروفایل را در آن وارد کنید.").setPositiveButton("متوجه شدم",null).show(); }}
+    void importProfile(Server s){
+        status.setText("در حال بررسی فایل سرور با موتور داخلی OpenVPN 3…");
+        worker.execute(()->{
+            final String report=OpenVpn3Bridge.validateProfile(s.config);
+            runOnUiThread(()->{
+                status.setText("بررسی پروفایل سرور "+s.ip+" انجام شد.");
+                new AlertDialog.Builder(this)
+                    .setTitle("گزارش بررسی پروفایل")
+                    .setMessage(report+"\\n\\nتوجه: پذیرفته‌شدن فایل توسط تجزیه‌گر به معنی پشتیبانی همه گزینه‌ها یا اتصال VPN نیست.")
+                    .setPositiveButton("انتقال به OpenVPN", (dialog,which)->exportProfile(s))
+                    .setNegativeButton("بستن",null)
+                    .show();
+            });
+        });
+    }
+    void exportProfile(Server s){
+        try{
+            File dir=new File(getCacheDir(),"profiles");
+            if(!dir.exists()&&!dir.mkdirs()) throw new IOException("ساخت پوشه موقت ناموفق بود");
+            File f=new File(dir,"vpngate-"+s.ip.replace('.','_')+".ovpn");
+            try(FileOutputStream o=new FileOutputStream(f)){ o.write(s.config.getBytes("UTF-8")); }
+            Uri u=FileProvider.getUriForFile(this,getPackageName()+".provider",f);
+            Intent i=new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(u,"application/x-openvpn-profile");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(i,"باز کردن پروفایل با برنامه OpenVPN"));
+        }catch(Exception e){
+            new AlertDialog.Builder(this).setTitle("انتقال پروفایل انجام نشد")
+                .setMessage("برای اتصال فعلی از OpenVPN for Android استفاده کنید.\\n"+e.getMessage())
+                .setPositiveButton("متوجه شدم",null).show();
+        }
+    }
     @Override protected void onDestroy(){super.onDestroy();worker.shutdownNow();}
 }
