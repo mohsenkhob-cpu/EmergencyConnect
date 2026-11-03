@@ -436,16 +436,29 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeValidateProfile(
             return to_java_string(env, std::string("Profile rejected: ") + result.message);
         }
 
+        const bool supported_auth_subset =
+                result.autologin &&
+                !result.externalPki &&
+                !result.privateKeyPasswordRequired &&
+                result.staticChallenge.empty();
+
         std::string report = "Profile syntax: accepted by OpenVPN 3 parser.\n";
+        report += std::string("Initial connection subset: ") +
+                (supported_auth_subset
+                        ? "authentication mode is within the initial autologin-only subset; full connection is not enabled yet"
+                        : "not supported by the initial autologin-only subset") +
+                "\n";
         report += std::string("Authentication: ") +
-                (result.autologin ? "no username/password required" :
-                                    "credentials required; connection path not enabled") +
+                (result.autologin ? "autologin" : "username/password required") +
                 "\n";
         report += std::string("External PKI: ") +
-                (result.externalPki ? "required; unsupported in initial adapter" : "not required") +
+                (result.externalPki ? "required; unsupported" : "not required") +
+                "\n";
+        report += std::string("Static challenge: ") +
+                (result.staticChallenge.empty() ? "not reported" : "present; unsupported") +
                 "\n";
         report += std::string("Private-key password: ") +
-                (result.privateKeyPasswordRequired ? "required" : "not reported as required");
+                (result.privateKeyPasswordRequired ? "required; unsupported" : "not reported as required");
         if (!result.remoteHost.empty()) {
             report += "\nRemote host: " + result.remoteHost;
         }
