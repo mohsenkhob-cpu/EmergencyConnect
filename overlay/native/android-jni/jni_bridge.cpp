@@ -1,6 +1,7 @@
 #include <jni.h>
 
 #include <exception>
+#include <mutex>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -11,6 +12,61 @@
 // The class remains intentionally unavailable as a session API until the
 // Android TunBuilder callbacks and managed worker lifecycle are implemented.
 namespace {
+
+JavaVM *g_vm = nullptr;
+jobject g_vpn_service = nullptr;
+jmethodID g_establish_tun = nullptr;
+jmethodID g_protect_socket = nullptr;
+std::mutex g_service_mutex;
+
+class ScopedJniEnv {
+  public:
+    ScopedJniEnv() : env_(nullptr), attached_(false) {
+        if (!g_vm) return;
+        const jint state = g_vm->GetEnv(reinterpret_cast<void **>(&env_), JNI_VERSION_1_6);
+        if (state == JNI_EDETACHED &&
+            g_vm->AttachCurrentThread(&env_, nullptr) == JNI_OK) {
+            attached_ = true;
+        } else if (state != JNI_OK) {
+            env_ = nullptr;
+        }
+    }
+    ~ScopedJniEnv() {
+        if (attached_ && g_vm) g_vm->DetachCurrentThread();
+    }
+    JNIEnv *get() const { return env_; }
+  private:
+    JNIEnv *env_;
+    bool attached_;
+};
+
+jobject acquire_service(JNIEnv *env) {
+    std::lock_guard<std::mutex> lock(g_service_mutex);
+    return g_vpn_service ? env->NewLocalRef(g_vpn_service) : nullptr;
+}
+
+jobjectArray make_string_array(JNIEnv *env, const std::vector<std::string> &values) {
+    jclass string_class = env->FindClass("java/lang/String");
+    if (!string_class) return nullptr;
+    jobjectArray array = env->NewObjectArray(static_cast<jsize>(values.size()), string_class, nullptr);
+    env->DeleteLocalRef(string_class);
+    if (!array) return nullptr;
+    for (jsize i = 0; i < static_cast<jsize>(values.size()); ++i) {
+        jstring item = env->NewStringUTF(values[static_cast<size_t>(i)].c_str());
+        if (!item) { env->DeleteLocalRef(array); return nullptr; }
+        env->SetObjectArrayElement(array, i, item);
+        env->DeleteLocalRef(item);
+        if (env->ExceptionCheck()) { env->ExceptionClear(); env->DeleteLocalRef(array); return nullptr; }
+    }
+    return array;
+}
+
+jintArray make_int_array(JNIEnv *env, const std::vector<jint> &values) {
+    jintArray array = env->NewIntArray(static_cast<jsize>(values.size()));
+    if (!array) return nullptr;
+    if (!values.empty()) env->SetIntArrayRegion(array, 0, static_cast<jsize>(values.size()), values.data());
+    return array;
+}
 
 class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
   public:
@@ -140,15 +196,80 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
     }
 
     int tun_builder_establish() override {
-        // No Java VpnService.Builder callback is wired yet. Never return a
-        // fake descriptor or claim success.
-        return -1;
+        if (!builder_active || unsupported_option_seen) return -1;
+        ScopedJniEnv scoped;
+        JNIEnv *env = scoped.get();
+        if (!env) return -1;
+        jobject service = acquire_service(env);
+        if (!service) return -1;
+
+        std::vector<std::string> address_values, route_values, excluded_values;
+        std::vector<jint> address_prefixes, route_prefixes, excluded_prefixes;
+        for (const auto &item : addresses) {
+            address_values.push_back(item.value);
+            address_prefixes.push_back(static_cast<jint>(item.prefix));
+        }
+        for (const auto &item : routes) {
+            if (item.excluded) {
+                excluded_values.push_back(item.value);
+                excluded_prefixes.push_back(static_cast<jint>(item.prefix));
+            } else {
+                route_values.push_back(item.value);
+                route_prefixes.push_back(static_cast<jint>(item.prefix));
+            }
+        }
+
+        jstring jname = env->NewStringUTF(session_name.c_str());
+        jobjectArray jaddresses = make_string_array(env, address_values);
+        jintArray jaddress_prefixes = make_int_array(env, address_prefixes);
+        jobjectArray jdns = make_string_array(env, {});
+        jobjectArray jroutes = make_string_array(env, route_values);
+        jintArray jroute_prefixes = make_int_array(env, route_prefixes);
+        jobjectArray jexcluded = make_string_array(env, excluded_values);
+        jintArray jexcluded_prefixes = make_int_array(env, excluded_prefixes);
+        if (!jname || !jaddresses || !jaddress_prefixes || !jdns || !jroutes ||
+            !jroute_prefixes || !jexcluded || !jexcluded_prefixes) {
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            return -1;
+        }
+
+        jint fd = env->CallIntMethod(service, g_establish_tun, jname, jaddresses,
+                jaddress_prefixes, jdns, jroutes, jroute_prefixes, jexcluded,
+                jexcluded_prefixes, static_cast<jint>(mtu));
+        const bool failed = env->ExceptionCheck();
+        if (failed) env->ExceptionClear();
+
+        env->DeleteLocalRef(service);
+        env->DeleteLocalRef(jname);
+        env->DeleteLocalRef(jaddresses);
+        env->DeleteLocalRef(jaddress_prefixes);
+        env->DeleteLocalRef(jdns);
+        env->DeleteLocalRef(jroutes);
+        env->DeleteLocalRef(jroute_prefixes);
+        env->DeleteLocalRef(jexcluded);
+        env->DeleteLocalRef(jexcluded_prefixes);
+        return failed ? -1 : static_cast<int>(fd);
     }
 
     void tun_builder_teardown(bool) override {
         builder_active = false;
         addresses.clear();
         routes.clear();
+    }
+
+    bool socket_protect(openvpn_io::detail::socket_type socket,
+                        std::string, bool) override {
+        ScopedJniEnv scoped;
+        JNIEnv *env = scoped.get();
+        if (!env) return false;
+        jobject service = acquire_service(env);
+        if (!service) return false;
+        const jboolean protected_socket = env->CallBooleanMethod(
+                service, g_protect_socket, static_cast<jint>(socket));
+        const bool failed = env->ExceptionCheck();
+        if (failed) env->ExceptionClear();
+        env->DeleteLocalRef(service);
+        return !failed && protected_socket == JNI_TRUE;
     }
 
     bool pause_on_connection_timeout() override {
@@ -211,6 +332,43 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeCryptoSelfTest(
     }
 }
 
-extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *, void *) {
+extern "C" JNIEXPORT jboolean JNICALL
+Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService(
+        JNIEnv *env, jclass, jobject service) {
+    if (!service || !g_vm) return JNI_FALSE;
+    jclass cls = env->GetObjectClass(service);
+    if (!cls) return JNI_FALSE;
+    jmethodID establish = env->GetMethodID(cls, "establishTun",
+            "(Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[II)I");
+    jmethodID protect = env->GetMethodID(cls, "protectTransportSocket", "(I)Z");
+    env->DeleteLocalRef(cls);
+    if (!establish || !protect || env->ExceptionCheck()) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return JNI_FALSE;
+    }
+    jobject global_service = env->NewGlobalRef(service);
+    if (!global_service) return JNI_FALSE;
+    {
+        std::lock_guard<std::mutex> lock(g_service_mutex);
+        if (g_vpn_service) env->DeleteGlobalRef(g_vpn_service);
+        g_vpn_service = global_service;
+        g_establish_tun = establish;
+        g_protect_socket = protect;
+    }
+    return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeUnbindTunService(
+        JNIEnv *env, jclass) {
+    std::lock_guard<std::mutex> lock(g_service_mutex);
+    if (g_vpn_service) env->DeleteGlobalRef(g_vpn_service);
+    g_vpn_service = nullptr;
+    g_establish_tun = nullptr;
+    g_protect_socket = nullptr;
+}
+
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
+    g_vm = vm;
     return JNI_VERSION_1_6;
 }
