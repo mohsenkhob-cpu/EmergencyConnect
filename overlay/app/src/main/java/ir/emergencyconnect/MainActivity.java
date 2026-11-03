@@ -7,10 +7,12 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.net.VpnService;
 import android.view.Gravity;
 import android.widget.*;
 import androidx.core.content.FileProvider;
 import ir.emergencyconnect.engine.OpenVpn3Bridge;
+import ir.emergencyconnect.engine.RahYabVpnService;
 import java.io.*;
 import java.net.*;
 import java.util.*;
@@ -22,7 +24,7 @@ public class MainActivity extends Activity {
     final ExecutorService worker = Executors.newSingleThreadExecutor();
     final ArrayList<Server> servers = new ArrayList<>();
     LinearLayout list; TextView status; Button refresh;
-    int navy=Color.rgb(16,42,67), teal=Color.rgb(22,125,101);
+    int navy=Color.rgb(16,42,67), teal=Color.rgb(22,125,101);\n    private static final int VPN_PERMISSION_REQUEST = 7412;\n    private String pendingVpnProfile;
     static class Server { String country, ip, host, config; long speed; int ping; }
 
     @Override public void onCreate(Bundle b){ super.onCreate(b); getWindow().setStatusBarColor(navy); getWindow().setNavigationBarColor(navy); build(); loadServers(); }
@@ -158,6 +160,56 @@ public class MainActivity extends Activity {
             });
         });
     }
+    private void requestInternalVpn(Server server) {
+        if (server == null || server.config == null || server.config.trim().isEmpty()) {
+            status.setText("فایل تنظیمات سرور خالی است.");
+            return;
+        }
+        pendingVpnProfile = server.config;
+        Intent prepare = VpnService.prepare(this);
+        if (prepare != null) {
+            try {
+                startActivityForResult(prepare, VPN_PERMISSION_REQUEST);
+            } catch (RuntimeException error) {
+                pendingVpnProfile = null;
+                new AlertDialog.Builder(this)
+                    .setTitle("مجوز VPN")
+                    .setMessage("نمایش درخواست مجوز VPN ممکن نشد: " + error.getMessage())
+                    .setPositiveButton("بستن", null).show();
+            }
+        } else {
+            startInternalVpnService();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != VPN_PERMISSION_REQUEST) return;
+        if (resultCode == RESULT_OK && pendingVpnProfile != null) {
+            startInternalVpnService();
+        } else {
+            pendingVpnProfile = null;
+            status.setText("مجوز اتصال VPN داده نشد؛ هیچ تونلی ساخته نشد.");
+        }
+    }
+
+    private void startInternalVpnService() {
+        final String profile = pendingVpnProfile;
+        pendingVpnProfile = null;
+        if (profile == null || profile.trim().isEmpty()) return;
+        Intent service = new Intent(this, RahYabVpnService.class);
+        service.setAction(RahYabVpnService.ACTION_START);
+        service.putExtra(RahYabVpnService.EXTRA_PROFILE, profile);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
+            else startService(service);
+            status.setText("درخواست اتصال داخلی ارسال شد؛ نتیجه را در اعلان راه‌یاب VPN ببینید.");
+        } catch (RuntimeException error) {
+            status.setText("شروع سرویس VPN ناموفق بود: " + error.getMessage());
+        }
+    }
+
     void exportProfile(Server s){
         try{
             File dir=new File(getCacheDir(),"profiles");
