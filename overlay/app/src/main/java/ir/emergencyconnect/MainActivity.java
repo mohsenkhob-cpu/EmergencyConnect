@@ -289,20 +289,20 @@ public class MainActivity extends Activity {
         card.addView(txt((s.country==null?"نامشخص":s.country)+"  |  "+s.ip,16,navy,true)); card.addView(txt("پینگ گزارش‌شده: "+(s.ping>=9999?"نامشخص":s.ping+" ms")+"   |   سرعت اعلامی: "+(s.speed/1000000)+" Mbps",12,Color.DKGRAY,false)); card.addView(txt("برای بررسی و انتخاب روش اتصال لمس کنید",12,teal,true)); card.setOnClickListener(v->importProfile(s)); list.addView(card);
     }}
     void importProfile(Server s){
-        status.setText("در حال بررسی فایل سرور با موتور داخلی OpenVPN 3…");
-        worker.execute(()->{
-            final String report=OpenVpn3Bridge.validateProfile(s.config);
-            runOnUiThread(()->{
-                status.setText("بررسی پروفایل سرور "+s.ip+" انجام شد.");
-                new AlertDialog.Builder(this)
-                    .setTitle("گزارش بررسی پروفایل")
-                    .setMessage(report+"\n\nتوجه: پذیرفته‌شدن فایل توسط تجزیه‌گر به معنی پشتیبانی همه گزینه‌ها یا اتصال VPN نیست.")
-                    .setPositiveButton("اتصال با موتور مستقل OpenVPN", (dialog,which)->connectExternalOpenVpn(s))
-                    .setNeutralButton("انتقال دستی فایل پروفایل", (dialog,which)->exportProfile(s))
-                    .setNegativeButton("بستن",null)
-                    .show();
-            });
-        });
+        String config = s == null ? "" : s.config;
+        boolean hasClient = config != null && config.contains("client");
+        boolean hasRemote = config != null && config.contains("remote ");
+        String report = "سرور انتخاب‌شده: " + (s == null ? "نامشخص" : s.ip)
+                + "\\nدستور client: " + (hasClient ? "موجود" : "یافت نشد")
+                + "\\nدستور remote: " + (hasRemote ? "موجود" : "یافت نشد")
+                + "\\n\\nاین بررسی فقط ساختار ابتدایی فایل را کنترل می‌کند. موتور مستقل OpenVPN تنظیمات کامل را هنگام شروع اتصال بررسی خواهد کرد.";
+        new AlertDialog.Builder(this)
+                .setTitle("آماده‌سازی پروفایل")
+                .setMessage(report)
+                .setPositiveButton("اتصال با موتور مستقل OpenVPN", (dialog,which)->connectExternalOpenVpn(s))
+                .setNeutralButton("انتقال دستی فایل پروفایل", (dialog,which)->exportProfile(s))
+                .setNegativeButton("بستن",null)
+                .show();
     }
 
     private void connectExternalOpenVpn(Server server) {
