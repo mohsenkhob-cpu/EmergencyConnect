@@ -1,6 +1,12 @@
 package ir.emergencyconnect.engine;
 
 import android.net.VpnService;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.net.IpPrefix;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
@@ -14,8 +20,84 @@ import java.net.InetAddress;
  * managed by the native OpenVPNClient adapter; this class alone is not a VPN.
  */
 public final class RahYabVpnService extends VpnService {
+    public static final String ACTION_START = "ir.emergencyconnect.engine.START_VPN";
+    public static final String ACTION_STOP = "ir.emergencyconnect.engine.STOP_VPN";
+    private static final String CHANNEL_ID = "rah_yab_vpn_status";
+    private static final int NOTIFICATION_ID = 7301;
     private ParcelFileDescriptor tunInterface;
     private boolean nativeCallbacksBound;
+    private boolean foregroundStarted;
+
+    private void ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null && manager.getNotificationChannel(CHANNEL_ID) == null) {
+                NotificationChannel channel = new NotificationChannel(
+                        CHANNEL_ID, "وضعیت راه‌یاب VPN",
+                        NotificationManager.IMPORTANCE_LOW);
+                channel.setDescription("اعلان دائمی هنگام فعالیت سرویس VPN");
+                manager.createNotificationChannel(channel);
+            }
+        }
+    }
+
+    private Notification buildStatusNotification(String message) {
+        Intent stopIntent = new Intent(this, RahYabVpnService.class);
+        stopIntent.setAction(ACTION_STOP);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
+        PendingIntent stopPending = PendingIntent.getService(this, 7302, stopIntent, flags);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(this, CHANNEL_ID)
+                : new Notification.Builder(this);
+        return builder.setSmallIcon(android.R.drawable.stat_sys_warning)
+                .setContentTitle("راه‌یاب VPN")
+                .setContentText(message)
+                .setOngoing(true)
+                .setCategory(Notification.CATEGORY_SERVICE)
+                .addAction(android.R.drawable.ic_media_pause, "توقف", stopPending)
+                .build();
+    }
+
+    private void enterForeground() {
+        if (foregroundStarted) return;
+        ensureNotificationChannel();
+        Notification notification = buildStatusNotification(
+                "سرویس آماده است؛ اتصال داخلی هنوز فعال نشده");
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED);
+        } else {
+            startForeground(NOTIFICATION_ID, notification);
+        }
+        foregroundStarted = true;
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent == null ? null : intent.getAction();
+        if (ACTION_STOP.equals(action)) {
+            closeTun();
+            if (foregroundStarted) {
+                stopForeground(true);
+                foregroundStarted = false;
+            }
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
+        if (ACTION_START.equals(action)) {
+            try {
+                enterForeground();
+            } catch (RuntimeException error) {
+                stopSelf(startId);
+                return START_NOT_STICKY;
+            }
+            // This scaffold must not claim a VPN session is connected.
+            return START_NOT_STICKY;
+        }
+        stopSelf(startId);
+        return START_NOT_STICKY;
+    }
 
     @Override
     public void onCreate() {
@@ -223,6 +305,10 @@ public final class RahYabVpnService extends VpnService {
     @Override
     public void onDestroy() {
         closeTun();
+        if (foregroundStarted) {
+            stopForeground(true);
+            foregroundStarted = false;
+        }
         if (nativeCallbacksBound) {
             OpenVpn3Bridge.unbindTunService();
             nativeCallbacksBound = false;
