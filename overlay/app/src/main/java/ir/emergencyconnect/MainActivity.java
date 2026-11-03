@@ -23,7 +23,7 @@ public class MainActivity extends Activity {
     final String API = "https://www.vpngate.net/api/iphone/";
     final ExecutorService worker = Executors.newSingleThreadExecutor();
     final ArrayList<Server> servers = new ArrayList<>();
-    LinearLayout list; TextView status; Button refresh;
+    LinearLayout list; TextView status; Button refresh;\n    TextView lampConnected, lampSearching, lampDisconnected;\n    final Handler lampHandler = new Handler(Looper.getMainLooper());\n    final Runnable lampPoll = new Runnable(){ public void run(){ updateConnectionLamps(); lampHandler.postDelayed(this,1000); }};
     int navy=Color.rgb(16,42,67), teal=Color.rgb(22,125,101);
     private static final int VPN_PERMISSION_REQUEST = 7412;
     private String pendingVpnProfile;
@@ -37,6 +37,18 @@ public class MainActivity extends Activity {
         LinearLayout hero=new LinearLayout(this); hero.setOrientation(1); hero.setPadding(20,20,20,20); hero.setBackground(shape(navy));
         hero.addView(txt("راه‌یاب VPN",26,Color.WHITE,true)); hero.addView(txt("یافتن و آماده‌سازی سرورهای VPN Gate",15,Color.LTGRAY,false)); root.addView(hero);
         status=txt("برای دریافت فهرست سرورها دکمه زیر را بزنید.",15,navy,true); status.setPadding(5,18,5,12); root.addView(status);
+        LinearLayout lamps = new LinearLayout(this);
+        lamps.setOrientation(LinearLayout.HORIZONTAL);
+        lamps.setGravity(Gravity.CENTER);
+        lamps.setPadding(8,12,8,12);
+        lamps.setBackground(shape(Color.WHITE));
+        lampConnected = lampItem(lamps, "سبز: وصل");
+        lampSearching = lampItem(lamps, "زرد: جستجو");
+        lampDisconnected = lampItem(lamps, "قرمز: قطع");
+        LinearLayout.LayoutParams lampParams = new LinearLayout.LayoutParams(-1,-2);
+        lampParams.setMargins(0,0,0,12);
+        root.addView(lamps,lampParams);
+        updateConnectionLamps();
         refresh=new Button(this); refresh.setText("دریافت و به‌روزرسانی سرورها"); refresh.setAllCaps(false); refresh.setTextColor(Color.WHITE); refresh.setBackground(shape(teal)); root.addView(refresh); refresh.setOnClickListener(v->loadServers());
 
         Button selfTest=new Button(this);
@@ -93,7 +105,42 @@ public class MainActivity extends Activity {
         list=new LinearLayout(this); list.setOrientation(1); root.addView(list);
         TextView foot=txt("منبع فهرست: VPN Gate دانشگاه تسوکوبا",11,Color.GRAY,false); foot.setGravity(Gravity.CENTER); root.addView(foot);
     }
-    void loadServers(){
+
+    TextView lampItem(LinearLayout parent, String label) {
+        LinearLayout item = new LinearLayout(this);
+        item.setOrientation(LinearLayout.VERTICAL);
+        item.setGravity(Gravity.CENTER);
+        TextView light = txt("●",25,Color.LTGRAY,true);
+        light.setGravity(Gravity.CENTER);
+        item.addView(light);
+        TextView caption = txt(label,11,navy,true);
+        caption.setGravity(Gravity.CENTER);
+        item.addView(caption);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0,-2,1f);
+        parent.addView(item,p);
+        if (label.startsWith("سبز")) lampConnected=light;
+        else if (label.startsWith("زرد")) lampSearching=light;
+        else lampDisconnected=light;
+        return light;
+    }
+    void updateConnectionLamps() {
+        if (lampConnected==null || lampSearching==null || lampDisconnected==null) return;
+        String state=getSharedPreferences("rah_yab_diagnostics",MODE_PRIVATE)
+                .getString("connection_lamp_state","disconnected");
+        lampConnected.setTextColor("connected".equals(state)?Color.rgb(20,160,65):Color.LTGRAY);
+        lampSearching.setTextColor("searching".equals(state)?Color.rgb(235,170,0):Color.LTGRAY);
+        lampDisconnected.setTextColor("disconnected".equals(state)?Color.rgb(210,45,45):Color.LTGRAY);
+    }
+    @Override protected void onResume() {
+        super.onResume();
+        lampHandler.removeCallbacks(lampPoll);
+        lampHandler.post(lampPoll);
+    }
+    @Override protected void onPause() {
+        lampHandler.removeCallbacks(lampPoll);
+        super.onPause();
+    }
+\n    void loadServers(){
         refresh.setEnabled(false);
         status.setText("در حال دریافت فهرست سرورها…");
         list.removeAllViews();
