@@ -28,6 +28,29 @@ public final class OpenVpn3Bridge {
     private OpenVpn3Bridge() {}
 
     private static native String nativeCryptoSelfTest();
+    private static native String nativeValidateProfile(String profile);
+
+    /**
+     * Parse and inspect an OpenVPN profile with the embedded core.
+     * This does not connect and does not imply that the profile's tunnel
+     * options are supported by the Android adapter.
+     */
+    public static String validateProfile(String profile) {
+        if (!LIBRARY_LOADED) {
+            return "کتابخانه بومی OpenVPN 3 بارگذاری نشده است.";
+        }
+        if (profile == null || profile.trim().isEmpty()) {
+            return "فایل تنظیمات خالی است.";
+        }
+        try {
+            String result = nativeValidateProfile(profile);
+            return result == null || result.isEmpty()
+                    ? "هسته نتیجه‌ای برای بررسی فایل برنگرداند."
+                    : result;
+        } catch (UnsatisfiedLinkError | SecurityException e) {
+            return "بررسی فایل با هسته داخلی در دسترس نیست: " + e.getMessage();
+        }
+    }
     private static native boolean nativeBindTunService(RahYabVpnService service);
     private static native void nativeUnbindTunService();
 
