@@ -71,56 +71,70 @@ public class MainActivity extends Activity {
         worker.execute(()->{
             ArrayList<Server> found=new ArrayList<>();
             String error=null;
-            HttpURLConnection connection=null;
-            BufferedReader reader=null;
-            try {
-                connection=(HttpURLConnection)new URL(API).openConnection();
-                connection.setConnectTimeout(12000);
-                connection.setReadTimeout(15000);
-                connection.setInstanceFollowRedirects(true);
-                connection.setRequestProperty("User-Agent","RahYabVPN/1.0");
-                connection.setRequestProperty("Accept","text/plain");
-                int response=connection.getResponseCode();
-                if(response!=HttpURLConnection.HTTP_OK) {
-                    throw new IOException("پاسخ سرور VPN Gate: HTTP "+response);
-                }
-                reader=new BufferedReader(new InputStreamReader(connection.getInputStream(),"UTF-8"));
-                String line;
-                boolean header=false;
-                int totalBytes=0;
-                final int maxBytes=8*1024*1024;
-                while((line=reader.readLine())!=null) {
-                    totalBytes+=line.length()+1;
-                    if(totalBytes>maxBytes) throw new IOException("حجم فهرست سرورها بیش از حد مجاز است.");
-                    if(line.length()>256*1024) continue;
-                    if(line.startsWith("#HostName")) { header=true; continue; }
-                    if(!header||line.startsWith("#")||line.trim().isEmpty()) continue;
-                    List<String> fields=parseCsv(line);
-                    if(fields.size()<15) continue;
-                    try {
-                        String encoded=fields.get(14).trim();
-                        byte[] raw=Base64.decode(encoded,Base64.DEFAULT);
-                        if(raw.length==0||raw.length>256*1024) continue;
-                        String config=new String(raw,"UTF-8");
-                        if(!config.contains("client")||!config.contains("remote ")) continue;
-                        Server server=new Server();
-                        server.host=fields.get(0);
-                        server.ip=fields.get(1);
-                        server.ping=parseInt(fields.get(3));
-                        server.speed=parseLong(fields.get(4));
-                        server.country=fields.get(5);
-                        server.config=config;
-                        found.add(server);
-                        if(found.size()>=500) break;
-                    } catch(IllegalArgumentException ignored) {
-                        // Skip malformed individual VPN Gate records.
+            String[] sources = new String[] {
+                API,
+                "https://cdn.jsdelivr.net/gh/GeorgeXie2333/vpngate-list-mirror@latest/data/vpngate.csv",
+                "https://fastly.jsdelivr.net/gh/GeorgeXie2333/vpngate-list-mirror@latest/data/vpngate.csv",
+                "https://gcore.jsdelivr.net/gh/GeorgeXie2333/vpngate-list-mirror@latest/data/vpngate.csv",
+                "https://raw.githubusercontent.com/GeorgeXie2333/vpngate-list-mirror/main/data/vpngate.csv"
+            };
+            for(String source : sources) {
+                HttpURLConnection connection=null;
+                BufferedReader reader=null;
+                ArrayList<Server> batch=new ArrayList<>();
+                try {
+                    connection=(HttpURLConnection)new URL(source).openConnection();
+                    connection.setConnectTimeout(10000);
+                    connection.setReadTimeout(15000);
+                    connection.setInstanceFollowRedirects(true);
+                    connection.setRequestProperty("User-Agent","RahYabVPN/1.1");
+                    connection.setRequestProperty("Accept","text/plain,*/*");
+                    int response=connection.getResponseCode();
+                    if(response!=HttpURLConnection.HTTP_OK) throw new IOException("HTTP "+response);
+                    reader=new BufferedReader(new InputStreamReader(connection.getInputStream(),"UTF-8"));
+                    String line;
+                    boolean header=false;
+                    int totalBytes=0;
+                    final int maxBytes=8*1024*1024;
+                    while((line=reader.readLine())!=null) {
+                        totalBytes+=line.length()+1;
+                        if(totalBytes>maxBytes) throw new IOException("حجم فهرست بیش از حد مجاز است.");
+                        if(line.length()>256*1024) continue;
+                        if(line.startsWith("#HostName")) { header=true; continue; }
+                        if(!header||line.startsWith("#")||line.trim().isEmpty()) continue;
+                        List<String> fields=parseCsv(line);
+                        if(fields.size()<15) continue;
+                        try {
+                            String encoded=fields.get(14).trim();
+                            byte[] raw=Base64.decode(encoded,Base64.DEFAULT);
+                            if(raw.length==0||raw.length>256*1024) continue;
+                            String config=new String(raw,"UTF-8");
+                            if(!config.contains("client")||!config.contains("remote ")) continue;
+                            Server server=new Server();
+                            server.host=fields.get(0);
+                            server.ip=fields.get(1);
+                            server.ping=parseInt(fields.get(3));
+                            server.speed=parseLong(fields.get(4));
+                            server.country=fields.get(5);
+                            server.config=config;
+                            batch.add(server);
+                            if(batch.size()>=500) break;
+                        } catch(IllegalArgumentException ignored) {
+                            // Skip malformed individual VPN Gate records.
+                        }
                     }
+                    if(!batch.isEmpty()) {
+                        found.addAll(batch);
+                        error=null;
+                        break;
+                    }
+                    throw new IOException("فهرست CSV معتبر یا دارای سرور نبود.");
+                } catch(Exception e) {
+                    error=source+" : "+(e.getMessage()==null?"خطای ناشناخته":e.getMessage());
+                } finally {
+                    if(reader!=null) try { reader.close(); } catch(IOException ignored) {}
+                    if(connection!=null) connection.disconnect();
                 }
-            } catch(Exception e) {
-                error=e.getMessage()==null?"خطای ناشناخته در دریافت سرورها":e.getMessage();
-            } finally {
-                if(reader!=null) try { reader.close(); } catch(IOException ignored) {}
-                if(connection!=null) connection.disconnect();
             }
             final String finalError=error;
             runOnUiThread(()->{
