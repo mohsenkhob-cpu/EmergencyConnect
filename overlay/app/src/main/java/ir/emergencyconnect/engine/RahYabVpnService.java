@@ -15,6 +15,13 @@ import java.net.InetAddress;
  */
 public final class RahYabVpnService extends VpnService {
     private ParcelFileDescriptor tunInterface;
+    private boolean nativeCallbacksBound;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        nativeCallbacksBound = OpenVpn3Bridge.bindTunService(this);
+    }
 
     /**
      * Compatibility entry point retained for the first single-IPv4 prototype.
@@ -179,6 +186,10 @@ public final class RahYabVpnService extends VpnService {
     @Override
     public void onDestroy() {
         closeTun();
+        if (nativeCallbacksBound) {
+            OpenVpn3Bridge.unbindTunService();
+            nativeCallbacksBound = false;
+        }
         super.onDestroy();
     }
 }
