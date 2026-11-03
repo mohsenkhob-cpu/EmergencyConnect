@@ -1,0 +1,20 @@
+plugins {
+    id 'com.android.application'
+}
+android {
+    namespace 'ir.emergencyconnect'
+    compileSdk 35
+    buildFeatures {
+        aidl true
+    }
+    defaultConfig {
+        applicationId 'ir.emergencyconnect'
+        minSdk 23
+        targetSdk 35
+        versionCode 3
+        versionName '1.2'
+    }
+}
+dependencies {
+    implementation 'androidx.core:core:1.13.1'
+}
