@@ -29,6 +29,30 @@ public final class OpenVpn3Bridge {
 
     private static native String nativeCryptoSelfTest();
     private static native String nativeValidateProfile(String profile);
+    private static native String nativeStartSession(String profile);
+    private static native void nativeStopSession();
+
+    /** Start one autologin-only native OpenVPN session on its managed worker. */
+    public static String startSession(String profile) {
+        if (!LIBRARY_LOADED) return "کتابخانه بومی OpenVPN 3 بارگذاری نشده است.";
+        if (profile == null || profile.trim().isEmpty()) return "فایل تنظیمات خالی است.";
+        try {
+            return nativeStartSession(profile);
+        } catch (UnsatisfiedLinkError | SecurityException e) {
+            return "شروع نشست داخلی در دسترس نیست: " + e.getMessage();
+        }
+    }
+
+    /** Request native disconnect and join its worker before releasing session state. */
+    public static void stopSession() {
+        if (!LIBRARY_LOADED) return;
+        try {
+            nativeStopSession();
+        } catch (UnsatisfiedLinkError | SecurityException ignored) {
+            // Safe when the native library could not be loaded.
+        }
+    }
+
 
     /**
      * Parse and inspect an OpenVPN profile with the embedded core.
