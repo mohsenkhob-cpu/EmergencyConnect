@@ -24,7 +24,8 @@ public class MainActivity extends Activity {
     final ExecutorService worker = Executors.newSingleThreadExecutor();
     final ArrayList<Server> servers = new ArrayList<>();
     LinearLayout list; TextView status; Button refresh;
-    TextView lampConnected, lampSearching, lampDisconnected;\n    final Handler lampHandler = new Handler(Looper.getMainLooper());
+    TextView lampConnected, lampSearching, lampDisconnected;
+    final Handler lampHandler = new Handler(Looper.getMainLooper());
     final Runnable lampPoll = new Runnable(){ public void run(){ updateConnectionLamps(); lampHandler.postDelayed(this,1000); }};
     int navy=Color.rgb(16,42,67), teal=Color.rgb(22,125,101);
     private static final int VPN_PERMISSION_REQUEST = 7412;
