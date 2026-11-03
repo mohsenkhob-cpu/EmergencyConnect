@@ -226,10 +226,14 @@ public class MainActivity extends Activity {
                 if (isFinishing() || isDestroyed()) return;
                 String serviceError = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
                         .getString("service_start_error", null);
+                String bindResult = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
+                        .getString("native_bind_result", "ثبت نشده");
                 if (serviceError != null && !serviceError.isEmpty()) {
                     status.setText("اندروید اجازه شروع سرویس VPN را نداد:\\n" + serviceError);
+                } else if (!"OK".equals(bindResult)) {
+                    status.setText("اتصال پل موتور OpenVPN به اندروید برقرار نشد.\\nگزارش فنی: " + bindResult);
                 } else {
-                    status.setText("خطای شروع سرویس ثبت نشد؛ اگر اعلان راه‌یاب دیده نمی‌شود، هنوز اتصال تأیید نشده است.");
+                    status.setText("پل JNI برقرار شد؛ اما این به معنی اتصال VPN نیست. موتور هنوز در مرحله آزمایش است.");
                 }
             }, 1500);
         } catch (RuntimeException error) {
