@@ -14,8 +14,8 @@
 #include "ovpncli.hpp"
 
 // Compile-time contract check for the pinned OpenVPN 3 client API.
-// The class remains intentionally unavailable as a session API until the
-// Android TunBuilder callbacks and managed worker lifecycle are implemented.
+// Android TunBuilder callbacks and the managed native worker are implemented;
+// the Java readiness gate remains closed until full on-device traffic tests pass.
 namespace {
 
 JavaVM *g_vm = nullptr;
@@ -101,8 +101,8 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         bool excluded;
     };
 
-    // Per-client callback state. This is deliberately native-only for now;
-    // no TUN descriptor is established until the Java service callback exists.
+    // Per-client callback state collected before Android establishes the TUN.
+    // Unsupported Android Builder semantics fail closed instead of being dropped.
     std::string remote_address;
     bool remote_ipv6 = false;
     std::string session_name = "RahYabVPN";
