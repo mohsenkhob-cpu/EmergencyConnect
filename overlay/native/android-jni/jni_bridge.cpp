@@ -606,9 +606,13 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStopSession(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService(
         JNIEnv *env, jclass, jobject service) {
-    if (!service || !g_vm) return JNI_FALSE;
+    if (!service) return to_java_string(env, "SERVICE_NULL");
+    if (!g_vm) return to_java_string(env, "JAVA_VM_NOT_INITIALIZED");
     jclass cls = env->GetObjectClass(service);
-    if (!cls) return JNI_FALSE;
+    if (!cls) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return to_java_string(env, "GET_SERVICE_CLASS_FAILED");
+    }
     jmethodID establish = env->GetMethodID(cls, "establishTun",
             "(Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[II)I");
     jmethodID protect = env->GetMethodID(cls, "protectTransportSocket", "(I)Z");
@@ -616,11 +620,15 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService(
             "(Ljava/lang/String;Ljava/lang/String;ZZ)V");
     env->DeleteLocalRef(cls);
     if (!establish || !protect || !event_callback || env->ExceptionCheck()) {
+        std::string detail = "JNI_METHOD_LOOKUP_FAILED:";
+        if (!establish) detail += " establishTun";
+        if (!protect) detail += " protectTransportSocket";
+        if (!event_callback) detail += " onNativeEvent";
         if (env->ExceptionCheck()) env->ExceptionClear();
-        return JNI_FALSE;
+        return to_java_string(env, detail);
     }
     jobject global_service = env->NewGlobalRef(service);
-    if (!global_service) return JNI_FALSE;
+    if (!global_service) return to_java_string(env, "NEW_GLOBAL_REF_FAILED");
     {
         std::lock_guard<std::mutex> lock(g_service_mutex);
         if (g_vpn_service) env->DeleteGlobalRef(g_vpn_service);
@@ -629,7 +637,7 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService(
         g_protect_socket = protect;
         g_native_event = event_callback;
     }
-    return JNI_TRUE;
+    return to_java_string(env, "OK");
 }
 
 extern "C" JNIEXPORT void JNICALL
