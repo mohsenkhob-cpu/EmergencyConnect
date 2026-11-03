@@ -59,6 +59,35 @@ public class MainActivity extends Activity {
         });
         root.addView(selfTest);
 
+        Button diagnosticsButton=new Button(this);
+        diagnosticsButton.setText("نمایش و کپی گزارش کامل اتصال");
+        diagnosticsButton.setAllCaps(false);
+        diagnosticsButton.setOnClickListener(v->{
+            android.content.SharedPreferences diagnostics =
+                    getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+            String report = "گزارش راه‌یاب VPN\\n"
+                    + "پل JNI: " + diagnostics.getString("native_bind_result", "ثبت نشده") + "\\n"
+                    + "شروع نشست: " + diagnostics.getString("session_start_result", "ثبت نشده") + "\\n"
+                    + "آخرین رویداد موتور: " + diagnostics.getString("native_last_event", "هنوز رویدادی ثبت نشده") + "\\n"
+                    + "خطای شروع سرویس: " + diagnostics.getString("service_start_error", "ندارد") + "\\n"
+                    + "وضعیت قابلیت اتصال: " + OpenVpn3Bridge.availabilityMessage() + "\\n"
+                    + "توجه: این گزارش به‌تنهایی اتصال VPN یا عبور ترافیک را تأیید نمی‌کند.";
+            new AlertDialog.Builder(this)
+                    .setTitle("گزارش کامل اتصال")
+                    .setMessage(report)
+                    .setPositiveButton("کپی گزارش", (dialog,which)->{
+                        android.content.ClipboardManager clipboard =
+                                (android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+                        if (clipboard != null) {
+                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("RahYabVPN diagnostics", report));
+                            Toast.makeText(this, "گزارش کپی شد؛ می‌توانید آن را اینجا ارسال کنید.", Toast.LENGTH_LONG).show();
+                        }
+                    })
+                    .setNegativeButton("بستن", null)
+                    .show();
+        });
+        root.addView(diagnosticsButton);
+
         TextView note=txt("روش اتصال: دکمه اصلی «اتصال آزمایشی داخل راه‌یاب» درخواست اتصال از موتور داخلی را می‌فرستد. گزینه «انتقال پروفایل به OpenVPN» فقط فایل را به برنامه OpenVPN می‌دهد و وارد کردن فایل به‌تنهایی اتصال را برقرار نمی‌کند.",13,Color.DKGRAY,false); note.setBackground(shape(Color.WHITE)); note.setPadding(14,14,14,14); LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,-2); np.setMargins(0,12,0,8); root.addView(note);
         TextView warning=txt("شفاف‌سازی: اتصال داخلی در حالت آزمایشی است و هنوز روی گوشی واقعی تأیید نشده است. سرورهای عمومی داوطلبانه ممکن است قطع، کند یا دارای سیاست ثبت اطلاعات متفاوت باشند. برای بانکداری و اطلاعات حساس استفاده نکنید.",12,Color.rgb(150,70,30),true); root.addView(warning);
         list=new LinearLayout(this); list.setOrientation(1); root.addView(list);
