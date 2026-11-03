@@ -158,11 +158,13 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         if (!builder_active) return false;
         // Android VpnService.Builder has no route-metric equivalent. A
         // non-default metric must be rejected rather than silently ignored.
-        if (metric != -1) {
+        // Upstream defines every negative value as "metric unspecified".
+        // Android cannot represent an explicit non-negative route metric.
+        if (metric >= 0) {
             unsupported_option_seen = true;
             return false;
         }
-        default_route_metric = metric;
+        default_route_metric = -1;
         return true;
     }
 
@@ -181,11 +183,11 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
             return false;
         }
         // Route metrics are not representable by Android's Builder API.
-        if (metric != -1) {
+        if (metric >= 0) {
             unsupported_option_seen = true;
             return false;
         }
-        routes.push_back({address, prefix, metric, ipv6, false});
+        routes.push_back({address, prefix, -1, ipv6, false});
         return true;
     }
 
@@ -197,11 +199,11 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
             return false;
         }
         // Excluded-route metrics cannot be represented by Android either.
-        if (metric != -1) {
+        if (metric >= 0) {
             unsupported_option_seen = true;
             return false;
         }
-        routes.push_back({address, prefix, metric, ipv6, true});
+        routes.push_back({address, prefix, -1, ipv6, true});
         return true;
     }
 
