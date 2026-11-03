@@ -61,18 +61,80 @@ public class MainActivity extends Activity {
         TextView foot=txt("منبع فهرست: VPN Gate دانشگاه تسوکوبا",11,Color.GRAY,false); foot.setGravity(Gravity.CENTER); root.addView(foot);
     }
     void loadServers(){
-        refresh.setEnabled(false); status.setText("در حال دریافت فهرست سرورها…"); list.removeAllViews();
-        worker.execute(()->{ ArrayList<Server> found=new ArrayList<>(); String error=null;
-            try { HttpURLConnection c=(HttpURLConnection)new URL(API).openConnection(); c.setConnectTimeout(15000); c.setReadTimeout(20000); c.setRequestProperty("User-Agent","RahYabVPN/1.0");
-                BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream(),"UTF-8")); String line; boolean header=false;
-                while((line=r.readLine())!=null){ if(line.startsWith("#HostName")){header=true; continue;} if(!header||line.startsWith("#")||line.trim().isEmpty()) continue;
-                    List<String> f=parseCsv(line); if(f.size()<15) continue;
-                    try { String b64=f.get(14).trim(); byte[] raw=Base64.decode(b64,Base64.DEFAULT); String cfg=new String(raw,"UTF-8"); if(!cfg.contains("client")||!cfg.contains("remote ")) continue;
-                        Server s=new Server(); s.host=f.get(0); s.ip=f.get(1); s.ping=parseInt(f.get(3)); s.speed=parseLong(f.get(4)); s.country=f.get(5); s.config=cfg; found.add(s);
-                    }catch(Exception ignored){}
-                } r.close(); c.disconnect();
-            }catch(Exception e){error=e.getMessage();}
-            final String err=error; runOnUiThread(()->{refresh.setEnabled(true); servers.clear(); servers.addAll(found); if(found.isEmpty()){status.setText("سروری دریافت نشد. اینترنت را بررسی و دوباره تلاش کنید.\n"+(err==null?"":err));} else { Collections.sort(servers,(a,b)->Long.compare(b.speed,a.speed)); status.setText("تعداد "+servers.size()+" سرور دریافت شد. فهرست بر اساس سرعت اعلام‌شده مرتب شده؛ برای واردکردن پروفایل روی سرور بزنید."); render(); }});
+        refresh.setEnabled(false);
+        status.setText("در حال دریافت فهرست سرورها…");
+        list.removeAllViews();
+        worker.execute(()->{
+            ArrayList<Server> found=new ArrayList<>();
+            String error=null;
+            HttpURLConnection connection=null;
+            BufferedReader reader=null;
+            try {
+                connection=(HttpURLConnection)new URL(API).openConnection();
+                connection.setConnectTimeout(12000);
+                connection.setReadTimeout(15000);
+                connection.setInstanceFollowRedirects(true);
+                connection.setRequestProperty("User-Agent","RahYabVPN/1.0");
+                connection.setRequestProperty("Accept","text/plain");
+                int response=connection.getResponseCode();
+                if(response!=HttpURLConnection.HTTP_OK) {
+                    throw new IOException("پاسخ سرور VPN Gate: HTTP "+response);
+                }
+                reader=new BufferedReader(new InputStreamReader(connection.getInputStream(),"UTF-8"));
+                String line;
+                boolean header=false;
+                int totalBytes=0;
+                final int maxBytes=8*1024*1024;
+                while((line=reader.readLine())!=null) {
+                    totalBytes+=line.length()+1;
+                    if(totalBytes>maxBytes) throw new IOException("حجم فهرست سرورها بیش از حد مجاز است.");
+                    if(line.length()>256*1024) continue;
+                    if(line.startsWith("#HostName")) { header=true; continue; }
+                    if(!header||line.startsWith("#")||line.trim().isEmpty()) continue;
+                    List<String> fields=parseCsv(line);
+                    if(fields.size()<15) continue;
+                    try {
+                        String encoded=fields.get(14).trim();
+                        byte[] raw=Base64.decode(encoded,Base64.DEFAULT);
+                        if(raw.length==0||raw.length>256*1024) continue;
+                        String config=new String(raw,"UTF-8");
+                        if(!config.contains("client")||!config.contains("remote ")) continue;
+                        Server server=new Server();
+                        server.host=fields.get(0);
+                        server.ip=fields.get(1);
+                        server.ping=parseInt(fields.get(3));
+                        server.speed=parseLong(fields.get(4));
+                        server.country=fields.get(5);
+                        server.config=config;
+                        found.add(server);
+                        if(found.size()>=500) break;
+                    } catch(IllegalArgumentException ignored) {
+                        // Skip malformed individual VPN Gate records.
+                    }
+                }
+            } catch(Exception e) {
+                error=e.getMessage()==null?"خطای ناشناخته در دریافت سرورها":e.getMessage();
+            } finally {
+                if(reader!=null) try { reader.close(); } catch(IOException ignored) {}
+                if(connection!=null) connection.disconnect();
+            }
+            final String finalError=error;
+            runOnUiThread(()->{
+                if(isFinishing()||isDestroyed()) return;
+                refresh.setEnabled(true);
+                servers.clear();
+                servers.addAll(found);
+                if(found.isEmpty()) {
+                    status.setText("سروری دریافت نشد. اینترنت را بررسی و دوباره تلاش کنید.\n"+
+                            (finalError==null?"":finalError));
+                } else {
+                    Collections.sort(servers,(x,y)->Long.compare(y.speed,x.speed));
+                    status.setText("تعداد "+servers.size()+
+                            " سرور دریافت شد. فهرست بر اساس سرعت اعلام‌شده مرتب شده؛ برای بررسی پروفایل روی سرور بزنید.");
+                    render();
+                    if(finalError!=null) status.append("\nدریافت فهرست با هشدار پایان یافت: "+finalError);
+                }
+            });
         });
     }
     static int parseInt(String s){try{return Integer.parseInt(s.trim());}catch(Exception e){return 9999;}}
