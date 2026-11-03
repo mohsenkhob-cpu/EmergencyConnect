@@ -603,7 +603,7 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStopSession(
     }
 }
 
-extern "C" JNIEXPORT jboolean JNICALL
+extern "C" JNIEXPORT jstring JNICALL
 Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService(
         JNIEnv *env, jclass, jobject service) {
     if (!service) return to_java_string(env, "SERVICE_NULL");
