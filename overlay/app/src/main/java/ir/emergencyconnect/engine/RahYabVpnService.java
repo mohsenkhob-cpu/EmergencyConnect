@@ -345,12 +345,12 @@ public final class RahYabVpnService extends VpnService {
         android.content.SharedPreferences diagnostics =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         String history = diagnostics.getString("native_event_history", "");
-        String nextHistory = history.isEmpty() ? detail : history + "\\n" + detail;
-        String[] entries = nextHistory.split("\\n");
+        String nextHistory = history.isEmpty() ? detail : history + "\n" + detail;
+        String[] entries = nextHistory.split("\n");
         if (entries.length > 20) {
             StringBuilder trimmed = new StringBuilder();
             for (int i = entries.length - 20; i < entries.length; i++) {
-                if (trimmed.length() > 0) trimmed.append('\\n');
+                if (trimmed.length() > 0) trimmed.append('\n');
                 trimmed.append(entries[i]);
             }
             nextHistory = trimmed.toString();
