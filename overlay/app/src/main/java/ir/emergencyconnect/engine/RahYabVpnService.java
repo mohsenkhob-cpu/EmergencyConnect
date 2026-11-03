@@ -165,13 +165,41 @@ public final class RahYabVpnService extends VpnService {
      */
     private static InetAddress parseNumericAddress(String value, String field)
             throws Exception {
-        if (value == null || value.isEmpty() || value.length() > 64
-                || !(value.indexOf(':') >= 0 || value.matches("[0-9.]+"))) {
+        if (value == null || value.isEmpty() || value.length() > 64) {
             throw new IllegalArgumentException("Invalid numeric " + field);
         }
+
+        // Never allow a hostname or a shortened/ambiguous IPv4 literal to
+        // reach InetAddress resolution from the VPN configuration callback.
+        if (value.indexOf(':') < 0) {
+            String[] octets = value.split("\\.", -1);
+            if (octets.length != 4) {
+                throw new IllegalArgumentException("Invalid IPv4 " + field);
+            }
+            byte[] address = new byte[4];
+            for (int i = 0; i < octets.length; i++) {
+                String octet = octets[i];
+                if (octet.isEmpty() || octet.length() > 3
+                        || !octet.matches("[0-9]+")) {
+                    throw new IllegalArgumentException("Invalid IPv4 " + field);
+                }
+                int number = Integer.parseInt(octet);
+                if (number > 255) {
+                    throw new IllegalArgumentException("Invalid IPv4 " + field);
+                }
+                address[i] = (byte) number;
+            }
+            return InetAddress.getByAddress(address);
+        }
+
+        // A colon is mandatory for IPv6; restrict input to literal syntax
+        // before parsing so this path cannot perform hostname lookups.
+        if (!value.matches("[0-9a-fA-F:.]+")) {
+            throw new IllegalArgumentException("Invalid IPv6 " + field);
+        }
         InetAddress parsed = InetAddress.getByName(value);
-        if (parsed.getAddress().length != 4 && parsed.getAddress().length != 16) {
-            throw new IllegalArgumentException("Unsupported " + field + " family");
+        if (parsed.getAddress().length != 16) {
+            throw new IllegalArgumentException("Invalid IPv6 " + field);
         }
         return parsed;
     }
