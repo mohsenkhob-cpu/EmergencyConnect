@@ -11,7 +11,7 @@ package ir.emergencyconnect.engine;
 public final class OpenVpn3Bridge {
     private static final boolean LIBRARY_LOADED;
 
-    // Deliberately false: no complete JNI session/TUN adapter exists yet.
+    // Keep disabled until a full on-device VPN session and traffic test passes.
     private static final boolean SESSION_API_READY = false;
 
     static {
@@ -35,6 +35,9 @@ public final class OpenVpn3Bridge {
     /** Start one autologin-only native OpenVPN session on its managed worker. */
     public static String startSession(String profile) {
         if (!LIBRARY_LOADED) return "کتابخانه بومی OpenVPN 3 بارگذاری نشده است.";
+        if (!SESSION_API_READY) {
+            return "اتصال واقعی هنوز برای این نسخه فعال نشده است؛ ابتدا باید نشست VPN و عبور ترافیک روی گوشی آزمایش و تأیید شود.";
+        }
         if (profile == null || profile.trim().isEmpty()) return "فایل تنظیمات خالی است.";
         try {
             return nativeStartSession(profile);
