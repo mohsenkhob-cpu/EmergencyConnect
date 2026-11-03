@@ -254,6 +254,9 @@ public class MainActivity extends Activity {
         });
     }
     private void requestInternalVpn(Server server) {
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("connection_lamp_state", "searching").apply();
+        updateConnectionLamps();
         if (server == null || server.config == null || server.config.trim().isEmpty()) {
             status.setText("فایل تنظیمات سرور خالی است.");
             return;
@@ -283,6 +286,9 @@ public class MainActivity extends Activity {
             startInternalVpnService();
         } else {
             pendingVpnProfile = null;
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("connection_lamp_state", "disconnected").apply();
+            updateConnectionLamps();
             status.setText("مجوز اتصال VPN داده نشد؛ هیچ تونلی ساخته نشد.");
         }
     }
@@ -317,6 +323,9 @@ public class MainActivity extends Activity {
                 }
             }, 2500);
         } catch (RuntimeException error) {
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("connection_lamp_state", "disconnected").apply();
+            updateConnectionLamps();
             status.setText("شروع سرویس VPN ناموفق بود: " + error.getMessage());
         }
     }
