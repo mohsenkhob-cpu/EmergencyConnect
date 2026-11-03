@@ -96,6 +96,7 @@ public final class RahYabVpnService extends VpnService {
                     .edit()
                     .remove("service_start_error")
                     .remove("native_last_event")
+                    .remove("native_event_history")
                     .putString("session_start_result", "درخواست شروع نشست در حال آماده‌سازی است…")
                     .apply();
             final String profile = intent.getStringExtra(EXTRA_PROFILE);
@@ -341,8 +342,21 @@ public final class RahYabVpnService extends VpnService {
         if (name == null) name = "UNKNOWN";
         String detail = name + (info == null || info.isEmpty() ? "" : " — " + info)
                 + (error || fatal ? " [ERROR]" : "");
-        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                .putString("native_last_event", detail).apply();
+        android.content.SharedPreferences diagnostics =
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        String history = diagnostics.getString("native_event_history", "");
+        String nextHistory = history.isEmpty() ? detail : history + "\\n" + detail;
+        String[] entries = nextHistory.split("\\n");
+        if (entries.length > 20) {
+            StringBuilder trimmed = new StringBuilder();
+            for (int i = entries.length - 20; i < entries.length; i++) {
+                if (trimmed.length() > 0) trimmed.append('\\n');
+                trimmed.append(entries[i]);
+            }
+            nextHistory = trimmed.toString();
+        }
+        diagnostics.edit().putString("native_last_event", detail)
+                .putString("native_event_history", nextHistory).apply();
         if ("CONNECTED".equals(name) && !error && !fatal) {
             setLampState("connected");
         } else if (error || fatal || "DISCONNECTED".equals(name) || "EXITING".equals(name)) {
