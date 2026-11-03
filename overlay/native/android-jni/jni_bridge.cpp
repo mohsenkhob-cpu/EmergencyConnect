@@ -123,7 +123,7 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
 
     bool tun_builder_set_remote_address(
             const std::string &address, bool ipv6) override {
-        if (!builder_active || address.empty()) return false;
+        if (!builder_active || address.empty() || address.size() > 64) return false;
         remote_address = address;
         remote_ipv6 = ipv6;
         return true;
@@ -133,7 +133,8 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
             const std::string &address, int prefix, const std::string &gateway,
             bool ipv6, bool net30) override {
         const int max_prefix = ipv6 ? 128 : 32;
-        if (!builder_active || address.empty() || prefix < 0 || prefix > max_prefix) {
+        if (!builder_active || address.empty() || address.size() > 64 ||
+            addresses.size() >= 32 || prefix < 0 || prefix > max_prefix) {
             return false;
         }
         addresses.push_back({address, prefix, ipv6, gateway, net30});
@@ -147,7 +148,7 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
     }
 
     bool tun_builder_reroute_gw(bool ipv4, bool ipv6, unsigned int) override {
-        if (!builder_active || (!ipv4 && !ipv6)) return false;
+        if (!builder_active || (!ipv4 && !ipv6) || routes.size() + (ipv4 ? 1 : 0) + (ipv6 ? 1 : 0) > 512) return false;
         if (ipv4) routes.push_back({"0.0.0.0", 0, default_route_metric, false, false});
         if (ipv6) routes.push_back({"::", 0, default_route_metric, true, false});
         return true;
@@ -156,7 +157,8 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
     bool tun_builder_add_route(
             const std::string &address, int prefix, int metric, bool ipv6) override {
         const int max_prefix = ipv6 ? 128 : 32;
-        if (!builder_active || address.empty() || prefix < 0 || prefix > max_prefix) {
+        if (!builder_active || address.empty() || address.size() > 64 ||
+            routes.size() >= 512 || prefix < 0 || prefix > max_prefix) {
             return false;
         }
         routes.push_back({address, prefix, metric, ipv6, false});
@@ -166,7 +168,8 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
     bool tun_builder_exclude_route(
             const std::string &address, int prefix, int metric, bool ipv6) override {
         const int max_prefix = ipv6 ? 128 : 32;
-        if (!builder_active || address.empty() || prefix < 0 || prefix > max_prefix) {
+        if (!builder_active || address.empty() || address.size() > 64 ||
+            routes.size() >= 512 || prefix < 0 || prefix > max_prefix) {
             return false;
         }
         routes.push_back({address, prefix, metric, ipv6, true});
@@ -207,7 +210,8 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
                 return false;
             }
             for (const auto &address : server.addresses) {
-                if (address.address.empty() || address.port != 0) {
+                if (address.address.empty() || address.address.size() > 64 || address.port != 0 ||
+                    parsed.size() >= 8) {
                     unsupported_option_seen = true;
                     return false;
                 }
