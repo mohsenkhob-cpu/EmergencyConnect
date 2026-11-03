@@ -7,6 +7,7 @@
 #include <string>
 #include <type_traits>
 #include <algorithm>
+#include <atomic>
 #include <vector>
 
 #include "ovpncli.hpp"
@@ -460,6 +461,7 @@ static_assert(!std::is_abstract<RahYabOpenVPNClient>::value,
 struct NativeSession {
     std::shared_ptr<RahYabOpenVPNClient> client;
     std::thread worker;
+    std::atomic<bool> finished{false};
 };
 std::mutex g_session_mutex;
 std::shared_ptr<NativeSession> g_session;
@@ -575,10 +577,21 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession(
         return to_java_string(env, "حجم یا محتوای فایل تنظیمات معتبر نیست.");
     }
 
+    // Reap a naturally completed worker before allowing another connection.
+    // A finished std::thread remains joinable until joined; replacing its owner
+    // without joining would call std::terminate from the thread destructor.
+    std::shared_ptr<NativeSession> completed_session;
     {
         std::lock_guard<std::mutex> lock(g_session_mutex);
-        if (g_session || g_session_stopping)
+        if (g_session && g_session->finished.load(std::memory_order_acquire)) {
+            completed_session = g_session;
+            g_session.reset();
+        } else if (g_session || g_session_stopping) {
             return to_java_string(env, "یک نشست VPN در حال اجرا یا توقف است.");
+        }
+    }
+    if (completed_session && completed_session->worker.joinable()) {
+        completed_session->worker.join();
     }
 
     try {
@@ -602,7 +615,8 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession(
             g_session = session;
         }
         try {
-            session->worker = std::thread([client = session->client]() {
+            session->worker = std::thread([session]() {
+                const auto client = session->client;
                 try {
                     const auto result = client->connect();
                     std::string detail = result.message;
@@ -622,6 +636,7 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession(
                     client->reportDiagnostic("NATIVE_CONNECT_EXCEPTION",
                             "Unknown C++ exception escaped OpenVPN connect().", true, true);
                 }
+                session->finished.store(true, std::memory_order_release);
             });
         } catch (...) {
             std::lock_guard<std::mutex> lock(g_session_mutex);
