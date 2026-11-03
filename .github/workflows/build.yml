@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - v2-engine-starter
+      - feature/openvpn-android-aidl
 
 permissions:
   contents: write
