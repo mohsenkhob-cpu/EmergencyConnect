@@ -91,7 +91,11 @@ public final class RahYabVpnService extends VpnService {
         }
         if (ACTION_START.equals(action)) {
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
-                    .edit().remove("service_start_error").apply();
+                    .edit()
+                    .remove("service_start_error")
+                    .remove("native_last_event")
+                    .putString("session_start_result", "درخواست شروع نشست در حال آماده‌سازی است…")
+                    .apply();
             final String profile = intent.getStringExtra(EXTRA_PROFILE);
             if (profile == null || profile.trim().isEmpty()) {
                 stopSelf(startId);
