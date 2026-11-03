@@ -17,6 +17,7 @@ JavaVM *g_vm = nullptr;
 jobject g_vpn_service = nullptr;
 jmethodID g_establish_tun = nullptr;
 jmethodID g_protect_socket = nullptr;
+jmethodID g_native_event = nullptr;
 std::mutex g_service_mutex;
 
 class ScopedJniEnv {
@@ -358,8 +359,31 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         return false;
     }
 
-    void event(const openvpn::ClientAPI::Event &) override {
-        // Session event forwarding is added with the managed JNI lifecycle.
+    void event(const openvpn::ClientAPI::Event &event) override {
+        ScopedJniEnv scoped;
+        JNIEnv *env = scoped.get();
+        if (!env) return;
+        jmethodID callback = nullptr;
+        jobject service = acquire_service(env, nullptr, nullptr);
+        {
+            std::lock_guard<std::mutex> lock(g_service_mutex);
+            callback = g_native_event;
+        }
+        if (!service || !callback) {
+            if (service) env->DeleteLocalRef(service);
+            return;
+        }
+        jstring name = env->NewStringUTF(event.name.c_str());
+        jstring info = env->NewStringUTF(event.info.c_str());
+        if (name && info) {
+            env->CallVoidMethod(service, callback, name, info,
+                    event.error ? JNI_TRUE : JNI_FALSE,
+                    event.fatal ? JNI_TRUE : JNI_FALSE);
+        }
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (name) env->DeleteLocalRef(name);
+        if (info) env->DeleteLocalRef(info);
+        env->DeleteLocalRef(service);
     }
 
     void acc_event(
@@ -490,8 +514,10 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService(
     jmethodID establish = env->GetMethodID(cls, "establishTun",
             "(Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[II)I");
     jmethodID protect = env->GetMethodID(cls, "protectTransportSocket", "(I)Z");
+    jmethodID event_callback = env->GetMethodID(cls, "onNativeEvent",
+            "(Ljava/lang/String;Ljava/lang/String;ZZ)V");
     env->DeleteLocalRef(cls);
-    if (!establish || !protect || env->ExceptionCheck()) {
+    if (!establish || !protect || !event_callback || env->ExceptionCheck()) {
         if (env->ExceptionCheck()) env->ExceptionClear();
         return JNI_FALSE;
     }
@@ -503,6 +529,7 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService(
         g_vpn_service = global_service;
         g_establish_tun = establish;
         g_protect_socket = protect;
+        g_native_event = event_callback;
     }
     return JNI_TRUE;
 }
@@ -515,6 +542,7 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeUnbindTunService(
     g_vpn_service = nullptr;
     g_establish_tun = nullptr;
     g_protect_socket = nullptr;
+    g_native_event = nullptr;
 }
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
