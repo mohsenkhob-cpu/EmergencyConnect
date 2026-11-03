@@ -13,7 +13,10 @@ done
 # and real Android traffic tests have been completed.
 grep -Eq 'SESSION_API_READY[[:space:]]*=[[:space:]]*false' "$BRIDGE"
 grep -q 'رابط نشست و تونل اندروید هنوز کامل و آزمایش نشده' "$BRIDGE"
-grep -Fq 'OpenVpn3Bridge.startSession(profile)' "$SERVICE"\ngrep -Fq 'OpenVpn3Bridge.stopSession()' "$SERVICE"\ngrep -Fq 'EXTRA_PROFILE' "$SERVICE"\ngrep -Fq 'VpnService' overlay/app/src/main/java/ir/emergencyconnect/MainActivity.java
+grep -Fq 'OpenVpn3Bridge.startSession(profile)' "$SERVICE"
+grep -Fq 'OpenVpn3Bridge.stopSession()' "$SERVICE"
+grep -Fq 'EXTRA_PROFILE' "$SERVICE"
+grep -Fq 'VpnService' overlay/app/src/main/java/ir/emergencyconnect/MainActivity.java
 if grep -Eq 'SESSION_API_READY[[:space:]]*=[[:space:]]*true' "$BRIDGE"; then
   echo "ERROR: session readiness was enabled without required verification."
   exit 1
