@@ -197,6 +197,9 @@ jobs:
           test -n "$ANDROID_KEY_PASSWORD" || { echo "Missing ANDROID_KEY_PASSWORD repository secret"; exit 1; }
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/rahyab-upload-key.p12"
           chmod 600 "$RUNNER_TEMP/rahyab-upload-key.p12"
+          echo "Checking signing keystore before Gradle..."
+          keytool -list -keystore "$RUNNER_TEMP/rahyab-upload-key.p12" -storetype PKCS12 -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null || { echo "SIGNING_PREFLIGHT_FAILED: keystore password or alias does not match the uploaded key file"; exit 1; }
+          echo "Signing keystore preflight passed."
           python3 - "$PROJECT_DIR/app/build.gradle" "$GITHUB_RUN_NUMBER" <<'PY'
           import pathlib, sys
           p = pathlib.Path(sys.argv[1])
