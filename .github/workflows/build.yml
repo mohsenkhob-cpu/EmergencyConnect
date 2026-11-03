@@ -183,7 +183,54 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Configure permanent APK signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "Missing ANDROID_KEYSTORE_BASE64 repository secret"; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "Missing ANDROID_KEYSTORE_PASSWORD repository secret"; exit 1; }
+          test -n "$ANDROID_KEY_ALIAS" || { echo "Missing ANDROID_KEY_ALIAS repository secret"; exit 1; }
+          test -n "$ANDROID_KEY_PASSWORD" || { echo "Missing ANDROID_KEY_PASSWORD repository secret"; exit 1; }
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/rahyab-upload-key.p12"
+          chmod 600 "$RUNNER_TEMP/rahyab-upload-key.p12"
+          python3 - "$PROJECT_DIR/app/build.gradle" "$GITHUB_RUN_NUMBER" <<'PY'
+          import pathlib, sys
+          p = pathlib.Path(sys.argv[1])
+          run_number = int(sys.argv[2])
+          s = p.read_text()
+          if "signingConfigs { stableUpload" in s:
+              raise SystemExit("Stable signing config already exists; refusing duplicate injection")
+          s = s.replace("versionCode 2", f"versionCode {100000 + run_number}")
+          s = s.replace("versionName '1.1'", f"versionName '1.2.{run_number}'")
+          s += """
+          android {
+              signingConfigs {
+                  stableUpload {
+                      storeFile file(System.getenv("RUNNER_TEMP") + "/rahyab-upload-key.p12")
+                      storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                      keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+                  }
+              }
+              buildTypes {
+                  debug {
+                      signingConfig signingConfigs.stableUpload
+                  }
+              }
+          }
+          """
+          p.write_text(s)
+          PY
+          echo "Permanent signing configuration prepared; private key remains in runner temp."
       - name: Build APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd "$PROJECT_DIR"
           gradle assembleDebug
