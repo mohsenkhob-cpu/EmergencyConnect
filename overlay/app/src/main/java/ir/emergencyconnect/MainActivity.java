@@ -23,7 +23,9 @@ public class MainActivity extends Activity {
     final String API = "https://www.vpngate.net/api/iphone/";
     final ExecutorService worker = Executors.newSingleThreadExecutor();
     final ArrayList<Server> servers = new ArrayList<>();
-    LinearLayout list; TextView status; Button refresh;\n    TextView lampConnected, lampSearching, lampDisconnected;\n    final Handler lampHandler = new Handler(Looper.getMainLooper());\n    final Runnable lampPoll = new Runnable(){ public void run(){ updateConnectionLamps(); lampHandler.postDelayed(this,1000); }};
+    LinearLayout list; TextView status; Button refresh;
+    TextView lampConnected, lampSearching, lampDisconnected;\n    final Handler lampHandler = new Handler(Looper.getMainLooper());
+    final Runnable lampPoll = new Runnable(){ public void run(){ updateConnectionLamps(); lampHandler.postDelayed(this,1000); }};
     int navy=Color.rgb(16,42,67), teal=Color.rgb(22,125,101);
     private static final int VPN_PERMISSION_REQUEST = 7412;
     private String pendingVpnProfile;
@@ -140,7 +142,8 @@ public class MainActivity extends Activity {
         lampHandler.removeCallbacks(lampPoll);
         super.onPause();
     }
-\n    void loadServers(){
+
+    void loadServers(){
         refresh.setEnabled(false);
         status.setText("در حال دریافت فهرست سرورها…");
         list.removeAllViews();
