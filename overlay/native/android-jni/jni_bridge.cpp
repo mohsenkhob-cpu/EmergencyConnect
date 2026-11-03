@@ -144,12 +144,24 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
             addresses.size() >= 32 || prefix < 0 || prefix > max_prefix) {
             return false;
         }
+        // Android Builder.addAddress() cannot express OpenVPN's gateway
+        // and net30 point-to-point semantics. Do not silently drop them.
+        if (!gateway.empty() || net30) {
+            unsupported_option_seen = true;
+            return false;
+        }
         addresses.push_back({address, prefix, ipv6, gateway, net30});
         return true;
     }
 
     bool tun_builder_set_route_metric_default(int metric) override {
         if (!builder_active) return false;
+        // Android VpnService.Builder has no route-metric equivalent. A
+        // non-default metric must be rejected rather than silently ignored.
+        if (metric != -1) {
+            unsupported_option_seen = true;
+            return false;
+        }
         default_route_metric = metric;
         return true;
     }
@@ -168,6 +180,11 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
             routes.size() >= 512 || prefix < 0 || prefix > max_prefix) {
             return false;
         }
+        // Route metrics are not representable by Android's Builder API.
+        if (metric != -1) {
+            unsupported_option_seen = true;
+            return false;
+        }
         routes.push_back({address, prefix, metric, ipv6, false});
         return true;
     }
@@ -177,6 +194,11 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         const int max_prefix = ipv6 ? 128 : 32;
         if (!builder_active || address.empty() || address.size() > 64 ||
             routes.size() >= 512 || prefix < 0 || prefix > max_prefix) {
+            return false;
+        }
+        // Excluded-route metrics cannot be represented by Android either.
+        if (metric != -1) {
+            unsupported_option_seen = true;
             return false;
         }
         routes.push_back({address, prefix, metric, ipv6, true});
