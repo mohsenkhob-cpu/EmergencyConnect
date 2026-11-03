@@ -20,7 +20,7 @@ if grep -Eq 'SESSION_API_READY[[:space:]]*=[[:space:]]*true' "$BRIDGE"; then
 fi
 
 # Keep Java native declarations and exported JNI entry points in sync.
-for method in nativeCryptoSelfTest nativeValidateProfile nativeBindTunService nativeUnbindTunService; do
+for method in nativeCryptoSelfTest nativeValidateProfile nativeBindTunService nativeUnbindTunService nativeStartSession nativeStopSession; do
   grep -Eq "native[[:space:]].*\\b${method}[[:space:]]*\\(" "$BRIDGE" || {
     echo "Missing Java native declaration: ${method}"; exit 1;
   }
@@ -35,5 +35,16 @@ grep -Fq 'establishTun' "$SERVICE"
 grep -Fq '(Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[II)I' "$JNI"
 grep -Fq 'protectTransportSocket' "$SERVICE"
 grep -Fq 'protectTransportSocket' "$JNI"
+
+# Session worker must be joinable, stoppable, and never detached.
+grep -Fq 'client->connect()' "$JNI"
+grep -Fq 'client->stop()' "$JNI"
+grep -Fq 'session->worker.join()' "$JNI"
+if grep -Fq 'detach()' "$JNI"; then
+  echo "ERROR: detached native VPN worker is forbidden."
+  exit 1
+fi
+grep -Fq 'evaluated.autologin' "$JNI"
+grep -Fq 'nativeStopSession' "$BRIDGE"
 
 echo "PASS: readiness safety and Java/JNI callback contracts verified."
