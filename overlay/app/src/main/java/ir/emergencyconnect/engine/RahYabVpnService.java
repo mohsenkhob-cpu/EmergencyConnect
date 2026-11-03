@@ -32,6 +32,8 @@ public final class RahYabVpnService extends VpnService {
     private String nativeBindDiagnostic = "NOT_INITIALIZED";
     private boolean foregroundStarted;
     private final ExecutorService sessionExecutor = Executors.newSingleThreadExecutor();
+    private final Object nativeSessionLock = new Object();
+    private volatile boolean serviceDestroyed;
 
     private void ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
@@ -84,7 +86,9 @@ public final class RahYabVpnService extends VpnService {
         if (ACTION_STOP.equals(action)) {
             setLampState("disconnected");
             sessionExecutor.execute(() -> {
-                OpenVpn3Bridge.stopSession();
+                synchronized (nativeSessionLock) {
+                    OpenVpn3Bridge.stopSession();
+                }
                 closeTun();
                 stopSelf(startId);
             });
@@ -116,6 +120,7 @@ public final class RahYabVpnService extends VpnService {
                 return START_NOT_STICKY;
             }
             sessionExecutor.execute(() -> {
+                if (serviceDestroyed) return;
                 if (!nativeCallbacksBound) {
                     setLampState("disconnected");
                     updateStatus("اتصال داخلی در دسترس نیست: اتصال پل JNI برقرار نشد");
@@ -124,7 +129,11 @@ public final class RahYabVpnService extends VpnService {
                 }
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                         .putString("session_start_result", "درخواست به موتور ارسال شد؛ منتظر پاسخ…").apply();
-                String result = OpenVpn3Bridge.startSession(profile);
+                final String result;
+                synchronized (nativeSessionLock) {
+                    if (serviceDestroyed) return;
+                    result = OpenVpn3Bridge.startSession(profile);
+                }
                 String safeResult = result == null ? "هسته پاسخی نداد" : result;
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                         .putString("session_start_result", safeResult).apply();
@@ -405,7 +414,15 @@ public final class RahYabVpnService extends VpnService {
 
     @Override
     public void onDestroy() {
+        serviceDestroyed = true;
+        sessionExecutor.shutdownNow();
         setLampState("disconnected");
+        // Stop and join the native worker before closing the TUN or releasing
+        // the JNI service reference. This prevents callbacks into a destroyed
+        // Android service during teardown.
+        synchronized (nativeSessionLock) {
+            OpenVpn3Bridge.stopSession();
+        }
         closeTun();
         if (foregroundStarted) {
             stopForeground(true);
