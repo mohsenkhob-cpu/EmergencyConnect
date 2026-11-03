@@ -40,8 +40,11 @@ class ScopedJniEnv {
     bool attached_;
 };
 
-jobject acquire_service(JNIEnv *env) {
+jobject acquire_service(JNIEnv *env, jmethodID *establish = nullptr,
+                        jmethodID *protect = nullptr) {
     std::lock_guard<std::mutex> lock(g_service_mutex);
+    if (establish) *establish = g_establish_tun;
+    if (protect) *protect = g_protect_socket;
     return g_vpn_service ? env->NewLocalRef(g_vpn_service) : nullptr;
 }
 
@@ -200,8 +203,9 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         ScopedJniEnv scoped;
         JNIEnv *env = scoped.get();
         if (!env) return -1;
-        jobject service = acquire_service(env);
-        if (!service) return -1;
+        jmethodID establish_method = nullptr;
+        jobject service = acquire_service(env, &establish_method, nullptr);
+        if (!service || !establish_method) return -1;
 
         std::vector<std::string> address_values, route_values, excluded_values;
         std::vector<jint> address_prefixes, route_prefixes, excluded_prefixes;
@@ -233,7 +237,7 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
             return -1;
         }
 
-        jint fd = env->CallIntMethod(service, g_establish_tun, jname, jaddresses,
+        jint fd = env->CallIntMethod(service, establish_method, jname, jaddresses,
                 jaddress_prefixes, jdns, jroutes, jroute_prefixes, jexcluded,
                 jexcluded_prefixes, static_cast<jint>(mtu));
         const bool failed = env->ExceptionCheck();
@@ -262,10 +266,11 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         ScopedJniEnv scoped;
         JNIEnv *env = scoped.get();
         if (!env) return false;
-        jobject service = acquire_service(env);
-        if (!service) return false;
+        jmethodID protect_method = nullptr;
+        jobject service = acquire_service(env, nullptr, &protect_method);
+        if (!service || !protect_method) return false;
         const jboolean protected_socket = env->CallBooleanMethod(
-                service, g_protect_socket, static_cast<jint>(socket));
+                service, protect_method, static_cast<jint>(socket));
         const bool failed = env->ExceptionCheck();
         if (failed) env->ExceptionClear();
         env->DeleteLocalRef(service);
