@@ -89,6 +89,8 @@ public final class RahYabVpnService extends VpnService {
             return START_NOT_STICKY;
         }
         if (ACTION_START.equals(action)) {
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
+                    .edit().remove("service_start_error").apply();
             final String profile = intent.getStringExtra(EXTRA_PROFILE);
             if (profile == null || profile.trim().isEmpty()) {
                 stopSelf(startId);
@@ -97,6 +99,10 @@ public final class RahYabVpnService extends VpnService {
             try {
                 enterForeground();
             } catch (RuntimeException error) {
+                String detail = error.getClass().getSimpleName() + ": "
+                        + (error.getMessage() == null ? "بدون توضیح" : error.getMessage());
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
+                        .edit().putString("service_start_error", detail).apply();
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
