@@ -379,7 +379,7 @@ public final class RahYabVpnService extends VpnService {
         if (info != null && !info.isEmpty() && (error || fatal)) {
             message += " — " + info;
         }
-        if (foregroundStarted) {
+        if (foregroundStarted && !"CORE_LOG".equals(name)) {
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
                 manager.notify(NOTIFICATION_ID, buildStatusNotification(message));
