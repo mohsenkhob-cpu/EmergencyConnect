@@ -221,7 +221,17 @@ public class MainActivity extends Activity {
         try {
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
             else startService(service);
-            status.setText("درخواست اتصال داخلی ارسال شد؛ نتیجه را در اعلان راه‌یاب VPN ببینید.");
+            status.setText("درخواست اتصال داخلی ارسال شد؛ در حال بررسی نتیجه شروع سرویس…");
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                String serviceError = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
+                        .getString("service_start_error", null);
+                if (serviceError != null && !serviceError.isEmpty()) {
+                    status.setText("اندروید اجازه شروع سرویس VPN را نداد:\\n" + serviceError);
+                } else {
+                    status.setText("خطای شروع سرویس ثبت نشد؛ اگر اعلان راه‌یاب دیده نمی‌شود، هنوز اتصال تأیید نشده است.");
+                }
+            }, 1500);
         } catch (RuntimeException error) {
             status.setText("شروع سرویس VPN ناموفق بود: " + error.getMessage());
         }
