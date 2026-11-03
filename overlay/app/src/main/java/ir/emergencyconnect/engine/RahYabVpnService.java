@@ -286,6 +286,32 @@ public final class RahYabVpnService extends VpnService {
         return parsed;
     }
 
+    /** Receive OpenVPN core events on its worker thread and reflect them in the foreground notification. */
+    public void onNativeEvent(String name, String info, boolean error, boolean fatal) {
+        if (name == null) name = "UNKNOWN";
+        String message;
+        if ("CONNECTED".equals(name)) {
+            message = "اتصال برقرار شد";
+        } else if (error || fatal) {
+            message = "خطای اتصال: " + name;
+        } else if ("CONNECTING".equals(name) || "WAIT".equals(name)) {
+            message = "در حال اتصال: " + name;
+        } else if ("DISCONNECTED".equals(name) || "EXITING".equals(name)) {
+            message = "اتصال قطع شد";
+        } else {
+            message = "وضعیت VPN: " + name;
+        }
+        if (info != null && !info.isEmpty() && (error || fatal)) {
+            message += " — " + info;
+        }
+        if (foregroundStarted) {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) {
+                manager.notify(NOTIFICATION_ID, buildStatusNotification(message));
+            }
+        }
+    }
+
     /** Protect transport sockets from being routed into their own TUN. */
     public boolean protectTransportSocket(int socketFd) {
         return protect(socketFd);
