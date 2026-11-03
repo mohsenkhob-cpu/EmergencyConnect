@@ -29,6 +29,7 @@ public final class RahYabVpnService extends VpnService {
     private static final int NOTIFICATION_ID = 7301;
     private ParcelFileDescriptor tunInterface;
     private boolean nativeCallbacksBound;
+    private String nativeBindDiagnostic = "NOT_INITIALIZED";
     private boolean foregroundStarted;
     private final ExecutorService sessionExecutor = Executors.newSingleThreadExecutor();
 
@@ -124,7 +125,10 @@ public final class RahYabVpnService extends VpnService {
     @Override
     public void onCreate() {
         super.onCreate();
-        nativeCallbacksBound = OpenVpn3Bridge.bindTunService(this);
+        nativeBindDiagnostic = OpenVpn3Bridge.bindTunService(this);
+        nativeCallbacksBound = "OK".equals(nativeBindDiagnostic);
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("native_bind_result", nativeBindDiagnostic).apply();
     }
 
     /**
