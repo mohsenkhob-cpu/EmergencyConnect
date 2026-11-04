@@ -421,10 +421,23 @@ public final class RahYabVpnService extends VpnService {
 
     @Override
     public void onCreate() {
-        // Do not initialize JNI here. Android calls onCreate() before
-        // onStartCommand(); blocking native initialization here can prevent
-        // startForeground() from being called before the system deadline.
         super.onCreate();
+        // Promote the service in onCreate(), the earliest service lifecycle
+        // callback. Do not wait for onStartCommand() or perform JNI work first.
+        try {
+            enterForeground();
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("service_on_create", new java.text.SimpleDateFormat(
+                            "yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                            .format(new java.util.Date()))
+                    .commit();
+        } catch (RuntimeException error) {
+            String detail = error.getClass().getSimpleName() + ": "
+                    + (error.getMessage() == null ? "بدون توضیح" : error.getMessage());
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("service_start_error", detail).commit();
+            stopSelf();
+        }
     }
 
     /**
