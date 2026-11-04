@@ -10,8 +10,12 @@ android {
         applicationId 'com.rahyab.next'
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName '0.1.0'
+        versionCode 2
+        versionName '0.2.0'
+        // Current target phone is ARM64; avoid packaging unused emulator/32-bit ABIs.
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
     }
 
     compileOptions {
@@ -27,5 +31,5 @@ dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
 
     // sing-box Android binding; the AAR is fetched by the JitPack build script.
-    implementation 'com.github.singbox-android:libbox:1.14.0'
+    implementation 'com.github.singbox-android:libbox:1.14.3'
 }
