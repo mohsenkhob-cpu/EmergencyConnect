@@ -154,9 +154,12 @@ public class MainActivity extends Activity {
         super.onResume();
         lampHandler.removeCallbacks(lampPoll);
         lampHandler.post(lampPoll);
+        speedHandler.removeCallbacks(speedPoll);
+        speedHandler.post(speedPoll);
     }
     @Override protected void onPause() {
         lampHandler.removeCallbacks(lampPoll);
+        speedHandler.removeCallbacks(speedPoll);
         super.onPause();
     }
 
@@ -453,5 +456,5 @@ public class MainActivity extends Activity {
                 .setPositiveButton("متوجه شدم",null).show();
         }
     }
-    @Override protected void onDestroy(){super.onDestroy();worker.shutdownNow();}
+    @Override protected void onDestroy(){lampHandler.removeCallbacks(lampPoll);speedHandler.removeCallbacks(speedPoll);super.onDestroy();worker.shutdownNow();}
 }
