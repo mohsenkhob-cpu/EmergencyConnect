@@ -123,6 +123,10 @@ public final class RahYabVpnService extends VpnService {
             return START_NOT_STICKY;
         }
         if (ACTION_START.equals(action)) {
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("service_start_received", new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(new java.util.Date()))
+                    .putString("session_start_result", "سرویس VPN درخواست اتصال را دریافت کرد؛ در حال آماده‌سازی موتور…")
+                    .apply();
             setLampState("searching");
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
                     .edit()
@@ -212,6 +216,7 @@ public final class RahYabVpnService extends VpnService {
                     + (endpoint.isEmpty() ? "" : " — " + endpoint)
                     + "؛ حداکثر ۱۲ ثانیه";
             updateStatus(progress);
+            setServerTestStatus(endpoint, "testing");
             setLampState("searching");
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("session_start_result", progress).apply();
@@ -228,6 +233,8 @@ public final class RahYabVpnService extends VpnService {
             boolean accepted = result != null
                     && result.startsWith("درخواست اتصال به هسته OpenVPN 3 تحویل شد");
             if (!accepted) {
+                setServerTestStatus(endpoint, "failed");
+                appendAutoHistory("AUTO_SEARCH_SKIP", "پاسخ شروع موتور برای " + endpoint + ": " + (result == null ? "بدون پاسخ" : result));
                 attemptSignal = null;
                 appendAutoHistory("AUTO_SEARCH_SKIP", "سرور " + (i + 1)
                         + ": " + (result == null ? "بدون پاسخ" : result));
@@ -243,6 +250,7 @@ public final class RahYabVpnService extends VpnService {
             boolean connected = attemptConnected;
             attemptSignal = null;
             if (connected) {
+                setServerTestStatus(endpoint, "connected");
                 autoConnected = true;
                 nextAutoIndex = (i + 1) % count;
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
@@ -255,6 +263,7 @@ public final class RahYabVpnService extends VpnService {
                         + (endpoint.isEmpty() ? "" : " — " + endpoint));
                 return;
             }
+            setServerTestStatus(endpoint, "failed");
             synchronized (nativeSessionLock) {
                 OpenVpn3Bridge.stopSession();
             }
@@ -354,6 +363,12 @@ public final class RahYabVpnService extends VpnService {
             }
         }
         return "";
+    }
+
+    private void setServerTestStatus(String endpoint, String state) {
+        if (endpoint == null || endpoint.isEmpty()) return;
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("server_test_" + endpoint, state).apply();
     }
 
     private void appendAutoHistory(String name, String info) {
