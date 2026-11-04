@@ -9,10 +9,11 @@ for file in "$BRIDGE" "$SERVICE" "$JNI"; do
   test -f "$file" || { echo "Missing required source: $file"; exit 1; }
 done
 
-# Do not advertise a usable VPN session until native start/stop lifecycle
-# and real Android traffic tests have been completed.
-grep -Eq 'SESSION_API_READY[[:space:]]*=[[:space:]]*false' "$BRIDGE"
-grep -q 'رابط نشست و تونل اندروید هنوز کامل و آزمایش نشده' "$BRIDGE"
+# This branch intentionally enables a clearly labeled EXPERIMENTAL device test.
+# It must never be described as production-ready before real traffic tests.
+grep -Eq 'SESSION_API_READY[[:space:]]*=[[:space:]]*true' "$BRIDGE"
+grep -q 'مسیر نشست آزمایشی فعال است؛ اتصال و عبور واقعی اینترنت هنوز روی گوشی تأیید نشده است' "$BRIDGE"
+grep -q 'اتصال داخلی در حالت آزمایشی است و هنوز روی گوشی واقعی تأیید نشده است' overlay/app/src/main/java/ir/emergencyconnect/MainActivity.java
 grep -Fq 'OpenVpn3Bridge.startSession(profile)' "$SERVICE"
 grep -Fq 'OpenVpn3Bridge.stopSession()' "$SERVICE"
 grep -Fq 'EXTRA_PROFILE' "$SERVICE"
