@@ -70,7 +70,7 @@ public class MainActivity extends Activity {
         refresh=new Button(this); refresh.setText("دریافت و به‌روزرسانی سرورها"); refresh.setAllCaps(false); refresh.setTextColor(Color.WHITE); refresh.setBackground(shape(teal)); root.addView(refresh); refresh.setOnClickListener(v->loadServers());
 
         Button smartConnect=new Button(this);
-        smartConnect.setText("جست‌وجوی هوشمند و اتصال خودکار (تا ۴۰ سرور)");
+        smartConnect.setText("جست‌وجوی سریع و اتصال خودکار (تا ۸ سرور)");
         smartConnect.setAllCaps(false);
         smartConnect.setTextColor(Color.WHITE);
         smartConnect.setBackground(shape(navy));
@@ -174,7 +174,7 @@ public class MainActivity extends Activity {
 
     void loadServers(){
         refresh.setEnabled(false);
-        status.setText("در حال دریافت و ارزیابی سرورها از چند مسیر منبع…");
+        status.setText("در حال دریافت سریع فهرست سرورها…");
         list.removeAllViews();
         selectedServer=null;
         worker.execute(()->{
@@ -229,6 +229,7 @@ public class MainActivity extends Activity {
                         } catch(IllegalArgumentException ignored) {}
                     }
                     sourceReport.append("\n").append(serverSourceName(source)).append(": ").append(added).append(" سرور تازه");
+                    if (added > 0) break; // use mirrors only if the official source is unavailable
                 } catch(Exception e) {
                     sourceReport.append("\n").append(serverSourceName(source)).append(": در دسترس نبود");
                 } finally {
@@ -238,7 +239,7 @@ public class MainActivity extends Activity {
             }
             // First narrow the list using provider-reported bandwidth, then verify TCP reachability.
             Collections.sort(candidates,(a,b)->Long.compare(b.speed,a.speed));
-            int probeCount=Math.min(40,candidates.size());
+            int probeCount=Math.min(12,candidates.size());
             for(int i=0;i<probeCount;i++) probeTcp(candidates.get(i));
             Collections.sort(candidates,(a,b)->{
                 if(a.tcpReachable!=b.tcpReachable) return a.tcpReachable?-1:1;
@@ -251,7 +252,7 @@ public class MainActivity extends Activity {
             });
             ArrayList<Server> best=new ArrayList<>();
             for(Server candidate:candidates) {
-                if(best.size()>=40) break;
+                if(best.size()>=20) break;
                 best.add(candidate);
             }
             final String sourcesSummary=sourceReport.toString();
@@ -264,7 +265,7 @@ public class MainActivity extends Activity {
                     status.setText("هیچ سرور معتبری از منابع دریافت نشد. اتصال اینترنت را بررسی و دوباره تلاش کنید."+sourcesSummary);
                 } else {
                     long reachable=best.stream().filter(x->x.tcpReachable).count();
-                    status.setText("۴۰ سرور برتر (یا کمتر) از میان "+candidates.size()
+                    status.setText("۲۰ سرور برتر (یا کمتر) از میان "+candidates.size()
                             +" رکورد بررسی شدند؛ "+reachable+" مورد پاسخ‌گوی آزمایش TCP بودند."
                             +"\nسرعت اعلامی، معیار اولیه است؛ پینگ TCP معیار دسترسی فعلی است."
                             +sourcesSummary);
@@ -379,7 +380,7 @@ public class MainActivity extends Activity {
             if (server != null && server.config != null && !server.config.trim().isEmpty()) {
                 profiles.add(server.config);
             }
-            if (profiles.size() >= 40) break;
+            if (profiles.size() >= 8) break;
         }
         if (profiles.isEmpty()) {
             status.setText("پروفایل معتبری برای جست‌وجوی خودکار وجود ندارد.");
@@ -390,7 +391,7 @@ public class MainActivity extends Activity {
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("connection_lamp_state", "searching").apply();
         updateConnectionLamps();
-        status.setText("جست‌وجوی هوشمند بین " + profiles.size()
+        status.setText("جست‌وجوی سریع بین " + profiles.size()
                 + " سرور آماده است؛ مجوز VPN را تأیید کنید.");
         Intent prepare = VpnService.prepare(this);
         if (prepare != null) {
