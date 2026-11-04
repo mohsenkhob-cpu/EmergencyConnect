@@ -180,7 +180,7 @@ public class MainActivity extends Activity {
         root.addView(diagnosticsButton);
 
         TextView note=txt("روش اتصال: دکمه اصلی «اتصال آزمایشی داخل راه‌یاب» درخواست اتصال از موتور داخلی را می‌فرستد. گزینه «انتقال پروفایل به OpenVPN» فقط فایل را به برنامه OpenVPN می‌دهد و وارد کردن فایل به‌تنهایی اتصال را برقرار نمی‌کند.",13,Color.DKGRAY,false); note.setBackground(shape(Color.WHITE)); note.setPadding(14,14,14,14); LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,-2); np.setMargins(0,12,0,8); root.addView(note);
-        TextView warning=txt("هشدار حریم خصوصی: سرورهای VPN Gate داوطلبانه و عمومی هستند. طبق سیاست رسمی، لاگ اتصال حداقل ۳ ماه و سرور داوطلبانه سرآیند بسته‌های شبکه را حداقل ۲ هفته نگه می‌دارد. برای بانکداری، حساب‌های حساس یا اطلاعات محرمانه استفاده نکنید.",12,Color.rgb(150,70,30),true); root.addView(warning);
+        TextView warning=txt("هشدار: اتصال داخلی هنوز روی گوشی واقعی تأیید نشده است. سرورهای VPN Gate داوطلبانه و عمومی هستند. طبق سیاست رسمی، لاگ اتصال حداقل ۳ ماه و سرور داوطلبانه سرآیند بسته‌های شبکه را حداقل ۲ هفته نگه می‌دارد. برای بانکداری، حساب‌های حساس یا اطلاعات محرمانه استفاده نکنید.",12,Color.rgb(150,70,30),true); root.addView(warning);
         list=new LinearLayout(this); list.setOrientation(1); root.addView(list);
         TextView foot=txt("منبع فهرست: VPN Gate دانشگاه تسوکوبا",11,Color.GRAY,false); foot.setGravity(Gravity.CENTER); root.addView(foot);
     }
