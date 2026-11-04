@@ -15,7 +15,7 @@
 
 // Compile-time contract check for the pinned OpenVPN 3 client API.
 // Android TunBuilder callbacks and the managed native worker are implemented;
-// the Java readiness gate remains closed until full on-device traffic tests pass.
+// Java exposes this path for explicitly labeled experimental device testing only.
 namespace {
 
 JavaVM *g_vm = nullptr;
@@ -127,6 +127,8 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         dns_servers.clear();
         unsupported_option_seen = false;
         builder_active = true;
+        reportDiagnostic("TUN_BUILDER_BEGIN",
+                "OpenVPN supplied tunnel parameters; preparing Android TUN.", false, false);
         return true;
     }
 
@@ -267,7 +269,15 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
     }
 
     int tun_builder_establish() override {
-        if (!builder_active || unsupported_option_seen) return -1;
+        if (!builder_active) return -1;
+        if (unsupported_option_seen) {
+            reportDiagnostic("TUN_BUILDER_REJECTED",
+                    "The profile requested a tunnel option this Android adapter cannot represent safely.",
+                    true, true);
+            return -1;
+        }
+        reportDiagnostic("TUN_BUILDER_ESTABLISH_BEGIN",
+                "Applying tunnel addresses, DNS and routes to Android VpnService.", false, false);
         ScopedJniEnv scoped;
         JNIEnv *env = scoped.get();
         if (!env) return -1;
@@ -275,6 +285,8 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         jobject service = acquire_service(env, &establish_method, nullptr);
         if (!service || !establish_method) {
             if (service) env->DeleteLocalRef(service);
+            reportDiagnostic("TUN_BUILDER_SERVICE_UNAVAILABLE",
+                    "Android VpnService callback is not bound.", true, true);
             return -1;
         }
 
@@ -332,10 +344,26 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         env->DeleteLocalRef(jroute_prefixes);
         env->DeleteLocalRef(jexcluded);
         env->DeleteLocalRef(jexcluded_prefixes);
-        return failed ? -1 : static_cast<int>(fd);
+        if (failed || fd < 0) {
+            reportDiagnostic("TUN_BUILDER_ESTABLISH_FAILED",
+                    failed ? "Android VpnService threw while establishing the TUN interface."
+                           : "Android VpnService could not establish the TUN interface.",
+                    true, true);
+            return -1;
+        }
+        reportDiagnostic("TUN_BUILDER_ESTABLISHED",
+                "Android TUN established; IPv4/IPv6 addresses=" +
+                std::to_string(address_values.size()) + ", DNS=" +
+                std::to_string(dns_servers.size()) + ", routes=" +
+                std::to_string(route_values.size()) + ", excluded routes=" +
+                std::to_string(excluded_values.size()) + ".",
+                false, false);
+        return static_cast<int>(fd);
     }
 
     void tun_builder_teardown(bool) override {
+        reportDiagnostic("TUN_BUILDER_TEARDOWN",
+                "OpenVPN is tearing down the Android TUN interface.", false, false);
         builder_active = false;
         addresses.clear();
         routes.clear();
