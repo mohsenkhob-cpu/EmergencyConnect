@@ -747,7 +747,12 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStopSession(
     std::shared_ptr<NativeSession> session;
     {
         std::lock_guard<std::mutex> lock(g_session_mutex);
-        if (!g_session) return;
+        if (!g_session) {
+            // Never leave the process-wide state stuck in "stopping" when
+            // cleanup is requested after a session was already reaped.
+            g_session_stopping = false;
+            return;
+        }
         g_session_stopping = true;
         session = g_session;
     }
