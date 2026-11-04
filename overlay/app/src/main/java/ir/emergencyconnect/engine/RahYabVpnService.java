@@ -197,11 +197,14 @@ public final class RahYabVpnService extends VpnService {
             String profile = autoProfiles.get(i);
             CountDownLatch signal = new CountDownLatch(1);
             attemptConnected = false;
-            updateStatus("جست‌وجوی هوشمند: آزمایش سرور " + (i + 1)
-                    + " از " + count + "؛ حداکثر ۱۸ ثانیه");
+            String endpoint = profileEndpoint(profile);
+            String progress = "در حال آزمایش سرور " + (i + 1) + " از " + count
+                    + (endpoint.isEmpty() ? "" : " — " + endpoint)
+                    + "؛ حداکثر ۱۲ ثانیه";
+            updateStatus(progress);
+            setLampState("searching");
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                    .putString("session_start_result", "در حال آزمایش سرور "
-                            + (i + 1) + " از " + count).apply();
+                    .putString("session_start_result", progress).apply();
             final String result;
             synchronized (nativeSessionLock) {
                 if (!autoSearchEnabled || serviceDestroyed) {
@@ -237,7 +240,9 @@ public final class RahYabVpnService extends VpnService {
                                 + (i + 1) + " از " + count + " برقرار شد.").apply();
                 appendAutoHistory("AUTO_SEARCH_CONNECTED", "سرور " + (i + 1)
                         + " از " + count + "؛ اتصال واقعی تأیید شد");
-                updateStatus("اتصال برقرار شد؛ سرور " + (i + 1) + " از " + count);
+                setLampState("connected");
+                updateStatus("اتصال برقرار شد؛ سرور " + (i + 1) + " از " + count
+                        + (endpoint.isEmpty() ? "" : " — " + endpoint));
                 return;
             }
             synchronized (nativeSessionLock) {
@@ -252,8 +257,22 @@ public final class RahYabVpnService extends VpnService {
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("session_start_result", "پس از بررسی " + count
                         + " سرور، اتصال واقعی برقرار نشد.").apply();
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("session_start_result", "جست‌وجو تمام شد؛ هیچ سروری وصل نشد.").apply();
         updateStatus("جست‌وجو تمام شد؛ هیچ‌یک از " + count
                 + " سرور اتصال واقعی برقرار نکرد. می‌توانید بعداً دوباره جست‌وجو کنید.");
+    }
+
+    private String profileEndpoint(String profile) {
+        if (profile == null) return "";
+        for (String line : profile.split("\\n")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("remote ")) {
+                String[] parts = trimmed.split("\\s+");
+                if (parts.length >= 3) return parts[1] + ":" + parts[2];
+            }
+        }
+        return "";
     }
 
     private void appendAutoHistory(String name, String info) {
