@@ -30,9 +30,12 @@ public class MainActivity extends Activity {
     private static final int REQUEST_CONFIG = 4101;
     private static final int REQUEST_VPN_PERMISSION = 4102;
     private static final int REQUEST_SINGBOX_PROFILE = 4103;
+    private static final int REQUEST_SINGBOX_VPN_PERMISSION = 4104;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private GoBackend wireGuardBackend;
     private Config pendingWireGuardConfig;
+    private String pendingSingBoxJson;
+    private Button singBoxConnectButton;
     private TextView status;
     private Button connectButton;
     private Button disconnectButton;
@@ -142,6 +145,17 @@ public class MainActivity extends Activity {
         page.addView(singBoxButton, singBoxParams);
         singBoxButton.setOnClickListener(v -> chooseSingBoxFile());
 
+        singBoxConnectButton = new Button(this);
+        singBoxConnectButton.setText("اتصال با پروفایل sing-box");
+        singBoxConnectButton.setAllCaps(false);
+        singBoxConnectButton.setTextColor(Color.WHITE);
+        singBoxConnectButton.setEnabled(false);
+        singBoxConnectButton.setBackground(shape(Color.rgb(31, 151, 137), 18));
+        LinearLayout.LayoutParams singBoxConnectParams = new LinearLayout.LayoutParams(-1, dp(54));
+        singBoxConnectParams.topMargin = dp(8);
+        page.addView(singBoxConnectButton, singBoxConnectParams);
+        singBoxConnectButton.setOnClickListener(v -> requestSingBoxConnection());
+
         TextView note = label("در این نسخه، اتصال آزمایشی WireGuard پیاده‌سازی شده است. سایر پروتکل‌ها هنوز فعال نیستند.",
                 12, Color.rgb(235, 190, 115), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
@@ -167,7 +181,16 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (resultCode != RESULT_OK || data == null) return;
+        if (resultCode != RESULT_OK) return;
+        if (requestCode == REQUEST_VPN_PERMISSION) {
+            startWireGuard();
+            return;
+        }
+        if (requestCode == REQUEST_SINGBOX_VPN_PERMISSION) {
+            startSingBox();
+            return;
+        }
+        if (data == null) return;
         if (requestCode == REQUEST_SINGBOX_PROFILE) {
             Uri uri = data.getData();
             if (uri == null) return;
@@ -185,11 +208,11 @@ public class MainActivity extends Activity {
                     }
                     out.write(buffer, 0, count);
                 }
-                SingBoxProfile profile = SingBoxProfile.parse(
-                        new String(out.toByteArray(), StandardCharsets.UTF_8));
-                setStatus("پروفایل شناسایی شد: " + profile.getProtocol()
-                        + " | " + profile.getOutboundTag()
-                        + " — موتور اتصال هنوز در حال پیاده‌سازی است");
+                pendingSingBoxJson = new String(out.toByteArray(), StandardCharsets.UTF_8);
+                SingBoxProfile profile = SingBoxProfile.parse(pendingSingBoxJson);
+                singBoxConnectButton.setEnabled(true);
+                setStatus("پروفایل آماده اتصال: " + profile.getProtocol()
+                        + " | " + profile.getOutboundTag());
             } catch (Exception e) {
                 setStatus("پروفایل sing-box معتبر نیست: " + safeMessage(e));
             }
@@ -219,9 +242,31 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 setStatus("خطا در خواندن فایل WireGuard: " + safeMessage(e));
             }
-        } else if (requestCode == REQUEST_VPN_PERMISSION) {
-            if (resultCode == RESULT_OK) startWireGuard();
-            else setStatus("مجوز ایجاد VPN داده نشد");
+        }
+    }
+
+
+    private void requestSingBoxConnection() {
+        if (pendingSingBoxJson == null) {
+            setStatus("ابتدا فایل JSON سرور را وارد کنید");
+            return;
+        }
+        Intent permission = VpnService.prepare(this);
+        if (permission != null) {
+            startActivityForResult(permission, REQUEST_SINGBOX_VPN_PERMISSION);
+        } else {
+            startSingBox();
+        }
+    }
+
+    private void startSingBox() {
+        if (pendingSingBoxJson == null) return;
+        try {
+            setStatus("درخواست راه‌اندازی موتور sing-box ارسال شد…");
+            SingBoxVpnService.start(getApplicationContext(), pendingSingBoxJson);
+            disconnectButton.setEnabled(true);
+        } catch (Exception e) {
+            setStatus("شروع sing-box ناموفق بود: " + safeMessage(e));
         }
     }
 
@@ -252,6 +297,7 @@ public class MainActivity extends Activity {
 
     private void disconnectWireGuard() {
         setStatus("در حال قطع اتصال…");
+        SingBoxVpnService.stop(getApplicationContext());
         worker.execute(() -> {
             try {
                 wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
