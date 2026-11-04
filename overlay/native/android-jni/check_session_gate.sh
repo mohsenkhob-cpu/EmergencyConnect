@@ -13,7 +13,7 @@ done
 # It must never be described as production-ready before real traffic tests.
 grep -Eq 'SESSION_API_READY[[:space:]]*=[[:space:]]*true' "$BRIDGE"
 grep -q 'مسیر نشست آزمایشی فعال است؛ اتصال و عبور واقعی اینترنت هنوز روی گوشی تأیید نشده است' "$BRIDGE"
-grep -q 'اتصال داخلی در حالت آزمایشی است و هنوز روی گوشی واقعی تأیید نشده است' overlay/app/src/main/java/ir/emergencyconnect/MainActivity.java
+grep -q 'هشدار: اتصال داخلی هنوز روی گوشی واقعی تأیید نشده است' overlay/app/src/main/java/ir/emergencyconnect/MainActivity.java
 grep -Fq 'OpenVpn3Bridge.startSession(profile)' "$SERVICE"
 grep -Fq 'OpenVpn3Bridge.stopSession()' "$SERVICE"
 grep -Fq 'EXTRA_PROFILE' "$SERVICE"
