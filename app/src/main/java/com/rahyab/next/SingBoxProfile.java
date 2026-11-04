@@ -303,6 +303,10 @@ public final class SingBoxProfile {
                 JSONObject transport = new JSONObject().put("type", "ws");
                 String path = uri.getQueryParameter("path");
                 if (path != null && !path.isEmpty()) transport.put("path", path);
+                String hostHeader = uri.getQueryParameter("host");
+                if (hostHeader != null && !hostHeader.isEmpty()) {
+                    transport.put("headers", new JSONObject().put("Host", hostHeader));
+                }
                 outbound.put("transport", transport);
             } else if (net != null && !net.isEmpty() && !"tcp".equals(net)) {
                 throw new JSONException("نوع انتقال Trojan هنوز پشتیبانی نمی‌شود: " + net);
