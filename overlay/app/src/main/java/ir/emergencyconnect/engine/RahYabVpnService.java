@@ -365,16 +365,22 @@ public final class RahYabVpnService extends VpnService {
     /** Receive OpenVPN core events on its worker thread and reflect them in the foreground notification. */
     public void onNativeEvent(String name, String info, boolean error, boolean fatal) {
         if (name == null) name = "UNKNOWN";
-        String detail = name + (info == null || info.isEmpty() ? "" : " — " + info)
+        // Keep each OpenVPN callback as one history entry. Some CORE_LOG
+        // messages contain embedded newlines (for example Peer Info); without
+        // normalization those lines consume the history limit and hide the
+        // actual sequence of connection events.
+        String safeInfo = info == null ? "" : info.replace('\r', ' ').replace('\n', ' ').trim();
+        if (safeInfo.length() > 1200) safeInfo = safeInfo.substring(0, 1200);
+        String detail = name + (safeInfo.isEmpty() ? "" : " — " + safeInfo)
                 + (error || fatal ? " [ERROR]" : "");
         android.content.SharedPreferences diagnostics =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         String history = diagnostics.getString("native_event_history", "");
         String nextHistory = history.isEmpty() ? detail : history + "\n" + detail;
         String[] entries = nextHistory.split("\n");
-        if (entries.length > 20) {
+        if (entries.length > 30) {
             StringBuilder trimmed = new StringBuilder();
-            for (int i = entries.length - 20; i < entries.length; i++) {
+            for (int i = entries.length - 30; i < entries.length; i++) {
                 if (trimmed.length() > 0) trimmed.append('\n');
                 trimmed.append(entries[i]);
             }
