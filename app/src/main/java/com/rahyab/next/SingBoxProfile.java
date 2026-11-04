@@ -44,7 +44,10 @@ public final class SingBoxProfile {
             throw new JSONException("فهرست outbounds در پیکربندی پیدا نشد");
         }
 
-        String finalTag = root.optString("final", "").trim();
+        JSONObject route = root.optJSONObject("route");
+        String finalTag = route == null ? "" : route.optString("final", "").trim();
+        // Accept the legacy root-level field as a compatibility fallback.
+        if (finalTag.isEmpty()) finalTag = root.optString("final", "").trim();
         JSONObject selected = findByTag(outbounds, finalTag);
         if (selected != null) {
             selected = resolveOutbound(outbounds, selected, new HashSet<String>());
@@ -61,7 +64,20 @@ public final class SingBoxProfile {
 
         // Most remote outbound types require a host and port. These checks catch
         // incomplete profiles early; libbox remains responsible for full validation.
-        if (!"wireguard".equals(type)) {
+        if ("wireguard".equals(type)) {
+            JSONArray peers = selected.optJSONArray("peers");
+            if (peers == null || peers.length() == 0) {
+                throw new JSONException("فهرست همتاهای WireGuard خالی یا نامعتبر است");
+            }
+            JSONObject peer = peers.optJSONObject(0);
+            if (peer == null || peer.optString("server", "").trim().isEmpty()) {
+                throw new JSONException("نشانی سرور WireGuard معتبر نیست");
+            }
+            int port = peer.optInt("server_port", 0);
+            if (port < 1 || port > 65535) {
+                throw new JSONException("پورت سرور WireGuard معتبر نیست");
+            }
+        } else {
             String server = selected.optString("server", "").trim();
             int port = selected.optInt("server_port", 0);
             if (server.isEmpty() || port < 1 || port > 65535) {
@@ -84,8 +100,18 @@ public final class SingBoxProfile {
 
         JSONArray members = candidate.optJSONArray("outbounds");
         if (members == null) return null;
+
+        // A selector may declare a default member. Prefer it over list order;
+        // urltest has no measured winner at import time, so inspect its members.
+        String defaultTag = candidate.optString("default", "").trim();
+        if (!defaultTag.isEmpty()) {
+            JSONObject defaultMember = findByTag(all, defaultTag);
+            JSONObject resolvedDefault = resolveOutbound(all, defaultMember, new HashSet<>(visited));
+            if (resolvedDefault != null) return resolvedDefault;
+        }
         for (int i = 0; i < members.length(); i++) {
             String memberTag = members.optString(i, "").trim();
+            if (memberTag.equals(defaultTag)) continue;
             JSONObject member = findByTag(all, memberTag);
             JSONObject resolved = resolveOutbound(all, member, new HashSet<>(visited));
             if (resolved != null) return resolved;
