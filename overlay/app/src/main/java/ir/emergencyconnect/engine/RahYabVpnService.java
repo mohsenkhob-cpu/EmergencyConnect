@@ -12,6 +12,12 @@ import android.os.Build;
 import android.os.ParcelFileDescriptor;
 
 import java.net.InetAddress;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.IOException;
+import android.util.Base64;
 import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -48,6 +54,8 @@ public final class RahYabVpnService extends VpnService {
     private volatile int nextAutoIndex;
     private volatile int autoStartId;
     private final AtomicBoolean failoverQueued = new AtomicBoolean(false);
+    private final java.util.Set<String> triedServerEndpoints = new java.util.HashSet<>();
+    private static final String VPN_GATE_API = "https://www.vpngate.net/api/iphone/";
 
     private void ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
@@ -150,6 +158,7 @@ public final class RahYabVpnService extends VpnService {
                     return;
                 }
                 if (profiles != null && !profiles.isEmpty()) {
+                    synchronized (triedServerEndpoints) { triedServerEndpoints.clear(); }
                     runAutoSearch(profiles, 0, startId);
                 } else {
                     startSingleProfile(profile);
@@ -195,9 +204,10 @@ public final class RahYabVpnService extends VpnService {
             int i = (begin + offset) % count;
             if (!autoSearchEnabled || serviceDestroyed) return;
             String profile = autoProfiles.get(i);
+            String endpoint = profileEndpoint(profile);
+            synchronized (triedServerEndpoints) { if (!endpoint.isEmpty()) triedServerEndpoints.add(endpoint); }
             CountDownLatch signal = new CountDownLatch(1);
             attemptConnected = false;
-            String endpoint = profileEndpoint(profile);
             String progress = "در حال آزمایش سرور " + (i + 1) + " از " + count
                     + (endpoint.isEmpty() ? "" : " — " + endpoint)
                     + "؛ حداکثر ۱۲ ثانیه";
@@ -251,16 +261,87 @@ public final class RahYabVpnService extends VpnService {
             appendAutoHistory("AUTO_SEARCH_NEXT", "سرور " + (i + 1)
                     + " موفق نشد؛ انتقال به سرور بعدی");
         }
-        autoSearchEnabled = false;
-        autoConnected = false;
-        setLampState("disconnected");
+        if (!autoSearchEnabled || serviceDestroyed) return;
+        appendAutoHistory("AUTO_REFRESH", "این نوبت تمام شد؛ دریافت ۴۰ سرور تازه آغاز می‌شود");
+        updateStatus("۴۰ سرور این نوبت موفق نشدند؛ در حال دریافت ۴۰ سرور تازه…");
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                .putString("session_start_result", "پس از بررسی " + count
-                        + " سرور، اتصال واقعی برقرار نشد.").apply();
-        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                .putString("session_start_result", "جست‌وجو تمام شد؛ هیچ سروری وصل نشد.").apply();
-        updateStatus("جست‌وجو تمام شد؛ هیچ‌یک از " + count
-                + " سرور اتصال واقعی برقرار نکرد. می‌توانید بعداً دوباره جست‌وجو کنید.");
+                .putString("session_start_result", "۴۰ سرور بررسی شد؛ در حال دریافت فهرست تازه…").apply();
+        ArrayList<String> freshProfiles = fetchFreshProfiles(40);
+        if (!autoSearchEnabled || serviceDestroyed) return;
+        if (freshProfiles.isEmpty()) {
+            autoSearchEnabled = false;
+            autoConnected = false;
+            setLampState("disconnected");
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("session_start_result", "سرور تازه‌ای از منبع دریافت نشد؛ بعداً دوباره تلاش کنید.").apply();
+            updateStatus("سرور تازه‌ای دریافت نشد؛ منبع فعلاً پاسخ‌گو نیست یا سرور جدیدی باقی نمانده است.");
+            return;
+        }
+        autoProfiles = new ArrayList<>(freshProfiles);
+        appendAutoHistory("AUTO_REFRESH_READY", freshProfiles.size() + " سرور تازه دریافت شد");
+        runAutoSearch(freshProfiles, 0, startId);
+    }
+
+    private ArrayList<String> fetchFreshProfiles(int wanted) {
+        ArrayList<String> profiles = new ArrayList<>();
+        String[] sources = new String[] { VPN_GATE_API,
+                "https://cdn.jsdelivr.net/gh/GeorgeXie2333/vpngate-list-mirror@latest/data/vpngate.csv" };
+        for (String source : sources) {
+            HttpURLConnection connection = null;
+            BufferedReader reader = null;
+            try {
+                connection = (HttpURLConnection) new URL(source).openConnection();
+                connection.setConnectTimeout(8000);
+                connection.setReadTimeout(10000);
+                connection.setRequestProperty("User-Agent", "RahYabVPN/2.0");
+                if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) continue;
+                reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), "UTF-8"));
+                String line; boolean header = false; int bytes = 0;
+                while ((line = reader.readLine()) != null && profiles.size() < wanted) {
+                    bytes += line.length();
+                    if (bytes > 8 * 1024 * 1024) break;
+                    if (line.startsWith("#HostName")) { header = true; continue; }
+                    if (!header || line.startsWith("#") || line.trim().isEmpty()) continue;
+                    java.util.List<String> fields = parseCsvFields(line);
+                    if (fields.size() < 15) continue;
+                    try {
+                        byte[] raw = Base64.decode(fields.get(14).trim(), Base64.DEFAULT);
+                        if (raw.length == 0 || raw.length > 256 * 1024) continue;
+                        String config = new String(raw, "UTF-8");
+                        if (!config.contains("client") || !config.contains("remote ")) continue;
+                        String endpoint = profileEndpoint(config);
+                        synchronized (triedServerEndpoints) {
+                            if (endpoint.isEmpty() || triedServerEndpoints.contains(endpoint)) continue;
+                        }
+                        profiles.add(config);
+                    } catch (IllegalArgumentException ignored) { }
+                }
+                if (!profiles.isEmpty()) break;
+            } catch (Exception ignored) {
+            } finally {
+                if (reader != null) try { reader.close(); } catch (IOException ignored) { }
+                if (connection != null) connection.disconnect();
+            }
+        }
+        return profiles;
+    }
+
+    private java.util.List<String> parseCsvFields(String line) {
+        ArrayList<String> fields = new ArrayList<>();
+        StringBuilder field = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '"') {
+                if (quoted && i + 1 < line.length() && line.charAt(i + 1) == '"') {
+                    field.append('"'); i++;
+                } else quoted = !quoted;
+            } else if (c == ',' && !quoted) {
+                fields.add(field.toString()); field.setLength(0);
+            } else field.append(c);
+        }
+        fields.add(field.toString());
+        return fields;
     }
 
     private String profileEndpoint(String profile) {
