@@ -19,8 +19,8 @@ public final class SingBoxProfile {
             "vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic",
             "socks", "http", "wireguard"
     ));
-    private static final Set<String> NON_PROXY_TYPES = new HashSet<>(Arrays.asList(
-            "direct", "block", "dns", "selector", "urltest"
+    private static final Set<String> GROUP_TYPES = new HashSet<>(Arrays.asList(
+            "selector", "urltest"
     ));
 
     private final String rawJson;
@@ -44,20 +44,18 @@ public final class SingBoxProfile {
             throw new JSONException("فهرست outbounds در پیکربندی پیدا نشد");
         }
 
-        String selectedTag = root.optString("final", "");
-        JSONObject selected = findByTag(outbounds, selectedTag);
-        if (selected == null) {
-            selected = findConnectableOutbound(outbounds);
+        String finalTag = root.optString("final", "").trim();
+        JSONObject selected = findByTag(outbounds, finalTag);
+        if (selected != null) {
+            selected = resolveOutbound(outbounds, selected, new HashSet<String>());
+        } else {
+            selected = findFirstConnectable(outbounds);
         }
         if (selected == null) {
-            throw new JSONException("هیچ خروجی پشتیبانی‌شده‌ای در پیکربندی پیدا نشد");
+            throw new JSONException("خروجی نهایی به یک سرور پشتیبانی‌شده نمی‌رسد");
         }
 
         String type = selected.optString("type", "").trim().toLowerCase();
-        if (!CONNECTABLE_TYPES.contains(type)) {
-            throw new JSONException("نوع اتصال در این نسخه پشتیبانی نمی‌شود: " + type);
-        }
-
         String tag = selected.optString("tag", type).trim();
         if (tag.isEmpty()) tag = type;
 
@@ -74,6 +72,27 @@ public final class SingBoxProfile {
         return new SingBoxProfile(rawJson, tag, type);
     }
 
+    private static JSONObject resolveOutbound(JSONArray all, JSONObject candidate,
+                                                Set<String> visited) {
+        if (candidate == null) return null;
+        String type = candidate.optString("type", "").trim().toLowerCase();
+        if (CONNECTABLE_TYPES.contains(type)) return candidate;
+        if (!GROUP_TYPES.contains(type)) return null;
+
+        String tag = candidate.optString("tag", "").trim();
+        if (!tag.isEmpty() && !visited.add(tag)) return null;
+
+        JSONArray members = candidate.optJSONArray("outbounds");
+        if (members == null) return null;
+        for (int i = 0; i < members.length(); i++) {
+            String memberTag = members.optString(i, "").trim();
+            JSONObject member = findByTag(all, memberTag);
+            JSONObject resolved = resolveOutbound(all, member, new HashSet<>(visited));
+            if (resolved != null) return resolved;
+        }
+        return null;
+    }
+
     private static JSONObject findByTag(JSONArray outbounds, String tag) {
         if (tag == null || tag.trim().isEmpty()) return null;
         for (int i = 0; i < outbounds.length(); i++) {
@@ -83,12 +102,11 @@ public final class SingBoxProfile {
         return null;
     }
 
-    private static JSONObject findConnectableOutbound(JSONArray outbounds) {
+    private static JSONObject findFirstConnectable(JSONArray outbounds) {
         for (int i = 0; i < outbounds.length(); i++) {
             JSONObject item = outbounds.optJSONObject(i);
-            if (item == null) continue;
-            String type = item.optString("type", "").trim().toLowerCase();
-            if (CONNECTABLE_TYPES.contains(type) && !NON_PROXY_TYPES.contains(type)) return item;
+            if (item != null && CONNECTABLE_TYPES.contains(
+                    item.optString("type", "").trim().toLowerCase())) return item;
         }
         return null;
     }
