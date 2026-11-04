@@ -17,8 +17,15 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
     }
 }
 
 dependencies {
+    // Official embeddable WireGuard tunnel implementation (Maven Central).
+    implementation 'com.wireguard.android:tunnel:1.0.20260102'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+
+    // sing-box Android binding; the AAR is fetched by the JitPack build script.
+    implementation 'com.github.singbox-android:libbox:1.14.0'
 }
