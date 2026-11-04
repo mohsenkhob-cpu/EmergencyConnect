@@ -31,5 +31,5 @@ dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
 
     // sing-box Android binding; the AAR is fetched by the JitPack build script.
-    implementation 'com.github.singbox-android:libbox:1.14.3'
+    implementation 'com.github.singbox-android:libbox:1.14.0'
 }
