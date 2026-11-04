@@ -17,6 +17,8 @@ import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import java.net.Inet6Address
 import java.net.NetworkInterface as JavaNetworkInterface
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Minimal Android host for the official libbox engine.
@@ -26,6 +28,9 @@ class SingBoxVpnService : VpnService() {
     private var server: CommandServer? = null
     private var tunnel: ParcelFileDescriptor? = null
     private var profile: String? = null
+    private val lifecycle: ExecutorService = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "RahYab-singbox-lifecycle").apply { isDaemon = true }
+    }
     private val channel = "rahyab-singbox"
     private val notificationId = 7301
 
@@ -40,30 +45,23 @@ class SingBoxVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            stopEngine()
-            sendEvent(EVENT_STOPPED)
-            stopSelf()
+            lifecycle.execute { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf(startId) }
             return START_NOT_STICKY
         }
-        profile = intent?.getStringExtra(EXTRA_PROFILE)
-        if (profile.isNullOrBlank()) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        val profileSnapshot = profile ?: run {
-            stopSelf(startId)
-            return START_NOT_STICKY
-        }
+        val requestedProfile = intent?.getStringExtra(EXTRA_PROFILE)
+        if (requestedProfile.isNullOrBlank()) { stopSelf(startId); return START_NOT_STICKY }
+        profile = requestedProfile
         try {
             startForeground(notificationId, notification("در حال راه‌اندازی موتور VPN…"))
         } catch (e: Exception) {
             Log.e(TAG, "could not promote VPN service to foreground", e)
-            sendEvent(EVENT_ERROR, "اندروید اجازه شروع سرویس VPN را نداد: ${e.message ?: e.javaClass.simpleName}")
+            sendEvent(EVENT_ERROR, "اندروید اجازه شروع سرویس VPN را نداد: " + (e.message ?: e.javaClass.simpleName))
             stopSelf(startId)
             return START_NOT_STICKY
         }
         sendEvent(EVENT_STARTING)
-        Thread {
+        lifecycle.execute {
+            var created: CommandServer? = null
             try {
                 val setup = SetupOptions().apply {
                     basePath = filesDir.absolutePath
@@ -76,34 +74,31 @@ class SingBoxVpnService : VpnService() {
                     appMarketingVersion = "0.2.0"
                 }
                 Libbox.setup(setup)
-
-                val platform = Proxy.newProxyInstance(
-                    PlatformInterface::class.java.classLoader,
-                    arrayOf(PlatformInterface::class.java),
-                    PlatformHandler()
-                ) as PlatformInterface
-
-                val callbacks = Proxy.newProxyInstance(
-                    CommandServerHandler::class.java.classLoader,
-                    arrayOf(CommandServerHandler::class.java),
-                    CommandHandler()
-                ) as CommandServerHandler
-
-                val instance = CommandServer(callbacks, platform)
-                server = instance
-                instance.start()
-                instance.startOrReloadService(profileSnapshot, OverrideOptions())
-                Log.i(TAG, "libbox accepted the profile and started its service")
+                val active = server
+                if (active != null) {
+                    active.startOrReloadService(requestedProfile, OverrideOptions())
+                } else {
+                    val platform = Proxy.newProxyInstance(PlatformInterface::class.java.classLoader, arrayOf(PlatformInterface::class.java), PlatformHandler()) as PlatformInterface
+                    val callbacks = Proxy.newProxyInstance(CommandServerHandler::class.java.classLoader, arrayOf(CommandServerHandler::class.java), CommandHandler()) as CommandServerHandler
+                    created = CommandServer(callbacks, platform)
+                    created.start()
+                    created.startOrReloadService(requestedProfile, OverrideOptions())
+                    server = created
+                    created = null
+                }
+                Log.i(TAG, "libbox accepted the profile and started/reloaded its service")
                 updateNotification("موتور VPN راه‌اندازی شد؛ وضعیت مسیر اینترنت در حال بررسی است")
                 sendEvent(EVENT_ENGINE_STARTED)
             } catch (e: Exception) {
                 Log.e(TAG, "sing-box startup failed", e)
-                updateNotification("خطای راه‌اندازی: ${e.message ?: e.javaClass.simpleName}")
+                runCatching { created?.closeService() }
+                runCatching { created?.close() }
+                updateNotification("خطای راه‌اندازی: " + (e.message ?: e.javaClass.simpleName))
                 stopEngine()
                 sendEvent(EVENT_ERROR, e.message ?: e.javaClass.simpleName)
-                stopSelf()
+                stopSelf(startId)
             }
-        }.start()
+        }
         return START_NOT_STICKY
     }
 
@@ -137,12 +132,15 @@ class SingBoxVpnService : VpnService() {
         override fun invoke(proxy: Any, method: Method, args: Array<out Any?>?): Any? {
             return when (method.name) {
                 "serviceStop" -> {
-                    stopEngine()
-                    stopSelf()
+                    lifecycle.execute { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf() }
                     null
                 }
                 "serviceReload" -> {
-                    profile?.let { server?.startOrReloadService(it, OverrideOptions()) }
+                    val currentProfile = profile
+                    if (!currentProfile.isNullOrBlank()) lifecycle.execute {
+                        runCatching { server?.startOrReloadService(currentProfile, OverrideOptions()) }
+                            .onFailure { Log.e(TAG, "sing-box reload failed", it) }
+                    }
                     null
                 }
                 "getSystemProxyStatus" -> SystemProxyStatus().apply {
@@ -158,6 +156,7 @@ class SingBoxVpnService : VpnService() {
         }
     }
 
+    @Synchronized
     private fun openTun(options: TunOptions): Int {
         if (VpnService.prepare(this) != null) error("مجوز VPN صادر نشده است")
         val builder = Builder().setSession("راه‌یاب").setMtu(options.mtu)
@@ -254,6 +253,7 @@ class SingBoxVpnService : VpnService() {
         else -> null
     }
 
+    @Synchronized
     private fun stopEngine() {
         runCatching { server?.closeService() }.onFailure { Log.w(TAG, "closeService", it) }
         runCatching { server?.close() }.onFailure { Log.w(TAG, "close", it) }
@@ -294,12 +294,12 @@ class SingBoxVpnService : VpnService() {
 
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
     override fun onRevoke() {
-        stopEngine()
-        stopSelf()
+        lifecycle.execute { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf() }
         super.onRevoke()
     }
     override fun onDestroy() {
-        stopEngine()
+        lifecycle.execute { stopEngine() }
+        lifecycle.shutdown()
         super.onDestroy()
     }
 
