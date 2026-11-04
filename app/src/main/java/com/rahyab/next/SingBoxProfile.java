@@ -221,7 +221,7 @@ public final class SingBoxProfile {
         outbounds.put(server);
         outbounds.put(new JSONObject().put("type", "direct").put("tag", "direct"));
         JSONObject tun = new JSONObject().put("type", "tun").put("tag", "tun-in")
-                .put("inet4_address", new JSONArray().put("172.19.0.1/30"))
+                .put("address", new JSONArray().put("172.19.0.1/30"))
                 .put("mtu", 1400).put("auto_route", true).put("strict_route", true);
         JSONObject root = new JSONObject();
         root.put("log", new JSONObject().put("level", "info"));
@@ -325,7 +325,7 @@ public final class SingBoxProfile {
         JSONArray outbounds = new JSONArray().put(server)
                 .put(new JSONObject().put("type", "direct").put("tag", "direct"));
         JSONObject tun = new JSONObject().put("type", "tun").put("tag", "tun-in")
-                .put("inet4_address", new JSONArray().put("172.19.0.1/30"))
+                .put("address", new JSONArray().put("172.19.0.1/30"))
                 .put("mtu", 1400).put("auto_route", true).put("strict_route", true);
         return new JSONObject().put("log", new JSONObject().put("level", "info"))
                 .put("inbounds", new JSONArray().put(tun)).put("outbounds", outbounds)
