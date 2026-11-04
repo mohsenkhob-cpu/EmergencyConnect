@@ -41,6 +41,7 @@ class SingBoxVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             stopEngine()
+            sendEvent(EVENT_STOPPED)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -50,6 +51,7 @@ class SingBoxVpnService : VpnService() {
             return START_NOT_STICKY
         }
         startForeground(notificationId, notification("در حال راه‌اندازی موتور VPN…"))
+        sendEvent(EVENT_STARTING)
         Thread {
             try {
                 val setup = SetupOptions().apply {
@@ -82,10 +84,12 @@ class SingBoxVpnService : VpnService() {
                 instance.startOrReloadService(profile!!, OverrideOptions())
                 Log.i(TAG, "libbox accepted the profile and started its service")
                 updateNotification("موتور VPN راه‌اندازی شد؛ وضعیت مسیر اینترنت در حال بررسی است")
+                sendEvent(EVENT_ENGINE_STARTED)
             } catch (e: Exception) {
                 Log.e(TAG, "sing-box startup failed", e)
                 updateNotification("خطای راه‌اندازی: ${e.message ?: e.javaClass.simpleName}")
                 stopEngine()
+                sendEvent(EVENT_ERROR, e.message ?: e.javaClass.simpleName)
                 stopSelf()
             }
         }.start()
@@ -183,6 +187,7 @@ class SingBoxVpnService : VpnService() {
         val descriptor = builder.establish() ?: error("Android نتوانست تونل VPN را بسازد")
         tunnel?.close()
         tunnel = descriptor
+        sendEvent(EVENT_TUN_ESTABLISHED)
         return descriptor.fd
     }
 
@@ -247,6 +252,13 @@ class SingBoxVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE) else @Suppress("DEPRECATION") stopForeground(true)
     }
 
+    private fun sendEvent(event: String, detail: String? = null) {
+        val intent = Intent(ACTION_EVENT).setPackage(packageName)
+            .putExtra(EXTRA_EVENT, event)
+        if (detail != null) intent.putExtra(EXTRA_DETAIL, detail)
+        sendBroadcast(intent)
+    }
+
     private fun notification(message: String): Notification {
         val pending = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
@@ -284,6 +296,14 @@ class SingBoxVpnService : VpnService() {
         private const val TAG = "RahYabSingBox"
         private const val EXTRA_PROFILE = "rahyab.profile"
         private const val ACTION_STOP = "com.rahyab.next.STOP_SINGBOX"
+        const val ACTION_EVENT = "com.rahyab.next.SINGBOX_EVENT"
+        const val EXTRA_EVENT = "rahyab.event"
+        const val EXTRA_DETAIL = "rahyab.detail"
+        private const val EVENT_STARTING = "STARTING"
+        private const val EVENT_ENGINE_STARTED = "ENGINE_STARTED"
+        private const val EVENT_TUN_ESTABLISHED = "TUN_ESTABLISHED"
+        private const val EVENT_STOPPED = "STOPPED"
+        private const val EVENT_ERROR = "ERROR"
 
         @JvmStatic
         fun start(context: Context, profile: String) {
