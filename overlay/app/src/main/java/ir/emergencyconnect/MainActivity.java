@@ -24,14 +24,25 @@ public class MainActivity extends Activity {
     final String API = "https://www.vpngate.net/api/iphone/";
     final ExecutorService worker = Executors.newSingleThreadExecutor();
     final ArrayList<Server> servers = new ArrayList<>();
-    LinearLayout list; TextView status; Button refresh;
+    LinearLayout list; TextView status; Button refresh; ProgressBar searchSpinner; TextView searchDetail;
     Server selectedServer; TextView liveSpeedView;
     final Handler speedHandler = new Handler(Looper.getMainLooper());
     long lastRxBytes=-1, lastTxBytes=-1;
     final Runnable speedPoll = new Runnable(){ public void run(){ updateLiveSpeed(); speedHandler.postDelayed(this,1000); }};
     TextView lampConnected, lampSearching, lampDisconnected;
     final Handler lampHandler = new Handler(Looper.getMainLooper());
-    final Runnable lampPoll = new Runnable(){ public void run(){ updateConnectionLamps(); lampHandler.postDelayed(this,1000); }};
+    final Runnable lampPoll = new Runnable(){ public void run(){ updateConnectionLamps(); updateSearchProgress(); lampHandler.postDelayed(this,700); }};
+    void updateSearchProgress() {
+        if (searchSpinner == null || searchDetail == null) return;
+        android.content.SharedPreferences d = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        String state = d.getString("connection_lamp_state", "disconnected");
+        String detail = d.getString("session_start_result", "");
+        boolean active = "searching".equals(state);
+        searchSpinner.setVisibility(active ? android.view.View.VISIBLE : android.view.View.GONE);
+        searchDetail.setText(detail == null || detail.isEmpty() ? "در حال جست‌وجو…" : detail);
+        searchSpinner.setIndeterminate(active);
+        searchSpinner.getIndeterminateDrawable().setColorFilter(teal, android.graphics.PorterDuff.Mode.SRC_IN);
+    }
     int navy=Color.rgb(16,42,67), teal=Color.rgb(22,125,101);
     private static final int VPN_PERMISSION_REQUEST = 7412;
     private String pendingVpnProfile;
@@ -55,6 +66,20 @@ public class MainActivity extends Activity {
         LinearLayout hero=new LinearLayout(this); hero.setOrientation(1); hero.setPadding(20,20,20,20); hero.setBackground(shape(navy));
         hero.addView(txt("راه‌یاب VPN",26,Color.WHITE,true)); hero.addView(txt("یافتن و آماده‌سازی سرورهای VPN Gate",15,Color.LTGRAY,false)); root.addView(hero);
         status=txt("برای دریافت فهرست سرورها دکمه زیر را بزنید.",15,navy,true); status.setPadding(5,18,5,12); root.addView(status);
+        LinearLayout progressRow = new LinearLayout(this);
+        progressRow.setOrientation(LinearLayout.HORIZONTAL);
+        progressRow.setGravity(Gravity.CENTER_VERTICAL);
+        progressRow.setPadding(10,8,10,8);
+        progressRow.setBackground(shape(Color.WHITE));
+        searchSpinner = new ProgressBar(this);
+        searchSpinner.setIndeterminate(true);
+        progressRow.addView(searchSpinner, new LinearLayout.LayoutParams(32,32));
+        searchDetail = txt("در حال آماده‌سازی جست‌وجو…",13,teal,true);
+        LinearLayout.LayoutParams detailParams = new LinearLayout.LayoutParams(0,-2,1f);
+        detailParams.setMargins(12,0,0,0);
+        progressRow.addView(searchDetail,detailParams);
+        progressRow.setVisibility(android.view.View.GONE);
+        root.addView(progressRow);
         LinearLayout lamps = new LinearLayout(this);
         lamps.setOrientation(LinearLayout.HORIZONTAL);
         lamps.setGravity(Gravity.CENTER);
@@ -175,6 +200,10 @@ public class MainActivity extends Activity {
     void loadServers(){
         refresh.setEnabled(false);
         status.setText("در حال دریافت سریع فهرست سرورها…");
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("connection_lamp_state","searching")
+                .putString("session_start_result","در حال دریافت فهرست سرورها از منبع اصلی…").apply();
+        updateSearchProgress();
         list.removeAllViews();
         selectedServer=null;
         worker.execute(()->{
@@ -259,6 +288,10 @@ public class MainActivity extends Activity {
             runOnUiThread(()->{
                 if(isFinishing()||isDestroyed()) return;
                 refresh.setEnabled(true);
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("connection_lamp_state","disconnected")
+                        .putString("session_start_result", best.isEmpty() ? "دریافت سرورها ناموفق بود." : "فهرست سرورها آماده است.").apply();
+                updateSearchProgress();
                 servers.clear();
                 servers.addAll(best);
                 if(best.isEmpty()) {
