@@ -357,7 +357,13 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         const bool failed = env->ExceptionCheck();
         if (failed) env->ExceptionClear();
         env->DeleteLocalRef(service);
-        return !failed && protected_socket == JNI_TRUE;
+        const bool ok = !failed && protected_socket == JNI_TRUE;
+        // Record the result without exposing the descriptor or endpoint.
+        reportDiagnostic("TRANSPORT_SOCKET_PROTECT",
+                ok ? "Android VpnService.protect() succeeded."
+                   : "Android VpnService.protect() failed or raised an exception.",
+                !ok, !ok);
+        return ok;
     }
 
     bool pause_on_connection_timeout() override {
@@ -429,7 +435,17 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
                 lower.find("tun builder") != std::string::npos ||
                 lower.find("route") != std::string::npos ||
                 lower.find("options error") != std::string::npos ||
-                lower.find("incoming packet") != std::string::npos;
+                lower.find("incoming packet") != std::string::npos ||
+                lower.find("handshake") != std::string::npos ||
+                lower.find("control channel") != std::string::npos ||
+                lower.find("peer connection") != std::string::npos ||
+                lower.find("peer-id") != std::string::npos ||
+                lower.find("tls error") != std::string::npos ||
+                lower.find("tls handshake") != std::string::npos ||
+                lower.find("tls key negotiation") != std::string::npos ||
+                lower.find("ping-restart") != std::string::npos ||
+                lower.find("inactivity timeout") != std::string::npos ||
+                lower.find("server poll") != std::string::npos;
         const bool sensitive =
                 lower.find("password") != std::string::npos ||
                 lower.find("username") != std::string::npos ||
@@ -636,6 +652,8 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession(
             session->worker = std::thread([session]() {
                 const auto client = session->client;
                 try {
+                    client->reportDiagnostic("NATIVE_CONNECT_BEGIN",
+                            "OpenVPN 3 connect() worker entered.", false, false);
                     const auto result = client->connect();
                     std::string detail = result.message;
                     if (detail.empty()) {
