@@ -30,7 +30,7 @@ public final class RahYabVpnService extends VpnService {
     public static final String ACTION_STOP = "ir.emergencyconnect.engine.STOP_VPN";
     public static final String EXTRA_PROFILE = "ir.emergencyconnect.engine.PROFILE";
     public static final String EXTRA_PROFILES = "ir.emergencyconnect.engine.PROFILES";
-    private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 18;
+    private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 12;
     private static final String CHANNEL_ID = "rah_yab_vpn_status";
     private static final int NOTIFICATION_ID = 7301;
     private ParcelFileDescriptor tunInterface;
@@ -537,8 +537,8 @@ public final class RahYabVpnService extends VpnService {
                 waiting.countDown();
             }
         }
-        if (autoConnected && ("NATIVE_CONNECT_RESULT".equals(name)
-                || "NATIVE_CONNECT_EXCEPTION".equals(name) || "EXITING".equals(name))) {
+        if (autoConnected && ("NATIVE_CONNECT_EXCEPTION".equals(name)
+                || "DISCONNECTED".equals(name) || "EXITING".equals(name))) {
             scheduleAutoFailover();
         }
         if ("CONNECTED".equals(name) && !error && !fatal) {
