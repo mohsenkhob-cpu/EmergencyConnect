@@ -412,6 +412,34 @@ public final class RahYabVpnService extends VpnService {
         }
     }
 
+    /**
+     * Handle VPN consent revocation and replacement by another VPN.
+     * Stop the native worker before closing the TUN descriptor. Native stop
+     * joins its worker, so perform it on the service executor, not the main
+     * thread that receives this callback.
+     */
+    @Override
+    public void onRevoke() {
+        serviceDestroyed = true;
+        setLampState("disconnected");
+        try {
+            sessionExecutor.execute(() -> {
+                synchronized (nativeSessionLock) {
+                    OpenVpn3Bridge.stopSession();
+                }
+                closeTun();
+                if (foregroundStarted) {
+                    stopForeground(true);
+                    foregroundStarted = false;
+                }
+                stopSelf();
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // onDestroy has already shut down the executor and owns cleanup.
+        }
+        super.onRevoke();
+    }
+
     @Override
     public void onDestroy() {
         serviceDestroyed = true;
