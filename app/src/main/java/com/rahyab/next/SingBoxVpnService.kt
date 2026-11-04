@@ -285,11 +285,13 @@ class SingBoxVpnService : VpnService() {
         private const val EXTRA_PROFILE = "rahyab.profile"
         private const val ACTION_STOP = "com.rahyab.next.STOP_SINGBOX"
 
+        @JvmStatic
         fun start(context: Context, profile: String) {
             val intent = Intent(context, SingBoxVpnService::class.java).putExtra(EXTRA_PROFILE, profile)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
         }
 
+        @JvmStatic
         fun stop(context: Context) {
             context.startService(Intent(context, SingBoxVpnService::class.java).setAction(ACTION_STOP))
         }
