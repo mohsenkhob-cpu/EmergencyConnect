@@ -95,7 +95,7 @@ public class MainActivity extends Activity {
         refresh=new Button(this); refresh.setText("دریافت و به‌روزرسانی سرورها"); refresh.setAllCaps(false); refresh.setTextColor(Color.WHITE); refresh.setBackground(shape(teal)); root.addView(refresh); refresh.setOnClickListener(v->loadServers());
 
         Button smartConnect=new Button(this);
-        smartConnect.setText("جست‌وجوی سریع و اتصال خودکار (تا ۸ سرور)");
+        smartConnect.setText("جست‌وجوی هوشمند و خودکار (۴۰ سرور در هر نوبت)");
         smartConnect.setAllCaps(false);
         smartConnect.setTextColor(Color.WHITE);
         smartConnect.setBackground(shape(navy));
@@ -413,7 +413,7 @@ public class MainActivity extends Activity {
             if (server != null && server.config != null && !server.config.trim().isEmpty()) {
                 profiles.add(server.config);
             }
-            if (profiles.size() >= 8) break;
+            if (profiles.size() >= 40) break;
         }
         if (profiles.isEmpty()) {
             status.setText("پروفایل معتبری برای جست‌وجوی خودکار وجود ندارد.");
