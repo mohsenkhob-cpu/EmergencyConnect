@@ -27,7 +27,7 @@ import java.util.concurrent.Executors
 class SingBoxVpnService : VpnService() {
     private var server: CommandServer? = null
     private var tunnel: ParcelFileDescriptor? = null
-    private var profile: String? = null
+    @Volatile private var profile: String? = null
     private val lifecycle: ExecutorService = Executors.newSingleThreadExecutor { task ->
         Thread(task, "RahYab-singbox-lifecycle").apply { isDaemon = true }
     }
@@ -253,13 +253,14 @@ class SingBoxVpnService : VpnService() {
         else -> null
     }
 
-    @Synchronized
     private fun stopEngine() {
         runCatching { server?.closeService() }.onFailure { Log.w(TAG, "closeService", it) }
         runCatching { server?.close() }.onFailure { Log.w(TAG, "close", it) }
         server = null
-        runCatching { tunnel?.close() }
-        tunnel = null
+        synchronized(this) {
+            runCatching { tunnel?.close() }
+            tunnel = null
+        }
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE) else @Suppress("DEPRECATION") stopForeground(true)
     }
 
