@@ -102,7 +102,7 @@ public final class RahYabVpnService extends VpnService {
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                         .putString("foreground_service_type", "systemExempted")
                         .commit();
-            } catch (android.app.ForegroundServiceTypeNotAllowedException notActiveYet) {
+            } catch (SecurityException notActiveYet) {
                 // During initial VPN setup the TUN is not active yet, so some
                 // Android builds do not grant the VPN system exemption until
                 // after Builder.establish(). Use the declared special-use
