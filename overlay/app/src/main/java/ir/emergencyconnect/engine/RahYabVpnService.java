@@ -127,6 +127,12 @@ public final class RahYabVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("service_start_command_entered",
+                        new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
+                                java.util.Locale.US).format(new java.util.Date())
+                                + " (action=" + String.valueOf(action) + ")")
+                .commit();
 
         // Android requires a foreground service to promote itself immediately
         // after startForegroundService(). Do this before preferences, extras,
