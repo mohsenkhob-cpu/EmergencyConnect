@@ -190,6 +190,16 @@ public class MainActivity extends Activity {
         page.addView(pasteLinkButton, pasteLinkParams);
         pasteLinkButton.setOnClickListener(v -> showOtherImportDialog());
 
+        Button vlessButton = new Button(this);
+        vlessButton.setText("افزودن لینک VLESS");
+        vlessButton.setAllCaps(false);
+        vlessButton.setTextColor(Color.WHITE);
+        vlessButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
+        LinearLayout.LayoutParams vlessParams = new LinearLayout.LayoutParams(-1, dp(54));
+        vlessParams.topMargin = dp(8);
+        page.addView(vlessButton, vlessParams);
+        vlessButton.setOnClickListener(v -> showVlessImportDialog());
+
         singBoxConnectButton = new Button(this);
         singBoxConnectButton.setText("اتصال با پروفایل sing-box");
         singBoxConnectButton.setAllCaps(false);
@@ -211,7 +221,7 @@ public class MainActivity extends Activity {
         page.addView(savedServersButton, savedParams);
         savedServersButton.setOnClickListener(v -> showSavedServers());
 
-        TextView note = label("در این نسخه، اتصال آزمایشی WireGuard پیاده‌سازی شده است. سایر پروتکل‌ها هنوز فعال نیستند.",
+        TextView note = label("پروفایل‌های WireGuard، sing-box، VLESS، VMess و Trojan قابل وارد کردن هستند. پشتیبانی هر قالب به ساختار لینک یا فایل بستگی دارد.",
                 12, Color.rgb(235, 190, 115), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
         noteParams.topMargin = dp(24);
