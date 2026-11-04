@@ -183,12 +183,12 @@ public final class RahYabVpnService extends VpnService {
         autoConnected = false;
         int count = autoProfiles.size();
         int begin = Math.max(0, Math.min(startIndex, count - 1));
-        for (int i = begin; i < count; i++) {
+        for (int offset = 0; offset < count; offset++) {
+            int i = (begin + offset) % count;
             if (!autoSearchEnabled || serviceDestroyed) return;
             String profile = autoProfiles.get(i);
             CountDownLatch signal = new CountDownLatch(1);
             attemptConnected = false;
-            attemptSignal = signal;
             updateStatus("جست‌وجوی هوشمند: آزمایش سرور " + (i + 1)
                     + " از " + count + "؛ حداکثر ۱۸ ثانیه");
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
@@ -201,6 +201,7 @@ public final class RahYabVpnService extends VpnService {
                     return;
                 }
                 OpenVpn3Bridge.stopSession();
+                attemptSignal = signal;
                 result = OpenVpn3Bridge.startSession(profile);
             }
             boolean accepted = result != null
@@ -524,6 +525,7 @@ public final class RahYabVpnService extends VpnService {
             } else if (error || fatal || "NATIVE_CONNECT_RESULT".equals(name)
                     || "NATIVE_CONNECT_EXCEPTION".equals(name)
                     || "EXITING".equals(name)) {
+                attemptConnected = false;
                 waiting.countDown();
             }
         }
