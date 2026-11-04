@@ -532,6 +532,16 @@ public class MainActivity extends Activity {
         pendingVpnProfiles = null;
         if ((profile == null || profile.trim().isEmpty())
                 && (profiles == null || profiles.isEmpty())) return;
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .remove("service_on_create")
+                .remove("service_start_received")
+                .remove("service_start_error")
+                .remove("native_bind_result")
+                .remove("native_last_event")
+                .remove("native_event_history")
+                .putString("native_bind_result", "در انتظار شروع سرویس")
+                .putString("session_start_result", "درخواست شروع سرویس ارسال می‌شود…")
+                .commit();
         Intent service = new Intent(this, RahYabVpnService.class);
         service.setAction(RahYabVpnService.ACTION_START);
         if (profiles != null && !profiles.isEmpty()) {
@@ -562,7 +572,7 @@ public class MainActivity extends Activity {
                             + "\\nتاریخچه رویدادها:\\n" + eventHistory
                             + "\\nتوجه: این گزارش به‌تنهایی تأیید اتصال VPN نیست.");
                 }
-            }, 2500);
+            }, 6000);
         } catch (RuntimeException error) {
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("connection_lamp_state", "disconnected").apply();
