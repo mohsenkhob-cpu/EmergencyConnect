@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <openssl/evp.h>
+#include <arpa/inet.h>
 
 #include <exception>
 #include <mutex>
@@ -152,9 +153,21 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
             addresses.size() >= 32 || prefix < 0 || prefix > max_prefix) {
             return false;
         }
-        // Android Builder.addAddress() cannot express OpenVPN's gateway
-        // and net30 point-to-point semantics. Do not silently drop them.
-        if (!gateway.empty() || net30) {
+        // Android VpnService.Builder.addAddress() accepts the local address
+        // and prefix, but has no peer/gateway parameter. OpenVPN 3 supplies
+        // gateway separately while tun_builder_add_route()/reroute_gw()
+        // supplies the actual Android routes. Preserve the address/prefix and
+        // validate the optional peer instead of rejecting normal subnet or
+        // net30 profiles.
+        if (!gateway.empty()) {
+            in_addr peer4{};
+            in6_addr peer6{};
+            const int peer_family = ipv6
+                    ? inet_pton(AF_INET6, gateway.c_str(), &peer6)
+                    : inet_pton(AF_INET, gateway.c_str(), &peer4);
+            if (peer_family != 1) return false;
+        }
+        if (net30 && (ipv6 || prefix != 30 || gateway.empty())) {
             unsupported_option_seen = true;
             return false;
         }
