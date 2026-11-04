@@ -105,6 +105,24 @@ public final class RahYabVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+
+        // Android requires a foreground service to promote itself immediately
+        // after startForegroundService(). Do this before preferences, extras,
+        // profile parsing, or executor submission so startup cannot time out.
+        if (!ACTION_STOP.equals(action)) {
+            try {
+                enterForeground();
+            } catch (RuntimeException error) {
+                String detail = error.getClass().getSimpleName() + ": "
+                        + (error.getMessage() == null ? "بدون توضیح" : error.getMessage());
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
+                        .edit().putString("service_start_error", detail).apply();
+                setLampState("disconnected");
+                stopSelf(startId);
+                return START_NOT_STICKY;
+            }
+        }
+
         if (ACTION_STOP.equals(action)) {
             autoSearchEnabled = false;
             autoConnected = false;
@@ -139,17 +157,6 @@ public final class RahYabVpnService extends VpnService {
             final ArrayList<String> profiles = intent.getStringArrayListExtra(EXTRA_PROFILES);
             if ((profile == null || profile.trim().isEmpty())
                     && (profiles == null || profiles.isEmpty())) {
-                stopSelf(startId);
-                return START_NOT_STICKY;
-            }
-            try {
-                enterForeground();
-            } catch (RuntimeException error) {
-                String detail = error.getClass().getSimpleName() + ": "
-                        + (error.getMessage() == null ? "بدون توضیح" : error.getMessage());
-                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
-                        .edit().putString("service_start_error", detail).apply();
-                setLampState("disconnected");
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
