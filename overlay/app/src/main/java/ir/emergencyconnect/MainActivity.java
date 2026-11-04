@@ -24,7 +24,11 @@ public class MainActivity extends Activity {
     final String API = "https://www.vpngate.net/api/iphone/";
     final ExecutorService worker = Executors.newSingleThreadExecutor();
     final ArrayList<Server> servers = new ArrayList<>();
-    LinearLayout list; TextView status; Button refresh;\n    Server selectedServer; TextView liveSpeedView;\n    final Handler speedHandler = new Handler(Looper.getMainLooper());\n    long lastRxBytes=-1, lastTxBytes=-1;\n    final Runnable speedPoll = new Runnable(){ public void run(){ updateLiveSpeed(); speedHandler.postDelayed(this,1000); }};
+    LinearLayout list; TextView status; Button refresh;
+    Server selectedServer; TextView liveSpeedView;
+    final Handler speedHandler = new Handler(Looper.getMainLooper());
+    long lastRxBytes=-1, lastTxBytes=-1;
+    final Runnable speedPoll = new Runnable(){ public void run(){ updateLiveSpeed(); speedHandler.postDelayed(this,1000); }};
     TextView lampConnected, lampSearching, lampDisconnected;
     final Handler lampHandler = new Handler(Looper.getMainLooper());
     final Runnable lampPoll = new Runnable(){ public void run(){ updateConnectionLamps(); lampHandler.postDelayed(this,1000); }};
