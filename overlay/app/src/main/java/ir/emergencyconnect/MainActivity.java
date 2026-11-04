@@ -150,6 +150,8 @@ public class MainActivity extends Activity {
             android.content.SharedPreferences diagnostics =
                     getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
             String report = "گزارش راه‌یاب VPN\\n"
+                    + "درخواست شروع سرویس: " + diagnostics.getString("service_start_requested", "ثبت نشده") + "\\n"
+                    + "ورود فرمان به سرویس: " + diagnostics.getString("service_start_command_entered", "ثبت نشده") + "\\n"
                     + "زمان آخرین شروع سرویس: " + diagnostics.getString("service_start_received", "ثبت نشده") + "\\n"
                     + "آخرین خطای جاوا: " + diagnostics.getString("last_java_crash", "ثبت نشده") + "\\n"
                     + "پل JNI: " + diagnostics.getString("native_bind_result", "ثبت نشده") + "\\n"
@@ -535,12 +537,15 @@ public class MainActivity extends Activity {
                 && (profiles == null || profiles.isEmpty())) return;
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .remove("service_on_create")
+                .remove("service_start_requested")
+                .remove("service_start_command_entered")
                 .remove("service_start_received")
                 .remove("service_start_error")
                 .remove("foreground_service_type")
                 .remove("native_bind_result")
                 .remove("native_last_event")
                 .remove("native_event_history")
+                .putString("service_start_requested", new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
                 .putString("native_bind_result", "در انتظار شروع سرویس")
                 .putString("session_start_result", "درخواست شروع سرویس ارسال می‌شود…")
                 .commit();
@@ -576,10 +581,14 @@ public class MainActivity extends Activity {
                 }
             }, 6000);
         } catch (RuntimeException error) {
+            String detail = error.getClass().getSimpleName() + ": "
+                    + (error.getMessage() == null ? "بدون توضیح" : error.getMessage());
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                    .putString("connection_lamp_state", "disconnected").apply();
+                    .putString("service_start_error", detail)
+                    .putString("connection_lamp_state", "disconnected")
+                    .commit();
             updateConnectionLamps();
-            status.setText("شروع سرویس VPN ناموفق بود: " + error.getMessage());
+            status.setText("شروع سرویس VPN ناموفق بود: " + detail);
         }
     }
 
