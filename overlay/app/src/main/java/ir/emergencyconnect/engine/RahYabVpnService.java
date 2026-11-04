@@ -36,7 +36,7 @@ public final class RahYabVpnService extends VpnService {
     public static final String ACTION_STOP = "ir.emergencyconnect.engine.STOP_VPN";
     public static final String EXTRA_PROFILE = "ir.emergencyconnect.engine.PROFILE";
     public static final String EXTRA_PROFILES = "ir.emergencyconnect.engine.PROFILES";
-    private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 12;
+    private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 30;
     private static final String CHANNEL_ID = "rah_yab_vpn_status";
     private static final int NOTIFICATION_ID = 7301;
     private ParcelFileDescriptor tunInterface;
@@ -289,19 +289,25 @@ public final class RahYabVpnService extends VpnService {
             boolean connected = attemptConnected;
             attemptSignal = null;
             if (connected) {
-                setServerTestStatus(endpoint, "connected");
-                autoConnected = true;
-                nextAutoIndex = (i + 1) % count;
-                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                        .putString("session_start_result", "اتصال واقعی OpenVPN با سرور "
-                                + (i + 1) + " از " + count + " برقرار شد.").apply();
-                appendAutoHistory("AUTO_SEARCH_CONNECTED", "سرور " + (i + 1)
-                        + " از " + count + "؛ اتصال واقعی تأیید شد");
-                setLampState("connected");
-                updateStatus("اتصال برقرار شد؛ سرور " + (i + 1) + " از " + count
-                        + (endpoint.isEmpty() ? "" : " — " + endpoint));
-                return;
+                updateStatus("تونل برقرار شد؛ در حال بررسی عبور واقعی اینترنت…");
+                appendAutoHistory("AUTO_TUNNEL_PROBE", "اتصال OpenVPN برقرار شد؛ آزمون اینترنت از داخل تونل آغاز شد");
+                boolean trafficVerified = verifyTunnelTraffic();
+                if (trafficVerified) {
+                    setServerTestStatus(endpoint, "connected");
+                    autoConnected = true;
+                    nextAutoIndex = (i + 1) % count;
+                    getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                            .putString("session_start_result", "اتصال برقرار شد و عبور اینترنت از تونل تأیید شد.").apply();
+                    appendAutoHistory("AUTO_SEARCH_CONNECTED", "سرور " + (i + 1)
+                            + " از " + count + "؛ عبور واقعی اینترنت از تونل تأیید شد");
+                    setLampState("connected");
+                    updateStatus("اتصال برقرار است؛ اینترنت از VPN عبور می‌کند"
+                            + (endpoint.isEmpty() ? "" : " — " + endpoint));
+                    return;
+                }
+                appendAutoHistory("AUTO_TUNNEL_PROBE_FAILED", "تونل بالا آمد اما عبور اینترنت تأیید نشد؛ آزمایش سرور بعدی");
             }
+
             setServerTestStatus(endpoint, "failed");
             synchronized (nativeSessionLock) {
                 OpenVpn3Bridge.stopSession();
@@ -328,6 +334,41 @@ public final class RahYabVpnService extends VpnService {
         autoProfiles = new ArrayList<>(freshProfiles);
         appendAutoHistory("AUTO_REFRESH_READY", freshProfiles.size() + " سرور تازه دریافت شد");
         runAutoSearch(freshProfiles, 0, startId);
+    }
+
+    /**
+     * Verify ordinary app traffic while Android's VPN routes are active.
+     * These requests are intentionally NOT protected(), so a full-tunnel
+     * profile must carry them through the VPN interface.
+     */
+    private boolean verifyTunnelTraffic() {
+        String[] probes = new String[] {
+                "https://connectivitycheck.gstatic.com/generate_204",
+                "https://cp.cloudflare.com/generate_204"
+        };
+        for (String probe : probes) {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(probe).openConnection();
+                connection.setInstanceFollowRedirects(false);
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                connection.setUseCaches(false);
+                connection.setRequestMethod("GET");
+                int code = connection.getResponseCode();
+                if (code == 204) {
+                    appendAutoHistory("AUTO_TUNNEL_PROBE_OK", "پاسخ ۲۰۴ از آزمون اینترنت داخل تونل دریافت شد");
+                    return true;
+                }
+                appendAutoHistory("AUTO_TUNNEL_PROBE_RESPONSE", "آزمون اینترنت پاسخ HTTP " + code + " داد");
+            } catch (IOException | RuntimeException e) {
+                String reason = e.getClass().getSimpleName();
+                appendAutoHistory("AUTO_TUNNEL_PROBE_ERROR", "آزمون اینترنت ناموفق: " + reason);
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }
+        return false;
     }
 
     private ArrayList<String> fetchFreshProfiles(int wanted) {
@@ -708,7 +749,11 @@ public final class RahYabVpnService extends VpnService {
             scheduleAutoFailover();
         }
         if ("CONNECTED".equals(name) && !error && !fatal) {
-            setLampState("connected");
+            // OpenVPN's CONNECTED event is not proof of working internet.
+            // The automatic-search worker sets the connected lamp only
+            // after an unprotected HTTP probe succeeds through Android VPN.
+            if (autoSearchEnabled) setLampState("searching");
+            else setLampState("connected");
         } else if (error || fatal || "DISCONNECTED".equals(name) || "EXITING".equals(name)) {
             setLampState("disconnected");
         } else if ("CONNECTING".equals(name) || "WAIT".equals(name)) {
