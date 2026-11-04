@@ -2,6 +2,10 @@ package com.rahyab.next;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.IntentFilter;
+import android.os.Build;
 import android.net.Uri;
 import android.net.VpnService;
 import android.graphics.Color;
@@ -39,6 +43,30 @@ public class MainActivity extends Activity {
     private TextView status;
     private Button connectButton;
     private Button disconnectButton;
+    private boolean singBoxReceiverRegistered = false;
+
+    private final BroadcastReceiver singBoxReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (intent == null || !SingBoxVpnService.ACTION_EVENT.equals(intent.getAction())) return;
+            String event = intent.getStringExtra(SingBoxVpnService.EXTRA_EVENT);
+            String detail = intent.getStringExtra(SingBoxVpnService.EXTRA_DETAIL);
+            if ("STARTING".equals(event)) {
+                setStatus("در حال راه‌اندازی موتور sing-box…");
+            } else if ("ENGINE_STARTED".equals(event)) {
+                setStatus("موتور sing-box اجرا شد؛ عبور واقعی اینترنت هنوز تأیید نشده است");
+                disconnectButton.setEnabled(true);
+            } else if ("TUN_ESTABLISHED".equals(event)) {
+                setStatus("تونل اندروید ایجاد شد؛ بررسی عبور واقعی اینترنت لازم است");
+                disconnectButton.setEnabled(true);
+            } else if ("STOPPED".equals(event)) {
+                setStatus("اتصال VPN قطع شد");
+                disconnectButton.setEnabled(false);
+            } else if ("ERROR".equals(event)) {
+                setStatus("خطای sing-box: " + (detail == null ? "نامشخص" : detail));
+                disconnectButton.setEnabled(false);
+            }
+        }
+    };
 
     private final Tunnel wireGuardTunnel = new Tunnel() {
         @Override public String getName() { return "RahYab-WireGuard"; }
@@ -164,6 +192,27 @@ public class MainActivity extends Activity {
         setContentView(scroll);
     }
 
+    @Override protected void onStart() {
+        super.onStart();
+        if (!singBoxReceiverRegistered) {
+            IntentFilter filter = new IntentFilter(SingBoxVpnService.ACTION_EVENT);
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(singBoxReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(singBoxReceiver, filter);
+            }
+            singBoxReceiverRegistered = true;
+        }
+    }
+
+    @Override protected void onStop() {
+        if (singBoxReceiverRegistered) {
+            unregisterReceiver(singBoxReceiver);
+            singBoxReceiverRegistered = false;
+        }
+        super.onStop();
+    }
+
     private void chooseWireGuardFile() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -264,7 +313,6 @@ public class MainActivity extends Activity {
         try {
             setStatus("درخواست راه‌اندازی موتور sing-box ارسال شد…");
             SingBoxVpnService.start(getApplicationContext(), pendingSingBoxJson);
-            disconnectButton.setEnabled(true);
         } catch (Exception e) {
             setStatus("شروع sing-box ناموفق بود: " + safeMessage(e));
         }
