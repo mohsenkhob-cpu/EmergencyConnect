@@ -181,14 +181,14 @@ public class MainActivity extends Activity {
         singBoxButton.setOnClickListener(v -> chooseSingBoxFile());
 
         Button pasteLinkButton = new Button(this);
-        pasteLinkButton.setText("افزودن لینک VLESS");
+        pasteLinkButton.setText("افزودن لینک VMess یا Trojan");
         pasteLinkButton.setAllCaps(false);
         pasteLinkButton.setTextColor(Color.WHITE);
         pasteLinkButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
         LinearLayout.LayoutParams pasteLinkParams = new LinearLayout.LayoutParams(-1, dp(54));
         pasteLinkParams.topMargin = dp(8);
         page.addView(pasteLinkButton, pasteLinkParams);
-        pasteLinkButton.setOnClickListener(v -> showVlessImportDialog());
+        pasteLinkButton.setOnClickListener(v -> showOtherImportDialog());
 
         singBoxConnectButton = new Button(this);
         singBoxConnectButton.setText("اتصال با پروفایل sing-box");
@@ -405,6 +405,38 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+
+
+    private void showOtherImportDialog() {
+        EditText input = new EditText(this);
+        input.setHint("vmess://... یا trojan://...");
+        input.setTextSize(13);
+        input.setSingleLine(false);
+        input.setMinLines(2);
+        input.setMaxLines(5);
+        input.setPadding(dp(12), dp(10), dp(12), dp(10));
+        new AlertDialog.Builder(this)
+                .setTitle("افزودن لینک VMess یا Trojan")
+                .setMessage("لینک اشتراک را وارد کنید. فرمت‌های رایج VMess (TCP/WS) و Trojan (TCP/WS) پشتیبانی می‌شوند.")
+                .setView(input)
+                .setPositiveButton("بررسی و ذخیره", (dialog, which) -> {
+                    try {
+                        String generated = SingBoxProfile.fromOtherShareLink(
+                                input.getText().toString().trim());
+                        SingBoxProfile profile = SingBoxProfile.parse(generated);
+                        pendingSingBoxJson = generated;
+                        saveSingBoxProfile(generated, profile);
+                        singBoxConnectButton.setEnabled(true);
+                        setStatus("لینک " + profile.getProtocol() + " بررسی و ذخیره شد: "
+                                + profile.getOutboundTag());
+                    } catch (Exception e) {
+                        setStatus("خطا در لینک: " + safeMessage(e));
+                        Toast.makeText(this, safeMessage(e), Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("انصراف", null)
+                .show();
+    }
 
     private void showVlessImportDialog() {
         EditText input = new EditText(this);
