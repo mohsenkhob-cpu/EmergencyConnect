@@ -15,6 +15,7 @@ import ir.emergencyconnect.engine.OpenVpn3Bridge;
 import ir.emergencyconnect.engine.RahYabVpnService;
 import java.io.*;
 import java.net.*;
+import android.net.TrafficStats;
 import java.util.*;
 import java.util.concurrent.*;
 import android.util.Base64;
@@ -23,14 +24,14 @@ public class MainActivity extends Activity {
     final String API = "https://www.vpngate.net/api/iphone/";
     final ExecutorService worker = Executors.newSingleThreadExecutor();
     final ArrayList<Server> servers = new ArrayList<>();
-    LinearLayout list; TextView status; Button refresh;
+    LinearLayout list; TextView status; Button refresh;\n    Server selectedServer; TextView liveSpeedView;\n    final Handler speedHandler = new Handler(Looper.getMainLooper());\n    long lastRxBytes=-1, lastTxBytes=-1;\n    final Runnable speedPoll = new Runnable(){ public void run(){ updateLiveSpeed(); speedHandler.postDelayed(this,1000); }};
     TextView lampConnected, lampSearching, lampDisconnected;
     final Handler lampHandler = new Handler(Looper.getMainLooper());
     final Runnable lampPoll = new Runnable(){ public void run(){ updateConnectionLamps(); lampHandler.postDelayed(this,1000); }};
     int navy=Color.rgb(16,42,67), teal=Color.rgb(22,125,101);
     private static final int VPN_PERMISSION_REQUEST = 7412;
     private String pendingVpnProfile;
-    static class Server { String country, ip, host, config; long speed; int ping; }
+    static class Server { String country, ip, host, config, source; long speed; int ping, measuredPing=-1; boolean tcpReachable; }
 
     @Override public void onCreate(Bundle b){ super.onCreate(b); getWindow().setStatusBarColor(navy); getWindow().setNavigationBarColor(navy); build(); requestNotificationPermissionIfNeeded(); loadServers(); }
 
@@ -157,28 +158,28 @@ public class MainActivity extends Activity {
 
     void loadServers(){
         refresh.setEnabled(false);
-        status.setText("در حال دریافت فهرست سرورها…");
+        status.setText("در حال دریافت و ارزیابی سرورها از چند مسیر منبع…");
         list.removeAllViews();
+        selectedServer=null;
         worker.execute(()->{
-            ArrayList<Server> found=new ArrayList<>();
-            String error=null;
+            ArrayList<Server> candidates=new ArrayList<>();
+            HashSet<String> seen=new HashSet<>();
             String[] sources = new String[] {
                 API,
                 "https://cdn.jsdelivr.net/gh/GeorgeXie2333/vpngate-list-mirror@latest/data/vpngate.csv",
-                "https://fastly.jsdelivr.net/gh/GeorgeXie2333/vpngate-list-mirror@latest/data/vpngate.csv",
-                "https://gcore.jsdelivr.net/gh/GeorgeXie2333/vpngate-list-mirror@latest/data/vpngate.csv",
                 "https://raw.githubusercontent.com/GeorgeXie2333/vpngate-list-mirror/main/data/vpngate.csv"
             };
+            StringBuilder sourceReport=new StringBuilder();
             for(String source : sources) {
                 HttpURLConnection connection=null;
                 BufferedReader reader=null;
-                ArrayList<Server> batch=new ArrayList<>();
+                int added=0;
                 try {
                     connection=(HttpURLConnection)new URL(source).openConnection();
-                    connection.setConnectTimeout(10000);
-                    connection.setReadTimeout(15000);
+                    connection.setConnectTimeout(9000);
+                    connection.setReadTimeout(12000);
                     connection.setInstanceFollowRedirects(true);
-                    connection.setRequestProperty("User-Agent","RahYabVPN/1.1");
+                    connection.setRequestProperty("User-Agent","RahYabVPN/2.0");
                     connection.setRequestProperty("Accept","text/plain,*/*");
                     int response=connection.getResponseCode();
                     if(response!=HttpURLConnection.HTTP_OK) throw new IOException("HTTP "+response);
@@ -186,18 +187,16 @@ public class MainActivity extends Activity {
                     String line;
                     boolean header=false;
                     int totalBytes=0;
-                    final int maxBytes=8*1024*1024;
                     while((line=reader.readLine())!=null) {
                         totalBytes+=line.length()+1;
-                        if(totalBytes>maxBytes) throw new IOException("حجم فهرست بیش از حد مجاز است.");
+                        if(totalBytes>8*1024*1024) throw new IOException("حجم فهرست بیش از حد مجاز است.");
                         if(line.length()>256*1024) continue;
                         if(line.startsWith("#HostName")) { header=true; continue; }
                         if(!header||line.startsWith("#")||line.trim().isEmpty()) continue;
                         List<String> fields=parseCsv(line);
                         if(fields.size()<15) continue;
                         try {
-                            String encoded=fields.get(14).trim();
-                            byte[] raw=Base64.decode(encoded,Base64.DEFAULT);
+                            byte[] raw=Base64.decode(fields.get(14).trim(),Base64.DEFAULT);
                             if(raw.length==0||raw.length>256*1024) continue;
                             String config=new String(raw,"UTF-8");
                             if(!config.contains("client")||!config.contains("remote ")) continue;
@@ -208,50 +207,136 @@ public class MainActivity extends Activity {
                             server.speed=parseLong(fields.get(4));
                             server.country=fields.get(5);
                             server.config=config;
-                            batch.add(server);
-                            if(batch.size()>=500) break;
-                        } catch(IllegalArgumentException ignored) {
-                            // Skip malformed individual VPN Gate records.
-                        }
+                            server.source=source.contains("vpngate.net")?"VPN Gate رسمی":"آینه داده VPN Gate";
+                            String key=server.ip+":"+remotePort(config);
+                            if(seen.add(key)) { candidates.add(server); added++; }
+                        } catch(IllegalArgumentException ignored) {}
                     }
-                    if(!batch.isEmpty()) {
-                        found.addAll(batch);
-                        error=null;
-                        break;
-                    }
-                    throw new IOException("فهرست CSV معتبر یا دارای سرور نبود.");
+                    sourceReport.append("\n").append(serverSourceName(source)).append(": ").append(added).append(" سرور تازه");
                 } catch(Exception e) {
-                    error=source+" : "+(e.getMessage()==null?"خطای ناشناخته":e.getMessage());
+                    sourceReport.append("\n").append(serverSourceName(source)).append(": در دسترس نبود");
                 } finally {
                     if(reader!=null) try { reader.close(); } catch(IOException ignored) {}
                     if(connection!=null) connection.disconnect();
                 }
             }
-            final String finalError=error;
+            // First narrow the list using provider-reported bandwidth, then verify TCP reachability.
+            Collections.sort(candidates,(a,b)->Long.compare(b.speed,a.speed));
+            int probeCount=Math.min(40,candidates.size());
+            for(int i=0;i<probeCount;i++) probeTcp(candidates.get(i));
+            Collections.sort(candidates,(a,b)->{
+                if(a.tcpReachable!=b.tcpReachable) return a.tcpReachable?-1:1;
+                if(a.measuredPing!=b.measuredPing) {
+                    if(a.measuredPing<0) return 1;
+                    if(b.measuredPing<0) return -1;
+                    return Integer.compare(a.measuredPing,b.measuredPing);
+                }
+                return Long.compare(b.speed,a.speed);
+            });
+            ArrayList<Server> best=new ArrayList<>();
+            for(Server candidate:candidates) {
+                if(best.size()>=20) break;
+                best.add(candidate);
+            }
+            final String sourcesSummary=sourceReport.toString();
             runOnUiThread(()->{
                 if(isFinishing()||isDestroyed()) return;
                 refresh.setEnabled(true);
                 servers.clear();
-                servers.addAll(found);
-                if(found.isEmpty()) {
-                    status.setText("سروری دریافت نشد. اینترنت را بررسی و دوباره تلاش کنید.\n"+
-                            (finalError==null?"":finalError));
+                servers.addAll(best);
+                if(best.isEmpty()) {
+                    status.setText("هیچ سرور معتبری از منابع دریافت نشد. اتصال اینترنت را بررسی و دوباره تلاش کنید."+sourcesSummary);
                 } else {
-                    Collections.sort(servers,(x,y)->Long.compare(y.speed,x.speed));
-                    status.setText("تعداد "+servers.size()+
-                            " سرور دریافت شد. فهرست بر اساس سرعت اعلام‌شده مرتب شده؛ برای بررسی پروفایل روی سرور بزنید.");
+                    long reachable=best.stream().filter(x->x.tcpReachable).count();
+                    status.setText("۲۰ سرور برتر (یا کمتر) از میان "+candidates.size()
+                            +" رکورد بررسی شدند؛ "+reachable+" مورد پاسخ‌گوی آزمایش TCP بودند."
+                            +"\nسرعت اعلامی، معیار اولیه است؛ پینگ TCP معیار دسترسی فعلی است."
+                            +sourcesSummary);
                     render();
-                    if(finalError!=null) status.append("\nدریافت فهرست با هشدار پایان یافت: "+finalError);
                 }
             });
         });
     }
+    private String serverSourceName(String source) {
+        return source.contains("vpngate.net")?"VPN Gate رسمی":"آینه VPN Gate";
+    }
+    private int remotePort(String config) {
+        java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^\\s*remote\\s+\\S+\\s+(\\d+)").matcher(config);
+        return m.find()?parseInt(m.group(1)):-1;
+    }
+    private void probeTcp(Server server) {
+        int port=remotePort(server.config);
+        if(port<1||port>65535) return;
+        long started=System.nanoTime();
+        try(Socket socket=new Socket()) {
+            socket.connect(new InetSocketAddress(server.ip,port),1200);
+            server.measuredPing=(int)Math.max(1,(System.nanoTime()-started)/1000000L);
+            server.tcpReachable=true;
+        } catch(Exception ignored) {
+            server.tcpReachable=false;
+        }
+    }
     static int parseInt(String s){try{return Integer.parseInt(s.trim());}catch(Exception e){return 9999;}}
     static long parseLong(String s){try{return Long.parseLong(s.trim());}catch(Exception e){return 0;}}
     List<String> parseCsv(String line){ ArrayList<String> out=new ArrayList<>(); StringBuilder x=new StringBuilder(); boolean q=false; for(int i=0;i<line.length();i++){char ch=line.charAt(i); if(ch=='"'){ if(q&&i+1<line.length()&&line.charAt(i+1)=='"'){x.append('"');i++;}else q=!q;} else if(ch==','&&!q){out.add(x.toString());x.setLength(0);}else x.append(ch);} out.add(x.toString()); return out; }
-    void render(){ list.removeAllViews(); int n=Math.min(servers.size(),80); for(int i=0;i<n;i++){ final Server s=servers.get(i); LinearLayout card=new LinearLayout(this); card.setOrientation(1); card.setPadding(12,10,12,10); card.setBackground(shape(Color.WHITE)); LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2); cp.setMargins(0,6,0,6); card.setLayoutParams(cp);
-        card.addView(txt((s.country==null?"نامشخص":s.country)+"  |  "+s.ip,16,navy,true)); card.addView(txt("پینگ گزارش‌شده: "+(s.ping>=9999?"نامشخص":s.ping+" ms")+"   |   سرعت اعلامی: "+(s.speed/1000000)+" Mbps",12,Color.DKGRAY,false)); card.addView(txt("برای بررسی و انتخاب روش اتصال لمس کنید",12,teal,true)); card.setOnClickListener(v->importProfile(s)); list.addView(card);
-    }}
+    void render(){
+        list.removeAllViews();
+        int n=Math.min(servers.size(),20);
+        for(int i=0;i<n;i++){
+            final Server s=servers.get(i);
+            boolean selected=s==selectedServer;
+            LinearLayout card=new LinearLayout(this);
+            card.setOrientation(1);
+            card.setPadding(12,10,12,10);
+            GradientDrawable bg=shape(selected?Color.rgb(225,244,239):Color.WHITE);
+            bg.setStroke(selected?4:1,selected?teal:Color.rgb(220,226,232));
+            card.setBackground(bg);
+            LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);
+            cp.setMargins(0,6,0,6);
+            card.setLayoutParams(cp);
+            card.addView(txt((selected?"✓ انتخاب‌شده  |  ":"")+(s.country==null?"نامشخص":s.country)+"  |  "+s.ip,16,selected?teal:navy,true));
+            card.addView(txt("پینگ آزمایشی: "+(s.measuredPing<0?"پاسخ نداد":s.measuredPing+" ms")
+                    +"   |   وضعیت مسیر: "+(s.tcpReachable?"در دسترس":"تأیید نشد"),12,Color.DKGRAY,false));
+            card.addView(txt("سرعت اعلامی سرور: "+String.format(Locale.US,"%.1f",(s.speed*8.0/1000000.0))+" Mbps",12,Color.DKGRAY,false));
+            TextView rate=txt("دانلود/آپلود زنده: پس از اتصال نمایش داده می‌شود",12,teal,true);
+            card.addView(rate);
+            if(selected) liveSpeedView=rate;
+            card.addView(txt(selected?"این سرور انتخاب شده است":"برای انتخاب این سرور لمس کنید",12,selected?teal:Color.GRAY,true));
+            card.setOnClickListener(v->{
+                selectedServer=s;
+                render();
+                status.setText("سرور "+s.ip+" انتخاب شد؛ در حال بررسی پروفایل…");
+                importProfile(s);
+            });
+            list.addView(card);
+        }
+    }
+    private void updateLiveSpeed() {
+        if(liveSpeedView==null||selectedServer==null) return;
+        String state=getSharedPreferences("rah_yab_diagnostics",MODE_PRIVATE)
+                .getString("connection_lamp_state","disconnected");
+        if(!"connected".equals(state)) {
+            liveSpeedView.setText("دانلود/آپلود زنده: پس از برقراری اتصال نمایش داده می‌شود");
+            lastRxBytes=-1; lastTxBytes=-1;
+            return;
+        }
+        long rx=TrafficStats.getTotalRxBytes(), tx=TrafficStats.getTotalTxBytes();
+        if(rx==TrafficStats.UNSUPPORTED||tx==TrafficStats.UNSUPPORTED) {
+            liveSpeedView.setText("اندازه‌گیری سرعت در این گوشی پشتیبانی نمی‌شود");
+            return;
+        }
+        if(lastRxBytes>=0&&lastTxBytes>=0) {
+            long down=Math.max(0,rx-lastRxBytes), up=Math.max(0,tx-lastTxBytes);
+            liveSpeedView.setText("سرعت کل گوشی: دانلود "+formatRate(down*8)+" | آپلود "+formatRate(up*8));
+        } else {
+            liveSpeedView.setText("در حال اندازه‌گیری سرعت دانلود و آپلود…");
+        }
+        lastRxBytes=rx; lastTxBytes=tx;
+    }
+    private String formatRate(long bitsPerSecond) {
+        if(bitsPerSecond>=1000000) return String.format(Locale.US,"%.2f Mbps",bitsPerSecond/1000000.0);
+        return String.format(Locale.US,"%.0f Kbps",bitsPerSecond/1000.0);
+    }
     void importProfile(Server s){
         status.setText("در حال بررسی فایل سرور با موتور داخلی OpenVPN 3…");
         worker.execute(()->{
