@@ -132,6 +132,11 @@ public final class RahYabVpnService extends VpnService {
                 final String result;
                 synchronized (nativeSessionLock) {
                     if (serviceDestroyed) return;
+                    // Reconcile any native session left by an earlier service
+                    // instance before attempting a new connection. The native
+                    // worker is process-global and can outlive a Service restart.
+                    OpenVpn3Bridge.stopSession();
+                    if (serviceDestroyed) return;
                     result = OpenVpn3Bridge.startSession(profile);
                 }
                 String safeResult = result == null ? "هسته پاسخی نداد" : result;
