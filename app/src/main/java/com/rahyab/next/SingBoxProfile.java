@@ -243,22 +243,26 @@ public final class SingBoxProfile {
             try {
                 byte[] decoded = Base64.decode(payload, Base64.DEFAULT);
                 JSONObject source = new JSONObject(new String(decoded, StandardCharsets.UTF_8));
-                String host = source.optString("add", source.optString("host", ""));
+                // In common VMess JSON, "add" is the actual server address while
+                // "host" is frequently only the WebSocket Host header. Never use the
+                // latter as a silent fallback for the server address.
+                String host = source.optString("add", "").trim();
                 int port = parsePort(source.optString("port", ""));
-                String uuid = source.optString("id", "");
-                if (host.isEmpty() || port < 1 || uuid.isEmpty()) {
-                    throw new JSONException("اطلاعات سرور VMess ناقص است");
+                String uuid = source.optString("id", "").trim();
+                if (host.isEmpty() || port < 1 || port > 65535 || uuid.isEmpty()) {
+                    throw new JSONException("آدرس اصلی (add)، شناسه یا پورت سرور VMess ناقص است");
                 }
-                String name = source.optString("ps", host);
+                String name = source.optString("ps", "").trim();
+                if (name.isEmpty()) name = host;
                 JSONObject outbound = new JSONObject().put("type", "vmess")
                         .put("tag", name).put("server", host).put("server_port", port)
                         .put("uuid", uuid).put("security", source.optString("scy", "auto"));
-                String net = source.optString("net", "tcp");
+                String net = source.optString("net", "tcp").trim().toLowerCase();
+                String hostHeader = source.optString("host", "").trim();
                 if ("ws".equals(net)) {
                     JSONObject transport = new JSONObject().put("type", "ws");
                     String path = source.optString("path", "");
                     if (!path.isEmpty()) transport.put("path", path);
-                    String hostHeader = source.optString("host", "");
                     if (!hostHeader.isEmpty()) transport.put("headers",
                             new JSONObject().put("Host", hostHeader));
                     outbound.put("transport", transport);
@@ -266,7 +270,8 @@ public final class SingBoxProfile {
                     throw new JSONException("انتقال VMess از نوع " + net + " فعلاً پشتیبانی نمی‌شود");
                 }
                 if ("tls".equalsIgnoreCase(source.optString("tls", ""))) {
-                    String sni = source.optString("sni", source.optString("host", host));
+                    String sni = source.optString("sni", "").trim();
+                    if (sni.isEmpty()) sni = hostHeader.isEmpty() ? host : hostHeader;
                     outbound.put("tls", new JSONObject().put("enabled", true).put("server_name", sni));
                 }
                 return buildSingleServerProfile(outbound, name);
