@@ -21,12 +21,15 @@ import com.wireguard.android.backend.Tunnel;
 import com.wireguard.config.Config;
 
 import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_CONFIG = 4101;
     private static final int REQUEST_VPN_PERMISSION = 4102;
+    private static final int REQUEST_SINGBOX_PROFILE = 4103;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private GoBackend wireGuardBackend;
     private Config pendingWireGuardConfig;
@@ -129,6 +132,16 @@ public class MainActivity extends Activity {
         page.addView(disconnectButton, disconnectParams);
         disconnectButton.setOnClickListener(v -> disconnectWireGuard());
 
+        Button singBoxButton = new Button(this);
+        singBoxButton.setText("وارد کردن فایل sing-box (JSON)");
+        singBoxButton.setAllCaps(false);
+        singBoxButton.setTextColor(Color.WHITE);
+        singBoxButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
+        LinearLayout.LayoutParams singBoxParams = new LinearLayout.LayoutParams(-1, dp(54));
+        singBoxParams.topMargin = dp(12);
+        page.addView(singBoxButton, singBoxParams);
+        singBoxButton.setOnClickListener(v -> chooseSingBoxFile());
+
         TextView note = label("در این نسخه، اتصال آزمایشی WireGuard پیاده‌سازی شده است. سایر پروتکل‌ها هنوز فعال نیستند.",
                 12, Color.rgb(235, 190, 115), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
@@ -145,10 +158,34 @@ public class MainActivity extends Activity {
         startActivityForResult(intent, REQUEST_CONFIG);
     }
 
+    private void chooseSingBoxFile() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        startActivityForResult(intent, REQUEST_SINGBOX_PROFILE);
+    }
+
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null) return;
-        if (requestCode == REQUEST_CONFIG) {
+        if (requestCode == REQUEST_SINGBOX_PROFILE) {
+            Uri uri = data.getData();
+            if (uri == null) return;
+            try (InputStream in = getContentResolver().openInputStream(uri);
+                 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                if (in == null) throw new IllegalStateException("فایل قابل خواندن نیست");
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+                SingBoxProfile profile = SingBoxProfile.parse(
+                        new String(out.toByteArray(), StandardCharsets.UTF_8));
+                setStatus("پروفایل شناسایی شد: " + profile.getProtocol()
+                        + " | " + profile.getOutboundTag()
+                        + " — موتور اتصال هنوز در حال پیاده‌سازی است");
+            } catch (Exception e) {
+                setStatus("پروفایل sing-box معتبر نیست: " + safeMessage(e));
+            }
+        } else if (requestCode == REQUEST_CONFIG) {
             Uri uri = data.getData();
             if (uri == null) return;
             try {
