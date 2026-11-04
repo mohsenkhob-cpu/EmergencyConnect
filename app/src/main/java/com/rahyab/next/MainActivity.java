@@ -152,8 +152,15 @@ public class MainActivity extends Activity {
             Uri uri = data.getData();
             if (uri == null) return;
             try {
-                getContentResolver().takePersistableUriPermission(uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                // Some document providers grant temporary read access but do not support
+                // persistable permissions. The profile is parsed immediately, so persistence
+                // is optional and must not prevent importing the file.
+                try {
+                    getContentResolver().takePersistableUriPermission(uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (SecurityException ignored) {
+                    // Continue with the temporary permission returned by ACTION_OPEN_DOCUMENT.
+                }
                 try (InputStream in = getContentResolver().openInputStream(uri)) {
                     if (in == null) throw new IllegalStateException("فایل قابل خواندن نیست");
                     pendingWireGuardConfig = Config.parse(in);
@@ -179,9 +186,13 @@ public class MainActivity extends Activity {
         connectButton.setEnabled(false);
         worker.execute(() -> {
             try {
-                wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.UP, pendingWireGuardConfig);
+                Tunnel.State actualState = wireGuardBackend.setState(
+                        wireGuardTunnel, Tunnel.State.UP, pendingWireGuardConfig);
+                if (actualState != Tunnel.State.UP) {
+                    throw new IllegalStateException("موتور WireGuard تونل را روشن اعلام نکرد");
+                }
                 runOnUiThread(() -> {
-                    setStatus("تونل WireGuard فعال شد؛ هنوز آزمون اینترنت از داخل تونل انجام نشده است");
+                    setStatus("تونل WireGuard روشن است؛ عبور واقعی اینترنت هنوز تأیید نشده است");
                     disconnectButton.setEnabled(true);
                     connectButton.setEnabled(true);
                 });
