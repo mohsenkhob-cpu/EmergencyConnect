@@ -1,15 +1,13 @@
-name: Build RahYabVPN APK
+name: Build RahYab Next APK
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - main
-      - v2-engine-starter
-      - redesign-v3
+      - rahyab-next
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -22,225 +20,17 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install Android SDK
-        run: |
-          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          SDKMANAGER=$(find "$SDK_ROOT/cmdline-tools" -name sdkmanager -type f | head -n 1)
-          test -n "$SDKMANAGER" || { echo "sdkmanager not found"; exit 1; }
-          yes | "$SDKMANAGER" --licenses || true
-          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358" "cmake;3.31.6"
-          echo "ANDROID_NDK_HOME=$SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
-      - name: Verify VPN session readiness safety gate
-        run: bash overlay/native/android-jni/check_session_gate.sh
-      - name: Fetch pinned OpenVPN 3 source for audit
-        run: |
-          set -euo pipefail
-          PIN_FILE="overlay/native/openvpn3-source-pin.txt"
-          OPENVPN3_REPOSITORY=$(sed -n 's/^OPENVPN3_REPOSITORY=//p' "$PIN_FILE")
-          OPENVPN3_COMMIT=$(sed -n 's/^OPENVPN3_COMMIT=//p' "$PIN_FILE")
-          OPENVPN3_LICENSE=$(sed -n 's/^OPENVPN3_LICENSE=//p' "$PIN_FILE")
-          test -n "$OPENVPN3_REPOSITORY" && test -n "$OPENVPN3_COMMIT" && test -n "$OPENVPN3_LICENSE"
-          git clone --filter=blob:none "$OPENVPN3_REPOSITORY" openvpn3-upstream
-          git -C openvpn3-upstream checkout --detach "$OPENVPN3_COMMIT"
-          ACTUAL=$(git -C openvpn3-upstream rev-parse HEAD)
-          test "$ACTUAL" = "$OPENVPN3_COMMIT"
-          mkdir -p upstream-audit
-          printf 'repository=%s\ncommit=%s\nlicense=%s\n' "$OPENVPN3_REPOSITORY" "$ACTUAL" "$OPENVPN3_LICENSE" > upstream-audit/UPSTREAM_PIN.txt
-          cp openvpn3-upstream/LICENSE.md upstream-audit/
-          cp openvpn3-upstream/client/ovpncli.hpp upstream-audit/
-          cp openvpn3-upstream/client/ovpncli.i upstream-audit/
-          cp openvpn3-upstream/javacli/android/cpu.cpp upstream-audit/
-          echo "Pinned OpenVPN 3 source verified at $ACTUAL"
-      - name: Build pinned Android native dependencies
-        run: |
-          set -euo pipefail
-          git clone https://github.com/microsoft/vcpkg.git vcpkg
-          git -C vcpkg checkout --detach 69a1a33b4ba2b21e392c17e215ff637290778a97
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-          ./vcpkg/vcpkg install --triplet arm64-android --x-manifest-root=overlay/native --x-install-root=vcpkg_installed --overlay-ports=openvpn3-upstream/deps/vcpkg-ports
-          mkdir -p native-dependency-audit
-          printf 'vcpkg_baseline=%s\ntriplet=arm64-android\nabi=arm64-v8a\n' "69a1a33b4ba2b21e392c17e215ff637290778a97" > native-dependency-audit/BUILD_INFO.txt
-          find vcpkg_installed/arm64-android -maxdepth 3 -type f | sort > native-dependency-audit/installed-files.txt
-          test -f vcpkg_installed/arm64-android/lib/libssl.a
-          test -f vcpkg_installed/arm64-android/lib/libcrypto.a
-          test -f vcpkg_installed/arm64-android/lib/liblz4.a
-          test -f vcpkg_installed/arm64-android/lib/libfmt.a
-          test -d vcpkg_installed/arm64-android/include/asio
-          echo "Pinned Android static dependencies built and verified"
-      - name: Probe pinned OpenVPN 3 core with Android NDK
-        run: |
-          set -uo pipefail
-          mkdir -p native-core-probe
-          echo "=== Installed LZ4 artifacts ==="
-          find "$GITHUB_WORKSPACE/vcpkg_installed/arm64-android" -maxdepth 4 -type f -iname '*lz4*' -print | sort | tee native-core-probe/lz4-files.txt
-          test -f "$GITHUB_WORKSPACE/vcpkg_installed/arm64-android/include/lz4.h"
-          test -f "$GITHUB_WORKSPACE/vcpkg_installed/arm64-android/lib/liblz4.a"
-          set +e
-          cmake -S overlay/native/android-probe -B native-core-probe/build \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 \
-            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/vcpkg_installed/arm64-android" \
-            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
-            -DOPENVPN3_SOURCE_DIR="$GITHUB_WORKSPACE/openvpn3-upstream" \
-            -DCMAKE_BUILD_TYPE=Release > native-core-probe/configure.log 2>&1
-          CONFIGURE_STATUS=$?
-          if [ "$CONFIGURE_STATUS" -eq 0 ]; then
-            cmake --build native-core-probe/build --config Release -j2 > native-core-probe/build.log 2>&1
-            BUILD_STATUS=$?
-          else
-            BUILD_STATUS=not-run
-          fi
-          printf 'configure_exit=%s\nbuild_exit=%s\n' "$CONFIGURE_STATUS" "$BUILD_STATUS" > native-core-probe/RESULT.txt
-          cat native-core-probe/RESULT.txt
-          tail -n 100 native-core-probe/configure.log || true
-          if [ -f native-core-probe/build.log ]; then tail -n 160 native-core-probe/build.log; fi
-          if [ "$CONFIGURE_STATUS" -eq 0 ] && [ "$BUILD_STATUS" = "0" ]; then
-            PROBE_LIBRARY=$(find native-core-probe/build -name 'libopenvpn3_core_probe.so' -print -quit)
-            test -n "$PROBE_LIBRARY"
-            echo "Verified Android OpenVPN 3 core probe: $PROBE_LIBRARY"
-          else
-            echo "OpenVPN 3 Android core probe failed; see native-core-probe logs above."
-            exit 1
-          fi
-      - name: Build complete OpenVPN 3 Android client translation unit
-        run: |
-          set -euo pipefail
-          cmake -S overlay/native/android-jni -B native-android-client/build \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 \
-            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/vcpkg_installed/arm64-android" \
-            -DDEP_DIR="$GITHUB_WORKSPACE/vcpkg_installed/arm64-android" \
-            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
-            -DOPENVPN3_SOURCE_DIR="$GITHUB_WORKSPACE/openvpn3-upstream" \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build native-android-client/build --config Release -j2
-          test -f native-android-client/build/libopenvpn3_jni.so
-          mkdir -p native-android-client/audit
-          cp native-android-client/build/libopenvpn3_jni.so native-android-client/audit/
-          echo "OpenVPNClient translation unit compiled for Android arm64-v8a"
-      - name: Extract project ZIP
-        run: |
-          ZIP_FILE="./RahYabVPN-v2-Engine-Starter-Root-1.zip"
-          test -f "$ZIP_FILE" || { echo "V2 ZIP file not found"; exit 1; }
-          mkdir -p extracted
-          unzip -q "$ZIP_FILE" -d extracted
-      - name: Apply maintained overlay
-        run: |
-          SETTINGS_FILE=$(find extracted -type f -name settings.gradle -o -name settings.gradle.kts | head -n 1)
-          test -n "$SETTINGS_FILE" || { echo "Gradle settings file not found"; exit 1; }
-          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-          if [ -d overlay ]; then cp -a overlay/. "$PROJECT_DIR/"; fi
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project overlay applied to $PROJECT_DIR"
-      - name: Package OpenVPN 3 native library into Android app
-        run: |
-          set -euo pipefail
-          test -f native-android-client/build/libopenvpn3_jni.so
-          APP_MAIN="$PROJECT_DIR/app/src/main"
-          test -d "$APP_MAIN" || { echo "Android app src/main directory not found"; exit 1; }
-          mkdir -p "$APP_MAIN/jniLibs/arm64-v8a"
-          install -m 0644 native-android-client/build/libopenvpn3_jni.so "$APP_MAIN/jniLibs/arm64-v8a/libopenvpn3_jni.so"
-          file "$APP_MAIN/jniLibs/arm64-v8a/libopenvpn3_jni.so"
-          echo "Native OpenVPN 3 library staged for APK packaging"
-      - name: Inspect and package Android project sources
-        run: |
-          mkdir -p source-inspection
-          find "$PROJECT_DIR" -maxdepth 8 -type f | grep -E 'java$|kt$|gradle$|kts$|xml$|cpp$|h$|hpp$' | sort > source-inspection/file-list.txt
-          while IFS= read -r f; do
-            rel="${f#"$PROJECT_DIR"/}"
-            mkdir -p "source-inspection/files/$(dirname "$rel")"
-            cp "$f" "source-inspection/files/$rel"
-          done < source-inspection/file-list.txt
-          echo "=== PROJECT SOURCE INVENTORY ==="
-          cat source-inspection/file-list.txt
-          echo "=== KEY BUILD CONFIGURATION ==="
-          for f in "$PROJECT_DIR/settings.gradle" "$PROJECT_DIR/settings.gradle.kts" "$PROJECT_DIR/build.gradle" "$PROJECT_DIR/build.gradle.kts" "$PROJECT_DIR/app/build.gradle" "$PROJECT_DIR/app/build.gradle.kts" "$PROJECT_DIR/gradle.properties"; do
-            if [ -f "$f" ]; then echo "=== $f ==="; sed -n '1,220p' "$f"; fi
-          done
-          (cd source-inspection && zip -qr ../RahYabVPN-v2-source-inspection.zip .)
-      - name: Publish source files to inspection branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          test -d source-inspection/files
-          mkdir -p source-export
-          cp -a source-inspection/files source-export/
-          cp source-inspection/file-list.txt source-export/
-          cat > source-export/README_FA.md <<'EOF'
-          # سورس استخراج‌شده RahYabVPN v2
-          این شاخه فقط برای بررسی فایل‌های واقعی پروژه پایه و overlay ساخته شده است.
-          فایل‌ها از ZIP پروژه در اجرای خودکار GitHub Actions استخراج شده‌اند.
-          این خروجی به معنی وجود موتور VPN مستقل نیست.
-          EOF
-          git -C source-export init
-          git -C source-export config user.name "github-actions[bot]"
-          git -C source-export config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C source-export add .
-          git -C source-export commit -m "Publish extracted Android sources for inspection"
-          git -C source-export remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git -C source-export push --force origin HEAD:v2-source-inspection
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Configure APK version
-        run: |
-          python3 - "$PROJECT_DIR/app/build.gradle" "$GITHUB_RUN_NUMBER" <<'PY'
-          import pathlib, sys
-          p = pathlib.Path(sys.argv[1])
-          run_number = int(sys.argv[2])
-          s = p.read_text()
-          s = s.replace("versionCode 2", f"versionCode {100000 + run_number}")
-          s = s.replace("versionName '1.1'", f"versionName '1.2.{run_number}'")
-          p.write_text(s)
-          PY
-          echo "APK version configured; using standard Android debug signing."
-      - name: Build APK
-        run: |
-          cd "$PROJECT_DIR"
-          gradle assembleDebug
-      - name: Build APK
-        env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          cd "$PROJECT_DIR"
-          gradle assembleDebug
-      - name: Verify APK
-        run: |
-          APK=$(find "$PROJECT_DIR" -type f -path "*/build/outputs/apk/debug/*.apk" | head -n 1)
-          test -n "$APK" || { echo "Debug APK was not produced"; exit 1; }
-          echo "APK produced: $APK"
-          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
-      - name: Upload native core probe report
-        uses: actions/upload-artifact@v4
-        with:
-          name: RahYabVPN-v2-native-core-probe
-          path: native-core-probe/
-          if-no-files-found: warn
-      - name: Upload source inspection bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: RahYabVPN-v2-source-inspection
-          path: RahYabVPN-v2-source-inspection.zip
-          if-no-files-found: error
-      - name: Upload pinned upstream API audit files
-        uses: actions/upload-artifact@v4
-        with:
-          name: RahYabVPN-v2-openvpn3-upstream-audit
-          path: upstream-audit/
-          if-no-files-found: error
-      - name: Upload Android dependency build audit
-        uses: actions/upload-artifact@v4
-        with:
-          name: RahYabVPN-v2-android-dependencies-arm64
-          path: native-dependency-audit/
-          if-no-files-found: error
+      - name: Build debug APK
+        run: gradle --no-daemon assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RahYabVPN-v2-APK
-          path: ${{ env.APK_PATH }}
+          name: RahYab-Next-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
