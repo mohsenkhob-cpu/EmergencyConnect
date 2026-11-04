@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 import android.net.Uri;
+import android.util.Base64;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 
@@ -228,6 +229,98 @@ public final class SingBoxProfile {
         root.put("outbounds", outbounds);
         root.put("route", new JSONObject().put("final", name));
         return root.toString();
+    }
+
+
+    /** Imports common VMess (base64 JSON) and Trojan share links. */
+    public static String fromOtherShareLink(String link) throws JSONException {
+        if (link == null) throw new JSONException("لینک خالی است");
+        String value = link.trim();
+        if (value.regionMatches(true, 0, "vmess://", 0, 8)) {
+            String payload = value.substring(8).trim();
+            int hash = payload.indexOf('#');
+            if (hash >= 0) payload = payload.substring(0, hash);
+            try {
+                byte[] decoded = Base64.decode(payload, Base64.DEFAULT);
+                JSONObject source = new JSONObject(new String(decoded, StandardCharsets.UTF_8));
+                String host = source.optString("add", source.optString("host", ""));
+                int port = parsePort(source.optString("port", ""));
+                String uuid = source.optString("id", "");
+                if (host.isEmpty() || port < 1 || uuid.isEmpty()) {
+                    throw new JSONException("اطلاعات سرور VMess ناقص است");
+                }
+                String name = source.optString("ps", host);
+                JSONObject outbound = new JSONObject().put("type", "vmess")
+                        .put("tag", name).put("server", host).put("server_port", port)
+                        .put("uuid", uuid).put("security", source.optString("scy", "auto"));
+                String net = source.optString("net", "tcp");
+                if ("ws".equals(net)) {
+                    JSONObject transport = new JSONObject().put("type", "ws");
+                    String path = source.optString("path", "");
+                    if (!path.isEmpty()) transport.put("path", path);
+                    String hostHeader = source.optString("host", "");
+                    if (!hostHeader.isEmpty()) transport.put("headers",
+                            new JSONObject().put("Host", hostHeader));
+                    outbound.put("transport", transport);
+                } else if (!"tcp".equals(net)) {
+                    throw new JSONException("انتقال VMess از نوع " + net + " فعلاً پشتیبانی نمی‌شود");
+                }
+                if ("tls".equalsIgnoreCase(source.optString("tls", ""))) {
+                    String sni = source.optString("sni", source.optString("host", host));
+                    outbound.put("tls", new JSONObject().put("enabled", true).put("server_name", sni));
+                }
+                return buildSingleServerProfile(outbound, name);
+            } catch (IllegalArgumentException e) {
+                throw new JSONException("کدگذاری لینک VMess معتبر نیست");
+            }
+        }
+        if (value.regionMatches(true, 0, "trojan://", 0, 9)) {
+            Uri uri = Uri.parse(value);
+            String password = uri.getUserInfo();
+            String host = uri.getHost();
+            int port = uri.getPort();
+            if (password == null || password.isEmpty() || host == null || port < 1 || port > 65535) {
+                throw new JSONException("رمز، نشانی یا پورت لینک Trojan ناقص است");
+            }
+            String name = uri.getFragment();
+            if (name == null || name.isEmpty()) name = host;
+            JSONObject outbound = new JSONObject().put("type", "trojan")
+                    .put("tag", name).put("server", host).put("server_port", port)
+                    .put("password", password);
+            String security = uri.getQueryParameter("security");
+            if (!"none".equalsIgnoreCase(security)) {
+                String sni = uri.getQueryParameter("sni");
+                if (sni == null || sni.isEmpty()) sni = host;
+                outbound.put("tls", new JSONObject().put("enabled", true).put("server_name", sni));
+            }
+            String net = uri.getQueryParameter("type");
+            if ("ws".equals(net)) {
+                JSONObject transport = new JSONObject().put("type", "ws");
+                String path = uri.getQueryParameter("path");
+                if (path != null && !path.isEmpty()) transport.put("path", path);
+                outbound.put("transport", transport);
+            } else if (net != null && !net.isEmpty() && !"tcp".equals(net)) {
+                throw new JSONException("نوع انتقال Trojan هنوز پشتیبانی نمی‌شود: " + net);
+            }
+            return buildSingleServerProfile(outbound, name);
+        }
+        throw new JSONException("این لینک VMess یا Trojan نیست");
+    }
+
+    private static int parsePort(String raw) {
+        try { return Integer.parseInt(raw); } catch (Exception ignored) { return 0; }
+    }
+
+    private static String buildSingleServerProfile(JSONObject server, String name)
+            throws JSONException {
+        JSONArray outbounds = new JSONArray().put(server)
+                .put(new JSONObject().put("type", "direct").put("tag", "direct"));
+        JSONObject tun = new JSONObject().put("type", "tun").put("tag", "tun-in")
+                .put("inet4_address", new JSONArray().put("172.19.0.1/30"))
+                .put("mtu", 1400).put("auto_route", true).put("strict_route", true);
+        return new JSONObject().put("log", new JSONObject().put("level", "info"))
+                .put("inbounds", new JSONArray().put(tun)).put("outbounds", outbounds)
+                .put("route", new JSONObject().put("final", name)).toString();
     }
 
     public String getRawJson() { return rawJson; }
