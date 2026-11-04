@@ -39,6 +39,12 @@ grep -Fq 'native_bind_result' overlay/app/src/main/java/ir/emergencyconnect/Main
 grep -Fq '(Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[II)I' "$JNI"
 grep -Fq 'protectTransportSocket' "$SERVICE"
 grep -Fq 'protectTransportSocket' "$JNI"
+# Ensure runtime diagnostics distinguish a handshake stall from TUN setup failure.
+for event in TUN_BUILDER_BEGIN TUN_BUILDER_ESTABLISH_BEGIN TUN_BUILDER_ESTABLISHED TUN_BUILDER_REJECTED TUN_BUILDER_ESTABLISH_FAILED TUN_BUILDER_TEARDOWN; do
+  grep -Fq "\"${event}\"" "$JNI" || {
+    echo "Missing TUN lifecycle diagnostic: ${event}"; exit 1;
+  }
+done
 
 # Session worker must be joinable, stoppable, and never detached.
 grep -Fq 'client->connect()' "$JNI"
