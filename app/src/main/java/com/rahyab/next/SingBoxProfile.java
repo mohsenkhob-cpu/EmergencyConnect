@@ -7,6 +7,9 @@ import org.json.JSONObject;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
+import android.net.Uri;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Validates and summarizes a sing-box JSON profile before it is handed to libbox.
@@ -135,6 +138,96 @@ public final class SingBoxProfile {
                     item.optString("type", "").trim().toLowerCase())) return item;
         }
         return null;
+    }
+
+
+    /** Converts a common VLESS share URI into a minimal sing-box profile.
+     * Supports TCP, WebSocket and gRPC transports, with TLS or REALITY.
+     */
+    public static String fromShareLink(String link) throws JSONException {
+        if (link == null || !link.trim().toLowerCase().startsWith("vless://")) {
+            throw new JSONException("در این مرحله فقط لینک VLESS پشتیبانی می‌شود");
+        }
+        Uri uri = Uri.parse(link.trim());
+        String uuid = uri.getUserInfo();
+        String host = uri.getHost();
+        int port = uri.getPort();
+        if (uuid == null || uuid.trim().isEmpty() || host == null ||
+                port < 1 || port > 65535) {
+            throw new JSONException("شناسه، آدرس یا پورت لینک VLESS ناقص است");
+        }
+        String name = uri.getFragment();
+        if (name == null || name.trim().isEmpty()) name = host;
+        String security = uri.getQueryParameter("security");
+        String network = uri.getQueryParameter("type");
+        if (network == null || network.isEmpty()) network = "tcp";
+        if (!"tcp".equals(network) && !"ws".equals(network) && !"grpc".equals(network)) {
+            throw new JSONException("نوع انتقال این لینک هنوز پشتیبانی نمی‌شود: " + network);
+        }
+
+        JSONObject server = new JSONObject();
+        server.put("type", "vless");
+        server.put("tag", name);
+        server.put("server", host);
+        server.put("server_port", port);
+        server.put("uuid", uuid);
+        String flow = uri.getQueryParameter("flow");
+        if (flow != null && !flow.isEmpty()) server.put("flow", flow);
+
+        if ("tls".equalsIgnoreCase(security) || "reality".equalsIgnoreCase(security)) {
+            JSONObject tls = new JSONObject();
+            tls.put("enabled", true);
+            String sni = uri.getQueryParameter("sni");
+            if (sni == null || sni.isEmpty()) sni = host;
+            tls.put("server_name", sni);
+            String fp = uri.getQueryParameter("fp");
+            if (fp != null && !fp.isEmpty()) tls.put("utls", new JSONObject()
+                    .put("enabled", true).put("fingerprint", fp));
+            if ("reality".equalsIgnoreCase(security)) {
+                String publicKey = uri.getQueryParameter("pbk");
+                if (publicKey == null || publicKey.isEmpty()) {
+                    throw new JSONException("کلید عمومی REALITY (pbk) در لینک وجود ندارد");
+                }
+                JSONObject reality = new JSONObject().put("enabled", true)
+                        .put("public_key", publicKey);
+                String shortId = uri.getQueryParameter("sid");
+                if (shortId != null && !shortId.isEmpty()) reality.put("short_id", shortId);
+                tls.put("reality", reality);
+            }
+            server.put("tls", tls);
+        } else if (security != null && !"none".equalsIgnoreCase(security)) {
+            throw new JSONException("روش امنیتی این لینک پشتیبانی نمی‌شود: " + security);
+        }
+
+        if ("ws".equals(network)) {
+            JSONObject transport = new JSONObject().put("type", "ws");
+            String path = uri.getQueryParameter("path");
+            if (path != null && !path.isEmpty()) transport.put("path", path);
+            String hostHeader = uri.getQueryParameter("host");
+            if (hostHeader != null && !hostHeader.isEmpty()) {
+                transport.put("headers", new JSONObject().put("Host", hostHeader));
+            }
+            server.put("transport", transport);
+        } else if ("grpc".equals(network)) {
+            String serviceName = uri.getQueryParameter("serviceName");
+            if (serviceName == null) serviceName = uri.getQueryParameter("service_name");
+            JSONObject transport = new JSONObject().put("type", "grpc");
+            if (serviceName != null && !serviceName.isEmpty()) transport.put("service_name", serviceName);
+            server.put("transport", transport);
+        }
+
+        JSONArray outbounds = new JSONArray();
+        outbounds.put(server);
+        outbounds.put(new JSONObject().put("type", "direct").put("tag", "direct"));
+        JSONObject tun = new JSONObject().put("type", "tun").put("tag", "tun-in")
+                .put("inet4_address", new JSONArray().put("172.19.0.1/30"))
+                .put("mtu", 1400).put("auto_route", true).put("strict_route", true);
+        JSONObject root = new JSONObject();
+        root.put("log", new JSONObject().put("level", "info"));
+        root.put("inbounds", new JSONArray().put(tun));
+        root.put("outbounds", outbounds);
+        root.put("route", new JSONObject().put("final", name));
+        return root.toString();
     }
 
     public String getRawJson() { return rawJson; }
