@@ -94,10 +94,32 @@ public final class RahYabVpnService extends VpnService {
         Notification notification = buildStatusNotification(
                 "در حال آماده‌سازی اتصال داخلی…");
         if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIFICATION_ID, notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED);
+            try {
+                // Once Android recognizes this app as an active VPN, the
+                // systemExempted type is the preferred VPN service category.
+                startForeground(NOTIFICATION_ID, notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED);
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("foreground_service_type", "systemExempted")
+                        .commit();
+            } catch (android.app.ForegroundServiceTypeNotAllowedException notActiveYet) {
+                // During initial VPN setup the TUN is not active yet, so some
+                // Android builds do not grant the VPN system exemption until
+                // after Builder.establish(). Use the declared special-use
+                // setup category to satisfy the immediate FGS deadline.
+                startForeground(NOTIFICATION_ID, notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("foreground_service_type",
+                                "specialUse (VPN setup fallback): "
+                                        + notActiveYet.getClass().getSimpleName())
+                        .commit();
+            }
         } else {
             startForeground(NOTIFICATION_ID, notification);
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("foreground_service_type", "legacy")
+                    .commit();
         }
         foregroundStarted = true;
     }
