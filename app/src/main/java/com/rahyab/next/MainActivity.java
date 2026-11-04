@@ -1,6 +1,9 @@
 package com.rahyab.next;
 
 import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
+import android.net.VpnService;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -11,8 +14,35 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import com.wireguard.android.backend.GoBackend;
+import com.wireguard.android.backend.Tunnel;
+import com.wireguard.config.Config;
+
+import java.io.InputStream;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
+    private static final int REQUEST_CONFIG = 4101;
+    private static final int REQUEST_VPN_PERMISSION = 4102;
+    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private GoBackend wireGuardBackend;
+    private Config pendingWireGuardConfig;
+    private TextView status;
+    private Button connectButton;
+    private Button disconnectButton;
+
+    private final Tunnel wireGuardTunnel = new Tunnel() {
+        @Override public String getName() { return "RahYab-WireGuard"; }
+        @Override public void onStateChange(State state) {
+            runOnUiThread(() -> setStatus(state == State.UP
+                    ? "تونل WireGuard روشن شد؛ بررسی عبور اینترنت لازم است"
+                    : "تونل WireGuard خاموش شد"));
+        }
+    };
+
     private int dp(float value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
@@ -35,8 +65,13 @@ public class MainActivity extends Activity {
         return v;
     }
 
+    private void setStatus(String value) {
+        if (status != null) status.setText(value);
+    }
+
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        wireGuardBackend = new GoBackend(getApplicationContext());
         getWindow().setStatusBarColor(Color.rgb(9, 18, 35));
         getWindow().setNavigationBarColor(Color.rgb(9, 18, 35));
 
@@ -56,7 +91,7 @@ public class MainActivity extends Activity {
         subtitle.setGravity(Gravity.RIGHT);
         page.addView(subtitle);
 
-        TextView status = label("هنوز به سروری متصل نیستید", 16, Color.rgb(220, 230, 245), true);
+        status = label("هنوز به سروری متصل نیستید", 16, Color.rgb(220, 230, 245), true);
         status.setBackground(shape(Color.rgb(22, 36, 59), 18));
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-1, dp(58));
         statusParams.topMargin = dp(30);
@@ -70,37 +105,114 @@ public class MainActivity extends Activity {
         orbParams.bottomMargin = dp(12);
         page.addView(orb, orbParams);
 
-        TextView helper = label("برای شروع، سرور قابل استفاده لازم است", 14, Color.rgb(164, 181, 205), false);
+        TextView helper = label("برای اتصال، فایل پیکربندی WireGuard را وارد کنید", 14,
+                Color.rgb(164, 181, 205), false);
         page.addView(helper);
 
-        Button connect = new Button(this);
-        connect.setText("اتصال هوشمند");
-        connect.setTextSize(17);
-        connect.setTextColor(Color.WHITE);
-        connect.setAllCaps(false);
-        connect.setBackground(shape(Color.rgb(31, 151, 137), 18));
+        connectButton = new Button(this);
+        connectButton.setText("انتخاب فایل WireGuard");
+        connectButton.setTextSize(17);
+        connectButton.setTextColor(Color.WHITE);
+        connectButton.setAllCaps(false);
+        connectButton.setBackground(shape(Color.rgb(31, 151, 137), 18));
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(-1, dp(58));
         buttonParams.topMargin = dp(24);
-        page.addView(connect, buttonParams);
-        connect.setOnClickListener(v -> status.setText("موتور اتصال هنوز راه‌اندازی نشده است"));
+        page.addView(connectButton, buttonParams);
+        connectButton.setOnClickListener(v -> chooseWireGuardFile());
 
-        TextView serverTitle = label("سرور انتخاب‌شده", 15, Color.WHITE, true);
-        serverTitle.setGravity(Gravity.RIGHT);
-        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(-1, -2);
-        titleParams.topMargin = dp(30);
-        page.addView(serverTitle, titleParams);
+        disconnectButton = new Button(this);
+        disconnectButton.setText("قطع اتصال");
+        disconnectButton.setAllCaps(false);
+        disconnectButton.setEnabled(false);
+        LinearLayout.LayoutParams disconnectParams = new LinearLayout.LayoutParams(-1, dp(52));
+        disconnectParams.topMargin = dp(10);
+        page.addView(disconnectButton, disconnectParams);
+        disconnectButton.setOnClickListener(v -> disconnectWireGuard());
 
-        TextView server = label("انتخاب خودکار سرور\nفعلاً سروری به فهرست اضافه نشده", 14, Color.rgb(190, 204, 224), false);
-        server.setBackground(shape(Color.rgb(22, 36, 59), 18));
-        LinearLayout.LayoutParams serverParams = new LinearLayout.LayoutParams(-1, dp(82));
-        serverParams.topMargin = dp(10);
-        page.addView(server, serverParams);
-
-        TextView note = label("نسخه آزمایشی رابط کاربری — اتصال VPN هنوز فعال نیست", 12, Color.rgb(235, 190, 115), false);
+        TextView note = label("در این نسخه، اتصال آزمایشی WireGuard پیاده‌سازی شده است. سایر پروتکل‌ها هنوز فعال نیستند.",
+                12, Color.rgb(235, 190, 115), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
         noteParams.topMargin = dp(24);
         page.addView(note, noteParams);
-
         setContentView(scroll);
+    }
+
+    private void chooseWireGuardFile() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"text/plain", "application/octet-stream"});
+        startActivityForResult(intent, REQUEST_CONFIG);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null) return;
+        if (requestCode == REQUEST_CONFIG) {
+            Uri uri = data.getData();
+            if (uri == null) return;
+            try {
+                getContentResolver().takePersistableUriPermission(uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                try (InputStream in = getContentResolver().openInputStream(uri)) {
+                    if (in == null) throw new IllegalStateException("فایل قابل خواندن نیست");
+                    pendingWireGuardConfig = Config.parse(in);
+                }
+                Intent permission = VpnService.prepare(this);
+                if (permission != null) {
+                    startActivityForResult(permission, REQUEST_VPN_PERMISSION);
+                } else {
+                    startWireGuard();
+                }
+            } catch (Exception e) {
+                setStatus("خطا در خواندن فایل WireGuard: " + safeMessage(e));
+            }
+        } else if (requestCode == REQUEST_VPN_PERMISSION) {
+            if (resultCode == RESULT_OK) startWireGuard();
+            else setStatus("مجوز ایجاد VPN داده نشد");
+        }
+    }
+
+    private void startWireGuard() {
+        if (pendingWireGuardConfig == null) return;
+        setStatus("در حال راه‌اندازی تونل WireGuard…");
+        connectButton.setEnabled(false);
+        worker.execute(() -> {
+            try {
+                wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.UP, pendingWireGuardConfig);
+                runOnUiThread(() -> {
+                    setStatus("تونل WireGuard فعال شد؛ هنوز آزمون اینترنت از داخل تونل انجام نشده است");
+                    disconnectButton.setEnabled(true);
+                    connectButton.setEnabled(true);
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    setStatus("اتصال ناموفق: " + safeMessage(e));
+                    connectButton.setEnabled(true);
+                });
+            }
+        });
+    }
+
+    private void disconnectWireGuard() {
+        setStatus("در حال قطع اتصال…");
+        worker.execute(() -> {
+            try {
+                wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
+                runOnUiThread(() -> disconnectButton.setEnabled(false));
+            } catch (Exception e) {
+                runOnUiThread(() -> setStatus("خطا در قطع اتصال: " + safeMessage(e)));
+            }
+        });
+    }
+
+    private String safeMessage(Exception e) {
+        String message = e.getMessage();
+        return message == null || message.trim().isEmpty() ? e.getClass().getSimpleName() : message;
+    }
+
+    @Override protected void onDestroy() {
+        worker.shutdown();
+        super.onDestroy();
     }
 }
