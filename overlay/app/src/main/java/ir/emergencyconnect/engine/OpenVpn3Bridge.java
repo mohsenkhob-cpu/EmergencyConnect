@@ -5,14 +5,16 @@ package ir.emergencyconnect.engine;
  *
  * A successful native self-test proves that the packaged OpenVPN core can be
  * entered through JNI. It does NOT prove that a VPN session can be connected.
- * Keep SESSION_API_READY false until session lifecycle, Android TunBuilder
- * callbacks, socket protection and device traffic tests are complete.
+ * This branch enables an explicitly experimental device-test path. A successful
+ * native self-test does NOT prove a VPN session or traffic works; keep the UI
+ * warning visible and do not claim production readiness until device tests pass.
  */
 public final class OpenVpn3Bridge {
     private static final boolean LIBRARY_LOADED;
 
-    // Keep disabled until a full on-device VPN session and traffic test passes.
-    private static final boolean SESSION_API_READY = false;
+    // EXPERIMENTAL DEVICE TEST ONLY: this enables the native session path.
+    // It is NOT a claim that traffic has been verified or production-ready.
+    private static final boolean SESSION_API_READY = true;
 
     static {
         boolean loaded;
@@ -36,7 +38,7 @@ public final class OpenVpn3Bridge {
     public static String startSession(String profile) {
         if (!LIBRARY_LOADED) return "کتابخانه بومی OpenVPN 3 بارگذاری نشده است.";
         if (!SESSION_API_READY) {
-            return "اتصال واقعی هنوز برای این نسخه فعال نشده است؛ ابتدا باید نشست VPN و عبور ترافیک روی گوشی آزمایش و تأیید شود.";
+            return "مسیر اتصال آزمایشی فعال نیست.";
         }
         if (profile == null || profile.trim().isEmpty()) return "فایل تنظیمات خالی است.";
         try {
@@ -131,6 +133,6 @@ public final class OpenVpn3Bridge {
         if (!LIBRARY_LOADED) {
             return "کتابخانه بومی OpenVPN 3 در این نسخه بارگذاری نشده است.";
         }
-        return "کتابخانه و آزمون بومی در دسترس‌اند، اما رابط نشست و تونل اندروید هنوز کامل و آزمایش نشده است.";
+        return "مسیر نشست آزمایشی فعال است؛ اتصال و عبور واقعی اینترنت هنوز روی گوشی تأیید نشده است.";
     }
 }
