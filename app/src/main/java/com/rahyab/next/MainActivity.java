@@ -1,6 +1,7 @@
 package com.rahyab.next;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -27,6 +28,9 @@ import com.wireguard.config.Config;
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -44,6 +48,8 @@ public class MainActivity extends Activity {
     private Button connectButton;
     private Button disconnectButton;
     private boolean singBoxReceiverRegistered = false;
+    private static final String PREFS_SERVERS = "rahyab_saved_servers";
+    private static final String KEY_SERVERS = "profiles";
 
     private final BroadcastReceiver singBoxReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -184,6 +190,16 @@ public class MainActivity extends Activity {
         page.addView(singBoxConnectButton, singBoxConnectParams);
         singBoxConnectButton.setOnClickListener(v -> requestSingBoxConnection());
 
+        Button savedServersButton = new Button(this);
+        savedServersButton.setText("فهرست سرورهای ذخیره‌شده");
+        savedServersButton.setAllCaps(false);
+        savedServersButton.setTextColor(Color.WHITE);
+        savedServersButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
+        LinearLayout.LayoutParams savedParams = new LinearLayout.LayoutParams(-1, dp(54));
+        savedParams.topMargin = dp(8);
+        page.addView(savedServersButton, savedParams);
+        savedServersButton.setOnClickListener(v -> showSavedServers());
+
         TextView note = label("در این نسخه، اتصال آزمایشی WireGuard پیاده‌سازی شده است. سایر پروتکل‌ها هنوز فعال نیستند.",
                 12, Color.rgb(235, 190, 115), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
@@ -259,6 +275,7 @@ public class MainActivity extends Activity {
                 }
                 pendingSingBoxJson = new String(out.toByteArray(), StandardCharsets.UTF_8);
                 SingBoxProfile profile = SingBoxProfile.parse(pendingSingBoxJson);
+                saveSingBoxProfile(pendingSingBoxJson, profile);
                 singBoxConnectButton.setEnabled(true);
                 setStatus("پروفایل آماده اتصال: " + profile.getProtocol()
                         + " | " + profile.getOutboundTag());
@@ -294,6 +311,88 @@ public class MainActivity extends Activity {
         }
     }
 
+
+    private JSONArray readSavedServers() {
+        String raw = getSharedPreferences(PREFS_SERVERS, MODE_PRIVATE)
+                .getString(KEY_SERVERS, "[]");
+        try {
+            return new JSONArray(raw);
+        } catch (Exception ignored) {
+            return new JSONArray();
+        }
+    }
+
+    private void saveSingBoxProfile(String rawJson, SingBoxProfile profile) throws Exception {
+        JSONArray old = readSavedServers();
+        JSONArray updated = new JSONArray();
+        JSONObject item = new JSONObject();
+        item.put("tag", profile.getOutboundTag());
+        item.put("protocol", profile.getProtocol());
+        item.put("json", rawJson);
+        boolean replaced = false;
+        for (int i = 0; i < old.length(); i++) {
+            JSONObject existing = old.optJSONObject(i);
+            if (existing == null) continue;
+            if (profile.getOutboundTag().equals(existing.optString("tag"))) {
+                if (!replaced) {
+                    updated.put(item);
+                    replaced = true;
+                }
+            } else if (updated.length() < 99) {
+                updated.put(existing);
+            }
+        }
+        if (!replaced) updated.put(item);
+        getSharedPreferences(PREFS_SERVERS, MODE_PRIVATE).edit()
+                .putString(KEY_SERVERS, updated.toString()).apply();
+    }
+
+    private void showSavedServers() {
+        JSONArray servers = readSavedServers();
+        if (servers.length() == 0) {
+            new AlertDialog.Builder(this).setTitle("سرورهای ذخیره‌شده")
+                    .setMessage("هنوز سروری ذخیره نشده است. ابتدا فایل JSON یک سرور را وارد کنید.")
+                    .setPositiveButton("متوجه شدم", null).show();
+            return;
+        }
+        String[] labels = new String[servers.length()];
+        for (int i = 0; i < servers.length(); i++) {
+            JSONObject item = servers.optJSONObject(i);
+            labels[i] = item == null ? "پروفایل نامعتبر" :
+                    item.optString("tag", "بدون نام") + "  •  " +
+                    item.optString("protocol", "نامشخص");
+        }
+        final int[] selected = {0};
+        new AlertDialog.Builder(this)
+                .setTitle("انتخاب سرور")
+                .setSingleChoiceItems(labels, 0, (dialog, which) -> selected[0] = which)
+                .setPositiveButton("انتخاب و اتصال", (dialog, which) -> {
+                    JSONObject item = servers.optJSONObject(selected[0]);
+                    if (item == null) {
+                        setStatus("اطلاعات این سرور معتبر نیست");
+                        return;
+                    }
+                    pendingSingBoxJson = item.optString("json", null);
+                    if (pendingSingBoxJson == null || pendingSingBoxJson.trim().isEmpty()) {
+                        setStatus("فایل ذخیره‌شده ناقص است");
+                        return;
+                    }
+                    singBoxConnectButton.setEnabled(true);
+                    setStatus("سرور انتخاب شد: " + labels[selected[0]]);
+                    requestSingBoxConnection();
+                })
+                .setNegativeButton("بستن", null)
+                .setNeutralButton("حذف سرور", (dialog, which) -> {
+                    JSONArray remaining = new JSONArray();
+                    for (int i = 0; i < servers.length(); i++) {
+                        if (i != selected[0]) remaining.put(servers.optJSONObject(i));
+                    }
+                    getSharedPreferences(PREFS_SERVERS, MODE_PRIVATE).edit()
+                            .putString(KEY_SERVERS, remaining.toString()).apply();
+                    setStatus("سرور انتخاب‌شده از فهرست حذف شد");
+                })
+                .show();
+    }
 
     private void requestSingBoxConnection() {
         if (pendingSingBoxJson == null) {
