@@ -35,6 +35,7 @@ public class MainActivity extends Activity {
     int navy=Color.rgb(16,42,67), teal=Color.rgb(22,125,101);
     private static final int VPN_PERMISSION_REQUEST = 7412;
     private String pendingVpnProfile;
+    private ArrayList<String> pendingVpnProfiles;
     static class Server { String country, ip, host, config, source; long speed; int ping, measuredPing=-1; boolean tcpReachable; }
 
     @Override public void onCreate(Bundle b){ super.onCreate(b); getWindow().setStatusBarColor(navy); getWindow().setNavigationBarColor(navy); build(); requestNotificationPermissionIfNeeded(); loadServers(); }
@@ -67,6 +68,14 @@ public class MainActivity extends Activity {
         root.addView(lamps,lampParams);
         updateConnectionLamps();
         refresh=new Button(this); refresh.setText("دریافت و به‌روزرسانی سرورها"); refresh.setAllCaps(false); refresh.setTextColor(Color.WHITE); refresh.setBackground(shape(teal)); root.addView(refresh); refresh.setOnClickListener(v->loadServers());
+
+        Button smartConnect=new Button(this);
+        smartConnect.setText("جست‌وجوی هوشمند و اتصال خودکار (تا ۴۰ سرور)");
+        smartConnect.setAllCaps(false);
+        smartConnect.setTextColor(Color.WHITE);
+        smartConnect.setBackground(shape(navy));
+        root.addView(smartConnect);
+        smartConnect.setOnClickListener(v->requestAutoVpn());
 
         Button selfTest=new Button(this);
         selfTest.setText("آزمایش هسته داخلی OpenVPN 3");
@@ -360,6 +369,42 @@ public class MainActivity extends Activity {
             });
         });
     }
+    private void requestAutoVpn() {
+        if (servers.isEmpty()) {
+            status.setText("ابتدا فهرست سرورها را دریافت کنید.");
+            return;
+        }
+        ArrayList<String> profiles = new ArrayList<>();
+        for (Server server : servers) {
+            if (server != null && server.config != null && !server.config.trim().isEmpty()) {
+                profiles.add(server.config);
+            }
+            if (profiles.size() >= 40) break;
+        }
+        if (profiles.isEmpty()) {
+            status.setText("پروفایل معتبری برای جست‌وجوی خودکار وجود ندارد.");
+            return;
+        }
+        pendingVpnProfiles = profiles;
+        pendingVpnProfile = null;
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("connection_lamp_state", "searching").apply();
+        updateConnectionLamps();
+        status.setText("جست‌وجوی هوشمند بین " + profiles.size()
+                + " سرور آماده است؛ مجوز VPN را تأیید کنید.");
+        Intent prepare = VpnService.prepare(this);
+        if (prepare != null) {
+            try {
+                startActivityForResult(prepare, VPN_PERMISSION_REQUEST);
+            } catch (RuntimeException error) {
+                pendingVpnProfiles = null;
+                status.setText("نمایش مجوز VPN ممکن نشد: " + error.getMessage());
+            }
+        } else {
+            startInternalVpnService();
+        }
+    }
+
     private void requestInternalVpn(Server server) {
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("connection_lamp_state", "searching").apply();
@@ -389,10 +434,12 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != VPN_PERMISSION_REQUEST) return;
-        if (resultCode == RESULT_OK && pendingVpnProfile != null) {
+        if (resultCode == RESULT_OK
+                && (pendingVpnProfile != null || pendingVpnProfiles != null)) {
             startInternalVpnService();
         } else {
             pendingVpnProfile = null;
+            pendingVpnProfiles = null;
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("connection_lamp_state", "disconnected").apply();
             updateConnectionLamps();
@@ -402,11 +449,18 @@ public class MainActivity extends Activity {
 
     private void startInternalVpnService() {
         final String profile = pendingVpnProfile;
+        final ArrayList<String> profiles = pendingVpnProfiles;
         pendingVpnProfile = null;
-        if (profile == null || profile.trim().isEmpty()) return;
+        pendingVpnProfiles = null;
+        if ((profile == null || profile.trim().isEmpty())
+                && (profiles == null || profiles.isEmpty())) return;
         Intent service = new Intent(this, RahYabVpnService.class);
         service.setAction(RahYabVpnService.ACTION_START);
-        service.putExtra(RahYabVpnService.EXTRA_PROFILE, profile);
+        if (profiles != null && !profiles.isEmpty()) {
+            service.putStringArrayListExtra(RahYabVpnService.EXTRA_PROFILES, profiles);
+        } else {
+            service.putExtra(RahYabVpnService.EXTRA_PROFILE, profile);
+        }
         try {
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
             else startService(service);
