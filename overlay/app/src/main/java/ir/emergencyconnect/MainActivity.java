@@ -242,7 +242,7 @@ public class MainActivity extends Activity {
             });
             ArrayList<Server> best=new ArrayList<>();
             for(Server candidate:candidates) {
-                if(best.size()>=20) break;
+                if(best.size()>=40) break;
                 best.add(candidate);
             }
             final String sourcesSummary=sourceReport.toString();
@@ -255,7 +255,7 @@ public class MainActivity extends Activity {
                     status.setText("هیچ سرور معتبری از منابع دریافت نشد. اتصال اینترنت را بررسی و دوباره تلاش کنید."+sourcesSummary);
                 } else {
                     long reachable=best.stream().filter(x->x.tcpReachable).count();
-                    status.setText("۲۰ سرور برتر (یا کمتر) از میان "+candidates.size()
+                    status.setText("۴۰ سرور برتر (یا کمتر) از میان "+candidates.size()
                             +" رکورد بررسی شدند؛ "+reachable+" مورد پاسخ‌گوی آزمایش TCP بودند."
                             +"\nسرعت اعلامی، معیار اولیه است؛ پینگ TCP معیار دسترسی فعلی است."
                             +sourcesSummary);
@@ -288,7 +288,7 @@ public class MainActivity extends Activity {
     List<String> parseCsv(String line){ ArrayList<String> out=new ArrayList<>(); StringBuilder x=new StringBuilder(); boolean q=false; for(int i=0;i<line.length();i++){char ch=line.charAt(i); if(ch=='"'){ if(q&&i+1<line.length()&&line.charAt(i+1)=='"'){x.append('"');i++;}else q=!q;} else if(ch==','&&!q){out.add(x.toString());x.setLength(0);}else x.append(ch);} out.add(x.toString()); return out; }
     void render(){
         list.removeAllViews();
-        int n=Math.min(servers.size(),20);
+        int n=Math.min(servers.size(),40);
         for(int i=0;i<n;i++){
             final Server s=servers.get(i);
             boolean selected=s==selectedServer;
