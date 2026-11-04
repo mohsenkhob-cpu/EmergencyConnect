@@ -101,6 +101,8 @@ public final class RahYabVpnService extends VpnService {
             autoSearchEnabled = false;
             autoConnected = false;
             autoProfiles = null;
+            CountDownLatch activeAttempt = attemptSignal;
+            if (activeAttempt != null) activeAttempt.countDown();
             attemptSignal = null;
             setLampState("disconnected");
             sessionExecutor.execute(() -> {
@@ -160,6 +162,12 @@ public final class RahYabVpnService extends VpnService {
     }
 
     private void startSingleProfile(String profile) {
+        autoSearchEnabled = false;
+        autoConnected = false;
+        autoProfiles = null;
+        CountDownLatch activeAttempt = attemptSignal;
+        if (activeAttempt != null) activeAttempt.countDown();
+        attemptSignal = null;
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("session_start_result", "درخواست به موتور ارسال شد؛ منتظر پاسخ…").apply();
         final String result;
