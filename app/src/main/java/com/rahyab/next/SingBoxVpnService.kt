@@ -204,7 +204,6 @@ class SingBoxVpnService : VpnService() {
                 type = Libbox.InterfaceTypeOther
                 this.addresses = iterator(addresses, StringIterator::class.java)
                 dnsServer = iterator(emptyList(), StringIterator::class.java)
-                dnsSearchDomain = iterator(emptyList(), StringIterator::class.java)
                 gateway = iterator(emptyList(), StringIterator::class.java)
                 flags = 0
                 metered = false
