@@ -19,6 +19,7 @@ import java.net.Inet6Address
 import java.net.NetworkInterface as JavaNetworkInterface
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /**
  * Minimal Android host for the official libbox engine.
@@ -34,6 +35,16 @@ class SingBoxVpnService : VpnService() {
     private val channel = "rahyab-singbox"
     private val notificationId = 7301
 
+    // Native callbacks can arrive while Android is destroying the service.
+    // Ignore late callbacks instead of crashing on a shut-down executor.
+    private fun enqueueLifecycle(task: () -> Unit) {
+        try {
+            lifecycle.execute(task)
+        } catch (e: RejectedExecutionException) {
+            Log.w(TAG, "Ignoring late sing-box lifecycle callback", e)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         if (Build.VERSION.SDK_INT >= 26) {
@@ -45,7 +56,7 @@ class SingBoxVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            lifecycle.execute { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf(startId) }
+            enqueueLifecycle { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf(startId) }
             return START_NOT_STICKY
         }
         val requestedProfile = intent?.getStringExtra(EXTRA_PROFILE)
@@ -60,7 +71,7 @@ class SingBoxVpnService : VpnService() {
             return START_NOT_STICKY
         }
         sendEvent(EVENT_STARTING)
-        lifecycle.execute {
+        enqueueLifecycle {
             var created: CommandServer? = null
             try {
                 val setup = SetupOptions().apply {
@@ -132,12 +143,12 @@ class SingBoxVpnService : VpnService() {
         override fun invoke(proxy: Any, method: Method, args: Array<out Any?>?): Any? {
             return when (method.name) {
                 "serviceStop" -> {
-                    lifecycle.execute { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf() }
+                    enqueueLifecycle { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf() }
                     null
                 }
                 "serviceReload" -> {
                     val currentProfile = profile
-                    if (!currentProfile.isNullOrBlank()) lifecycle.execute {
+                    if (!currentProfile.isNullOrBlank()) enqueueLifecycle {
                         runCatching { server?.startOrReloadService(currentProfile, OverrideOptions()) }
                             .onFailure { Log.e(TAG, "sing-box reload failed", it) }
                     }
@@ -295,11 +306,11 @@ class SingBoxVpnService : VpnService() {
 
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
     override fun onRevoke() {
-        lifecycle.execute { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf() }
+        enqueueLifecycle { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf() }
         super.onRevoke()
     }
     override fun onDestroy() {
-        lifecycle.execute { stopEngine() }
+        enqueueLifecycle { stopEngine() }
         lifecycle.shutdown()
         super.onDestroy()
     }
