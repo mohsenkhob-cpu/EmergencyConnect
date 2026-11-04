@@ -176,7 +176,15 @@ public class MainActivity extends Activity {
                 if (in == null) throw new IllegalStateException("فایل قابل خواندن نیست");
                 byte[] buffer = new byte[8192];
                 int count;
-                while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+                int totalBytes = 0;
+                final int maxProfileBytes = 2 * 1024 * 1024;
+                while ((count = in.read(buffer)) != -1) {
+                    totalBytes += count;
+                    if (totalBytes > maxProfileBytes) {
+                        throw new IllegalArgumentException("حجم فایل پروفایل نباید بیشتر از ۲ مگابایت باشد");
+                    }
+                    out.write(buffer, 0, count);
+                }
                 SingBoxProfile profile = SingBoxProfile.parse(
                         new String(out.toByteArray(), StandardCharsets.UTF_8));
                 setStatus("پروفایل شناسایی شد: " + profile.getProtocol()
