@@ -281,7 +281,7 @@ public class MainActivity extends Activity {
             });
             ArrayList<Server> best=new ArrayList<>();
             for(Server candidate:candidates) {
-                if(best.size()>=20) break;
+                if(best.size()>=40) break;
                 best.add(candidate);
             }
             final String sourcesSummary=sourceReport.toString();
@@ -298,7 +298,7 @@ public class MainActivity extends Activity {
                     status.setText("هیچ سرور معتبری از منابع دریافت نشد. اتصال اینترنت را بررسی و دوباره تلاش کنید."+sourcesSummary);
                 } else {
                     long reachable=best.stream().filter(x->x.tcpReachable).count();
-                    status.setText("۲۰ سرور برتر (یا کمتر) از میان "+candidates.size()
+                    status.setText("۴۰ سرور برتر (یا کمتر) از میان "+candidates.size()
                             +" رکورد بررسی شدند؛ "+reachable+" مورد پاسخ‌گوی آزمایش TCP بودند."
                             +"\nسرعت اعلامی، معیار اولیه است؛ پینگ TCP معیار دسترسی فعلی است."
                             +sourcesSummary);
