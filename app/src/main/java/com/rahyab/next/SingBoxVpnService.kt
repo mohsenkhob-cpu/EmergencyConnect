@@ -50,7 +50,18 @@ class SingBoxVpnService : VpnService() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(notificationId, notification("در حال راه‌اندازی موتور VPN…"))
+        val profileSnapshot = profile ?: run {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        try {
+            startForeground(notificationId, notification("در حال راه‌اندازی موتور VPN…"))
+        } catch (e: Exception) {
+            Log.e(TAG, "could not promote VPN service to foreground", e)
+            sendEvent(EVENT_ERROR, "اندروید اجازه شروع سرویس VPN را نداد: ${e.message ?: e.javaClass.simpleName}")
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         sendEvent(EVENT_STARTING)
         Thread {
             try {
@@ -81,7 +92,7 @@ class SingBoxVpnService : VpnService() {
                 val instance = CommandServer(callbacks, platform)
                 server = instance
                 instance.start()
-                instance.startOrReloadService(profile!!, OverrideOptions())
+                instance.startOrReloadService(profileSnapshot, OverrideOptions())
                 Log.i(TAG, "libbox accepted the profile and started its service")
                 updateNotification("موتور VPN راه‌اندازی شد؛ وضعیت مسیر اینترنت در حال بررسی است")
                 sendEvent(EVENT_ENGINE_STARTED)
