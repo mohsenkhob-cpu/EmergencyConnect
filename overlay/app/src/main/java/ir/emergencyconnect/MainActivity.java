@@ -157,6 +157,7 @@ public class MainActivity extends Activity {
                     + "آخرین رویداد موتور: " + diagnostics.getString("native_last_event", "هنوز رویدادی ثبت نشده") + "\\n"
                     + "تاریخچه رویدادها (حداکثر ۲۰ مورد):\\n"
                     + diagnostics.getString("native_event_history", "هنوز رویدادی ثبت نشده") + "\\n"
+                    + "نوع سرویس پیش‌زمینه: " + diagnostics.getString("foreground_service_type", "ثبت نشده") + "\\n"
                     + "خطای شروع سرویس: " + diagnostics.getString("service_start_error", "ندارد") + "\\n"
                     + "وضعیت قابلیت اتصال: " + OpenVpn3Bridge.availabilityMessage() + "\\n"
                     + "توجه: این گزارش به‌تنهایی اتصال VPN یا عبور ترافیک را تأیید نمی‌کند.";
@@ -536,6 +537,7 @@ public class MainActivity extends Activity {
                 .remove("service_on_create")
                 .remove("service_start_received")
                 .remove("service_start_error")
+                .remove("foreground_service_type")
                 .remove("native_bind_result")
                 .remove("native_last_event")
                 .remove("native_event_history")
