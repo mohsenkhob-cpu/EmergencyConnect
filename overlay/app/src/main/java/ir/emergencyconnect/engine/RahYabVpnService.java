@@ -12,8 +12,12 @@ import android.os.Build;
 import android.os.ParcelFileDescriptor;
 
 import java.net.InetAddress;
+import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Android TUN adapter scaffold for the embedded OpenVPN 3 engine.
@@ -25,6 +29,8 @@ public final class RahYabVpnService extends VpnService {
     public static final String ACTION_START = "ir.emergencyconnect.engine.START_VPN";
     public static final String ACTION_STOP = "ir.emergencyconnect.engine.STOP_VPN";
     public static final String EXTRA_PROFILE = "ir.emergencyconnect.engine.PROFILE";
+    public static final String EXTRA_PROFILES = "ir.emergencyconnect.engine.PROFILES";
+    private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 18;
     private static final String CHANNEL_ID = "rah_yab_vpn_status";
     private static final int NOTIFICATION_ID = 7301;
     private ParcelFileDescriptor tunInterface;
@@ -34,6 +40,14 @@ public final class RahYabVpnService extends VpnService {
     private final ExecutorService sessionExecutor = Executors.newSingleThreadExecutor();
     private final Object nativeSessionLock = new Object();
     private volatile boolean serviceDestroyed;
+    private volatile boolean autoSearchEnabled;
+    private volatile boolean autoConnected;
+    private volatile boolean attemptConnected;
+    private volatile CountDownLatch attemptSignal;
+    private volatile ArrayList<String> autoProfiles;
+    private volatile int nextAutoIndex;
+    private volatile int autoStartId;
+    private final AtomicBoolean failoverQueued = new AtomicBoolean(false);
 
     private void ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
@@ -84,6 +98,10 @@ public final class RahYabVpnService extends VpnService {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         if (ACTION_STOP.equals(action)) {
+            autoSearchEnabled = false;
+            autoConnected = false;
+            autoProfiles = null;
+            attemptSignal = null;
             setLampState("disconnected");
             sessionExecutor.execute(() -> {
                 synchronized (nativeSessionLock) {
@@ -104,7 +122,9 @@ public final class RahYabVpnService extends VpnService {
                     .putString("session_start_result", "درخواست شروع نشست در حال آماده‌سازی است…")
                     .apply();
             final String profile = intent.getStringExtra(EXTRA_PROFILE);
-            if (profile == null || profile.trim().isEmpty()) {
+            final ArrayList<String> profiles = intent.getStringArrayListExtra(EXTRA_PROFILES);
+            if ((profile == null || profile.trim().isEmpty())
+                    && (profiles == null || profiles.isEmpty())) {
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
@@ -127,27 +147,135 @@ public final class RahYabVpnService extends VpnService {
                     stopSelf(startId);
                     return;
                 }
-                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                        .putString("session_start_result", "درخواست به موتور ارسال شد؛ منتظر پاسخ…").apply();
-                final String result;
-                synchronized (nativeSessionLock) {
-                    if (serviceDestroyed) return;
-                    // Reconcile any native session left by an earlier service
-                    // instance before attempting a new connection. The native
-                    // worker is process-global and can outlive a Service restart.
-                    OpenVpn3Bridge.stopSession();
-                    if (serviceDestroyed) return;
-                    result = OpenVpn3Bridge.startSession(profile);
+                if (profiles != null && !profiles.isEmpty()) {
+                    runAutoSearch(profiles, 0, startId);
+                } else {
+                    startSingleProfile(profile);
                 }
-                String safeResult = result == null ? "هسته پاسخی نداد" : result;
-                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                        .putString("session_start_result", safeResult).apply();
-                updateStatus(safeResult);
             });
             return START_NOT_STICKY;
         }
         stopSelf(startId);
         return START_NOT_STICKY;
+    }
+
+    private void startSingleProfile(String profile) {
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("session_start_result", "درخواست به موتور ارسال شد؛ منتظر پاسخ…").apply();
+        final String result;
+        synchronized (nativeSessionLock) {
+            if (serviceDestroyed) return;
+            OpenVpn3Bridge.stopSession();
+            if (serviceDestroyed) return;
+            result = OpenVpn3Bridge.startSession(profile);
+        }
+        String safeResult = result == null ? "هسته پاسخی نداد" : result;
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("session_start_result", safeResult).apply();
+        updateStatus(safeResult);
+    }
+
+    private void runAutoSearch(ArrayList<String> profiles, int startIndex, int startId) {
+        if (profiles == null || profiles.isEmpty() || serviceDestroyed) return;
+        autoSearchEnabled = true;
+        autoProfiles = new ArrayList<>(profiles);
+        autoStartId = startId;
+        autoConnected = false;
+        int count = autoProfiles.size();
+        int begin = Math.max(0, Math.min(startIndex, count - 1));
+        for (int i = begin; i < count; i++) {
+            if (!autoSearchEnabled || serviceDestroyed) return;
+            String profile = autoProfiles.get(i);
+            CountDownLatch signal = new CountDownLatch(1);
+            attemptConnected = false;
+            attemptSignal = signal;
+            updateStatus("جست‌وجوی هوشمند: آزمایش سرور " + (i + 1)
+                    + " از " + count + "؛ حداکثر ۱۸ ثانیه");
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("session_start_result", "در حال آزمایش سرور "
+                            + (i + 1) + " از " + count).apply();
+            final String result;
+            synchronized (nativeSessionLock) {
+                if (!autoSearchEnabled || serviceDestroyed) {
+                    attemptSignal = null;
+                    return;
+                }
+                OpenVpn3Bridge.stopSession();
+                result = OpenVpn3Bridge.startSession(profile);
+            }
+            boolean accepted = result != null
+                    && result.startsWith("درخواست اتصال به هسته OpenVPN 3 تحویل شد");
+            if (!accepted) {
+                attemptSignal = null;
+                appendAutoHistory("AUTO_SEARCH_SKIP", "سرور " + (i + 1)
+                        + ": " + (result == null ? "بدون پاسخ" : result));
+                continue;
+            }
+            try {
+                signal.await(AUTO_ATTEMPT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                attemptSignal = null;
+                return;
+            }
+            boolean connected = attemptConnected;
+            attemptSignal = null;
+            if (connected) {
+                autoConnected = true;
+                nextAutoIndex = (i + 1) % count;
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("session_start_result", "اتصال واقعی OpenVPN با سرور "
+                                + (i + 1) + " از " + count + " برقرار شد.").apply();
+                appendAutoHistory("AUTO_SEARCH_CONNECTED", "سرور " + (i + 1)
+                        + " از " + count + "؛ اتصال واقعی تأیید شد");
+                updateStatus("اتصال برقرار شد؛ سرور " + (i + 1) + " از " + count);
+                return;
+            }
+            synchronized (nativeSessionLock) {
+                OpenVpn3Bridge.stopSession();
+            }
+            appendAutoHistory("AUTO_SEARCH_NEXT", "سرور " + (i + 1)
+                    + " موفق نشد؛ انتقال به سرور بعدی");
+        }
+        autoSearchEnabled = false;
+        autoConnected = false;
+        setLampState("disconnected");
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("session_start_result", "پس از بررسی " + count
+                        + " سرور، اتصال واقعی برقرار نشد.").apply();
+        updateStatus("جست‌وجو تمام شد؛ هیچ‌یک از " + count
+                + " سرور اتصال واقعی برقرار نکرد. می‌توانید بعداً دوباره جست‌وجو کنید.");
+    }
+
+    private void appendAutoHistory(String name, String info) {
+        android.content.SharedPreferences diagnostics =
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        String history = diagnostics.getString("native_event_history", "");
+        String detail = name + " — " + info.replace('\n', ' ').replace('\r', ' ');
+        String next = history.isEmpty() ? detail : history + "\n" + detail;
+        String[] entries = next.split("\n");
+        if (entries.length > 30) {
+            StringBuilder trimmed = new StringBuilder();
+            for (int i = entries.length - 30; i < entries.length; i++) {
+                if (trimmed.length() > 0) trimmed.append('\n');
+                trimmed.append(entries[i]);
+            }
+            next = trimmed.toString();
+        }
+        diagnostics.edit().putString("native_last_event", detail)
+                .putString("native_event_history", next).apply();
+    }
+
+    private void scheduleAutoFailover() {
+        if (!autoSearchEnabled || !autoConnected
+                || !failoverQueued.compareAndSet(false, true)) return;
+        autoConnected = false;
+        sessionExecutor.execute(() -> {
+            failoverQueued.set(false);
+            if (!autoSearchEnabled || serviceDestroyed || autoProfiles == null) return;
+            appendAutoHistory("AUTO_FAILOVER", "قطع نشست؛ جست‌وجوی سرور جایگزین آغاز شد");
+            runAutoSearch(autoProfiles, nextAutoIndex, autoStartId);
+        });
     }
 
     @Override
@@ -388,6 +516,21 @@ public final class RahYabVpnService extends VpnService {
         }
         diagnostics.edit().putString("native_last_event", detail)
                 .putString("native_event_history", nextHistory).apply();
+        CountDownLatch waiting = attemptSignal;
+        if (waiting != null) {
+            if ("CONNECTED".equals(name) && !error && !fatal) {
+                attemptConnected = true;
+                waiting.countDown();
+            } else if (error || fatal || "NATIVE_CONNECT_RESULT".equals(name)
+                    || "NATIVE_CONNECT_EXCEPTION".equals(name)
+                    || "EXITING".equals(name)) {
+                waiting.countDown();
+            }
+        }
+        if (autoConnected && ("NATIVE_CONNECT_RESULT".equals(name)
+                || "NATIVE_CONNECT_EXCEPTION".equals(name) || "EXITING".equals(name))) {
+            scheduleAutoFailover();
+        }
         if ("CONNECTED".equals(name) && !error && !fatal) {
             setLampState("connected");
         } else if (error || fatal || "DISCONNECTED".equals(name) || "EXITING".equals(name)) {
@@ -465,6 +608,10 @@ public final class RahYabVpnService extends VpnService {
     @Override
     public void onDestroy() {
         serviceDestroyed = true;
+        autoSearchEnabled = false;
+        autoConnected = false;
+        autoProfiles = null;
+        attemptSignal = null;
         sessionExecutor.shutdownNow();
         setLampState("disconnected");
         // Stop and join the native worker before closing the TUN or releasing
