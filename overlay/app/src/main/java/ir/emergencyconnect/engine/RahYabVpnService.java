@@ -162,9 +162,19 @@ public final class RahYabVpnService extends VpnService {
             }
             sessionExecutor.execute(() -> {
                 if (serviceDestroyed) return;
+                // JNI binding can perform native initialization. Keep it off
+                // Android's service main thread: the service must already be
+                // foreground before any native work begins.
+                if (!nativeCallbacksBound) {
+                    nativeBindDiagnostic = OpenVpn3Bridge.bindTunService(this);
+                    nativeCallbacksBound = "OK".equals(nativeBindDiagnostic);
+                    getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                            .putString("native_bind_result", nativeBindDiagnostic).apply();
+                }
                 if (!nativeCallbacksBound) {
                     setLampState("disconnected");
-                    updateStatus("اتصال داخلی در دسترس نیست: اتصال پل JNI برقرار نشد");
+                    updateStatus("اتصال داخلی در دسترس نیست: اتصال پل JNI برقرار نشد — "
+                            + nativeBindDiagnostic);
                     stopSelf(startId);
                     return;
                 }
@@ -411,11 +421,10 @@ public final class RahYabVpnService extends VpnService {
 
     @Override
     public void onCreate() {
+        // Do not initialize JNI here. Android calls onCreate() before
+        // onStartCommand(); blocking native initialization here can prevent
+        // startForeground() from being called before the system deadline.
         super.onCreate();
-        nativeBindDiagnostic = OpenVpn3Bridge.bindTunService(this);
-        nativeCallbacksBound = "OK".equals(nativeBindDiagnostic);
-        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                .putString("native_bind_result", nativeBindDiagnostic).apply();
     }
 
     /**
