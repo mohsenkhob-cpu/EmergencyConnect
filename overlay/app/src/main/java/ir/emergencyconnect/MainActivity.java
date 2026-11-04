@@ -24,20 +24,23 @@ public class MainActivity extends Activity {
     final String API = "https://www.vpngate.net/api/iphone/";
     final ExecutorService worker = Executors.newSingleThreadExecutor();
     final ArrayList<Server> servers = new ArrayList<>();
-    LinearLayout list; TextView status; Button refresh; ProgressBar searchSpinner; TextView searchDetail;
+    LinearLayout list; TextView status; Button refresh; ProgressBar searchSpinner; TextView searchDetail; LinearLayout searchProgressRow;
+    final ArrayList<TextView> serverStatusViews = new ArrayList<>();
+    final ArrayList<String> serverStatusEndpoints = new ArrayList<>();
     Server selectedServer; TextView liveSpeedView;
     final Handler speedHandler = new Handler(Looper.getMainLooper());
     long lastRxBytes=-1, lastTxBytes=-1;
     final Runnable speedPoll = new Runnable(){ public void run(){ updateLiveSpeed(); speedHandler.postDelayed(this,1000); }};
     TextView lampConnected, lampSearching, lampDisconnected;
     final Handler lampHandler = new Handler(Looper.getMainLooper());
-    final Runnable lampPoll = new Runnable(){ public void run(){ updateConnectionLamps(); updateSearchProgress(); lampHandler.postDelayed(this,700); }};
+    final Runnable lampPoll = new Runnable(){ public void run(){ updateConnectionLamps(); updateSearchProgress(); updateServerStatusLabels(); lampHandler.postDelayed(this,700); }};
     void updateSearchProgress() {
         if (searchSpinner == null || searchDetail == null) return;
         android.content.SharedPreferences d = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         String state = d.getString("connection_lamp_state", "disconnected");
         String detail = d.getString("session_start_result", "");
         boolean active = "searching".equals(state);
+        if (searchProgressRow != null) searchProgressRow.setVisibility(active ? android.view.View.VISIBLE : android.view.View.GONE);
         searchSpinner.setVisibility(active ? android.view.View.VISIBLE : android.view.View.GONE);
         searchDetail.setText(detail == null || detail.isEmpty() ? "در حال جست‌وجو…" : detail);
         searchSpinner.setIndeterminate(active);
@@ -49,7 +52,25 @@ public class MainActivity extends Activity {
     private ArrayList<String> pendingVpnProfiles;
     static class Server { String country, ip, host, config, source; long speed; int ping, measuredPing=-1; boolean tcpReachable; }
 
-    @Override public void onCreate(Bundle b){ super.onCreate(b); getWindow().setStatusBarColor(navy); getWindow().setNavigationBarColor(navy); build(); requestNotificationPermissionIfNeeded(); loadServers(); }
+    @Override public void onCreate(Bundle b){
+        super.onCreate(b);
+        final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+            try {
+                StringWriter trace = new StringWriter();
+                error.printStackTrace(new PrintWriter(trace));
+                String value = trace.toString();
+                if (value.length() > 12000) value = value.substring(0, 12000);
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("last_java_crash", thread.getName() + "\\n" + value)
+                        .putString("last_java_crash_time", new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
+                        .commit();
+            } catch (Throwable ignored) { }
+            if (previous != null) previous.uncaughtException(thread, error);
+        });
+        getWindow().setStatusBarColor(navy); getWindow().setNavigationBarColor(navy);
+        build(); requestNotificationPermissionIfNeeded(); loadServers();
+    }
 
     private void requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= 33
@@ -66,20 +87,20 @@ public class MainActivity extends Activity {
         LinearLayout hero=new LinearLayout(this); hero.setOrientation(1); hero.setPadding(20,20,20,20); hero.setBackground(shape(navy));
         hero.addView(txt("راه‌یاب VPN",26,Color.WHITE,true)); hero.addView(txt("یافتن و آماده‌سازی سرورهای VPN Gate",15,Color.LTGRAY,false)); root.addView(hero);
         status=txt("برای دریافت فهرست سرورها دکمه زیر را بزنید.",15,navy,true); status.setPadding(5,18,5,12); root.addView(status);
-        LinearLayout progressRow = new LinearLayout(this);
-        progressRow.setOrientation(LinearLayout.HORIZONTAL);
-        progressRow.setGravity(Gravity.CENTER_VERTICAL);
-        progressRow.setPadding(10,8,10,8);
-        progressRow.setBackground(shape(Color.WHITE));
+        searchProgressRow = new LinearLayout(this);
+        searchProgressRow.setOrientation(LinearLayout.HORIZONTAL);
+        searchProgressRow.setGravity(Gravity.CENTER_VERTICAL);
+        searchProgressRow.setPadding(10,8,10,8);
+        searchProgressRow.setBackground(shape(Color.WHITE));
         searchSpinner = new ProgressBar(this);
         searchSpinner.setIndeterminate(true);
-        progressRow.addView(searchSpinner, new LinearLayout.LayoutParams(32,32));
+        searchProgressRow.addView(searchSpinner, new LinearLayout.LayoutParams(32,32));
         searchDetail = txt("در حال آماده‌سازی جست‌وجو…",13,teal,true);
         LinearLayout.LayoutParams detailParams = new LinearLayout.LayoutParams(0,-2,1f);
         detailParams.setMargins(12,0,0,0);
-        progressRow.addView(searchDetail,detailParams);
-        progressRow.setVisibility(android.view.View.GONE);
-        root.addView(progressRow);
+        searchProgressRow.addView(searchDetail,detailParams);
+        searchProgressRow.setVisibility(android.view.View.GONE);
+        root.addView(searchProgressRow);
         LinearLayout lamps = new LinearLayout(this);
         lamps.setOrientation(LinearLayout.HORIZONTAL);
         lamps.setGravity(Gravity.CENTER);
@@ -129,6 +150,8 @@ public class MainActivity extends Activity {
             android.content.SharedPreferences diagnostics =
                     getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
             String report = "گزارش راه‌یاب VPN\\n"
+                    + "زمان آخرین شروع سرویس: " + diagnostics.getString("service_start_received", "ثبت نشده") + "\\n"
+                    + "آخرین خطای جاوا: " + diagnostics.getString("last_java_crash", "ثبت نشده") + "\\n"
                     + "پل JNI: " + diagnostics.getString("native_bind_result", "ثبت نشده") + "\\n"
                     + "شروع نشست: " + diagnostics.getString("session_start_result", "ثبت نشده") + "\\n"
                     + "آخرین رویداد موتور: " + diagnostics.getString("native_last_event", "هنوز رویدادی ثبت نشده") + "\\n"
@@ -331,6 +354,8 @@ public class MainActivity extends Activity {
     List<String> parseCsv(String line){ ArrayList<String> out=new ArrayList<>(); StringBuilder x=new StringBuilder(); boolean q=false; for(int i=0;i<line.length();i++){char ch=line.charAt(i); if(ch=='"'){ if(q&&i+1<line.length()&&line.charAt(i+1)=='"'){x.append('"');i++;}else q=!q;} else if(ch==','&&!q){out.add(x.toString());x.setLength(0);}else x.append(ch);} out.add(x.toString()); return out; }
     void render(){
         list.removeAllViews();
+        serverStatusViews.clear();
+        serverStatusEndpoints.clear();
         int n=Math.min(servers.size(),40);
         for(int i=0;i<n;i++){
             final Server s=servers.get(i);
@@ -348,6 +373,11 @@ public class MainActivity extends Activity {
             card.addView(txt("پینگ آزمایشی: "+(s.measuredPing<0?"پاسخ نداد":s.measuredPing+" ms")
                     +"   |   وضعیت مسیر: "+(s.tcpReachable?"در دسترس":"تأیید نشد"),12,Color.DKGRAY,false));
             card.addView(txt("سرعت اعلامی سرور: "+String.format(Locale.US,"%.1f",(s.speed*8.0/1000000.0))+" Mbps",12,Color.DKGRAY,false));
+            TextView testState = txt("وضعیت جست‌وجوی خودکار: در صف آزمایش",12,Color.GRAY,true);
+            card.addView(testState);
+            String endpoint = s.ip + ":" + remotePort(s.config);
+            serverStatusViews.add(testState);
+            serverStatusEndpoints.add(endpoint);
             TextView rate=txt("دانلود/آپلود زنده: پس از اتصال نمایش داده می‌شود",12,teal,true);
             card.addView(rate);
             if(selected) liveSpeedView=rate;
@@ -361,6 +391,20 @@ public class MainActivity extends Activity {
             list.addView(card);
         }
     }
+    private void updateServerStatusLabels() {
+        if (serverStatusViews.isEmpty()) return;
+        android.content.SharedPreferences d = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        for (int i = 0; i < serverStatusViews.size(); i++) {
+            String endpoint = serverStatusEndpoints.get(i);
+            String state = d.getString("server_test_" + endpoint, "queued");
+            TextView view = serverStatusViews.get(i);
+            if ("testing".equals(state)) { view.setText("وضعیت جست‌وجوی خودکار: در حال آزمایش"); view.setTextColor(Color.rgb(210,145,0)); }
+            else if ("failed".equals(state)) { view.setText("وضعیت جست‌وجوی خودکار: ناموفق؛ عبور به سرور بعدی"); view.setTextColor(Color.rgb(200,45,45)); }
+            else if ("connected".equals(state)) { view.setText("وضعیت جست‌وجوی خودکار: اتصال برقرار شد"); view.setTextColor(Color.rgb(20,150,65)); }
+            else { view.setText("وضعیت جست‌وجوی خودکار: در صف آزمایش"); view.setTextColor(Color.GRAY); }
+        }
+    }
+
     private void updateLiveSpeed() {
         if(liveSpeedView==null||selectedServer==null) return;
         String state=getSharedPreferences("rah_yab_diagnostics",MODE_PRIVATE)
