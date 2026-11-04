@@ -193,7 +193,8 @@ public final class RahYabVpnService extends VpnService {
             int[] routePrefixes,
             int mtu) throws Exception {
         return establishTun(sessionName, addresses, prefixes, dnsServers,
-                routeAddresses, routePrefixes, new String[0], new int[0], mtu);
+                routeAddresses, routePrefixes, new String[0], new int[0],
+                new String[0], mtu);
     }
 
     /**
@@ -210,6 +211,7 @@ public final class RahYabVpnService extends VpnService {
             int[] routePrefixes,
             String[] excludedRouteAddresses,
             int[] excludedRoutePrefixes,
+            String[] searchDomains,
             int mtu) throws Exception {
 
         closeTun();
@@ -224,7 +226,8 @@ public final class RahYabVpnService extends VpnService {
                 || routeAddresses.length > 512 || routeAddresses.length != routePrefixes.length
                 || excludedRouteAddresses == null || excludedRoutePrefixes == null
                 || excludedRouteAddresses.length > 512
-                || excludedRouteAddresses.length != excludedRoutePrefixes.length) {
+                || excludedRouteAddresses.length != excludedRoutePrefixes.length
+                || searchDomains == null || searchDomains.length > 16) {
             throw new IllegalArgumentException("TUN DNS/routes are invalid or excessive");
         }
         if (mtu != 0 && (mtu < 576 || mtu > 65535)) {
@@ -253,6 +256,14 @@ public final class RahYabVpnService extends VpnService {
 
         for (String dns : dnsServers) {
             builder.addDnsServer(parseNumericAddress(dns, "DNS server"));
+        }
+
+        for (String domain : searchDomains) {
+            if (domain == null || domain.isEmpty() || domain.length() > 253
+                    || !domain.matches("(?i)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")) {
+                throw new IllegalArgumentException("Invalid DNS search domain");
+            }
+            builder.addSearchDomain(domain);
         }
 
         for (int i = 0; i < routeAddresses.length; i++) {

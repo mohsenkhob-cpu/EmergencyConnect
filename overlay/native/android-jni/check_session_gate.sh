@@ -36,7 +36,7 @@ done
 grep -Fq 'establishTun' "$SERVICE"
 grep -Fq 'native_bind_result' "$SERVICE"
 grep -Fq 'native_bind_result' overlay/app/src/main/java/ir/emergencyconnect/MainActivity.java
-grep -Fq '(Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[II)I' "$JNI"
+grep -Fq '(Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[I[Ljava/lang/String;I)I' "$JNI"
 grep -Fq 'protectTransportSocket' "$SERVICE"
 grep -Fq 'protectTransportSocket' "$JNI"
 # Ensure runtime diagnostics distinguish a handshake stall from TUN setup failure.

@@ -114,6 +114,7 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
     bool builder_active = false;
     bool unsupported_option_seen = false;
     std::vector<std::string> dns_servers;
+    std::vector<std::string> search_domains;
 
     bool tun_builder_new() override {
         if (builder_active) {
@@ -126,6 +127,7 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         addresses.clear();
         routes.clear();
         dns_servers.clear();
+        search_domains.clear();
         unsupported_option_seen = false;
         builder_active = true;
         reportDiagnostic("TUN_BUILDER_BEGIN",
@@ -247,9 +249,17 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
             const openvpn::DnsOptions &dns) override {
         if (!builder_active) return false;
         std::vector<std::string> parsed;
-        if (!dns.search_domains.empty()) {
+        if (dns.search_domains.size() > 16) {
             unsupported_option_seen = true;
             return false;
+        }
+        search_domains.clear();
+        for (const auto &domain : dns.search_domains) {
+            if (domain.domain.empty() || domain.domain.size() > 253) {
+                unsupported_option_seen = true;
+                return false;
+            }
+            search_domains.push_back(domain.domain);
         }
         for (const auto &entry : dns.servers) {
             const auto &server = entry.second;
@@ -323,17 +333,19 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         jobjectArray jaddresses = make_string_array(env, address_values);
         jintArray jaddress_prefixes = make_int_array(env, address_prefixes);
         jobjectArray jdns = make_string_array(env, dns_servers);
+        jobjectArray jsearch_domains = make_string_array(env, search_domains);
         jobjectArray jroutes = make_string_array(env, route_values);
         jintArray jroute_prefixes = make_int_array(env, route_prefixes);
         jobjectArray jexcluded = make_string_array(env, excluded_values);
         jintArray jexcluded_prefixes = make_int_array(env, excluded_prefixes);
-        if (!jname || !jaddresses || !jaddress_prefixes || !jdns || !jroutes ||
+        if (!jname || !jaddresses || !jaddress_prefixes || !jdns || !jsearch_domains || !jroutes ||
             !jroute_prefixes || !jexcluded || !jexcluded_prefixes) {
             if (env->ExceptionCheck()) env->ExceptionClear();
             if (jname) env->DeleteLocalRef(jname);
             if (jaddresses) env->DeleteLocalRef(jaddresses);
             if (jaddress_prefixes) env->DeleteLocalRef(jaddress_prefixes);
             if (jdns) env->DeleteLocalRef(jdns);
+            if (jsearch_domains) env->DeleteLocalRef(jsearch_domains);
             if (jroutes) env->DeleteLocalRef(jroutes);
             if (jroute_prefixes) env->DeleteLocalRef(jroute_prefixes);
             if (jexcluded) env->DeleteLocalRef(jexcluded);
@@ -344,7 +356,7 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
 
         jint fd = env->CallIntMethod(service, establish_method, jname, jaddresses,
                 jaddress_prefixes, jdns, jroutes, jroute_prefixes, jexcluded,
-                jexcluded_prefixes, static_cast<jint>(mtu));
+                jexcluded_prefixes, jsearch_domains, static_cast<jint>(mtu));
         const bool failed = env->ExceptionCheck();
         if (failed) env->ExceptionClear();
 
@@ -357,6 +369,7 @@ class RahYabOpenVPNClient final : public openvpn::ClientAPI::OpenVPNClient {
         env->DeleteLocalRef(jroute_prefixes);
         env->DeleteLocalRef(jexcluded);
         env->DeleteLocalRef(jexcluded_prefixes);
+        env->DeleteLocalRef(jsearch_domains);
         if (failed || fd < 0) {
             reportDiagnostic("TUN_BUILDER_ESTABLISH_FAILED",
                     failed ? "Android VpnService threw while establishing the TUN interface."
@@ -761,7 +774,7 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService(
         return to_java_string(env, "GET_SERVICE_CLASS_FAILED");
     }
     jmethodID establish = env->GetMethodID(cls, "establishTun",
-            "(Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[II)I");
+            "(Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[Ljava/lang/String;[I[Ljava/lang/String;[I[Ljava/lang/String;I)I");
     jmethodID protect = env->GetMethodID(cls, "protectTransportSocket", "(I)Z");
     jmethodID event_callback = env->GetMethodID(cls, "onNativeEvent",
             "(Ljava/lang/String;Ljava/lang/String;ZZ)V");
