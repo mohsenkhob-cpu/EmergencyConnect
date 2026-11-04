@@ -16,6 +16,7 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -178,6 +179,16 @@ public class MainActivity extends Activity {
         singBoxParams.topMargin = dp(12);
         page.addView(singBoxButton, singBoxParams);
         singBoxButton.setOnClickListener(v -> chooseSingBoxFile());
+
+        Button pasteLinkButton = new Button(this);
+        pasteLinkButton.setText("افزودن لینک VLESS");
+        pasteLinkButton.setAllCaps(false);
+        pasteLinkButton.setTextColor(Color.WHITE);
+        pasteLinkButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
+        LinearLayout.LayoutParams pasteLinkParams = new LinearLayout.LayoutParams(-1, dp(54));
+        pasteLinkParams.topMargin = dp(8);
+        page.addView(pasteLinkButton, pasteLinkParams);
+        pasteLinkButton.setOnClickListener(v -> showVlessImportDialog());
 
         singBoxConnectButton = new Button(this);
         singBoxConnectButton.setText("اتصال با پروفایل sing-box");
@@ -391,6 +402,37 @@ public class MainActivity extends Activity {
                             .putString(KEY_SERVERS, remaining.toString()).apply();
                     setStatus("سرور انتخاب‌شده از فهرست حذف شد");
                 })
+                .show();
+    }
+
+
+    private void showVlessImportDialog() {
+        EditText input = new EditText(this);
+        input.setHint("vless://...");
+        input.setTextSize(13);
+        input.setSingleLine(false);
+        input.setMinLines(2);
+        input.setMaxLines(5);
+        input.setPadding(dp(12), dp(10), dp(12), dp(10));
+        new AlertDialog.Builder(this)
+                .setTitle("افزودن لینک VLESS")
+                .setMessage("لینک اشتراک VLESS را وارد کنید. فعلاً لینک‌های TCP، WebSocket و gRPC پشتیبانی می‌شوند.")
+                .setView(input)
+                .setPositiveButton("بررسی و ذخیره", (dialog, which) -> {
+                    try {
+                        String generated = SingBoxProfile.fromShareLink(
+                                input.getText().toString().trim());
+                        SingBoxProfile profile = SingBoxProfile.parse(generated);
+                        pendingSingBoxJson = generated;
+                        saveSingBoxProfile(generated, profile);
+                        singBoxConnectButton.setEnabled(true);
+                        setStatus("لینک VLESS بررسی و ذخیره شد: " + profile.getOutboundTag());
+                    } catch (Exception e) {
+                        setStatus("خطا در لینک VLESS: " + safeMessage(e));
+                        Toast.makeText(this, safeMessage(e), Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("انصراف", null)
                 .show();
     }
 
