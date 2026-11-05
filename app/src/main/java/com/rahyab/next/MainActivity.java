@@ -174,10 +174,14 @@ public class MainActivity extends Activity {
                 prefs.getString("native_event_history", ""));
         appendReportSection(report, "آخرین وضعیت سرویس",
                 prefs.getString("service_status_message", ""));
+        appendReportSection(report, "زمان ورود دستور به سرویس اندروید",
+                prefs.getString("service_start_command_entered", ""));
+        appendReportSection(report, "زمان دریافت درخواست شروع اتصال",
+                prefs.getString("service_start_received", ""));
         appendReportSection(report, "نتیجه شروع نشست",
                 prefs.getString("session_start_result", ""));
-        appendReportSection(report, "زمان دریافت درخواست شروع سرویس",
-                prefs.getString("service_start_received", ""));
+        appendReportSection(report, "زمان درخواست صفحه اصلی برای اجرای سرویس",
+                prefs.getString("service_launch_requested_at", ""));
         appendReportSection(report, "نتیجه اتصال پل JNI",
                 prefs.getString("native_bind_result", ""));
         appendReportSection(report, "نوع سرویس پیش‌زمینه",
@@ -880,9 +884,27 @@ public class MainActivity extends Activity {
                 service.putStringArrayListExtra(RahYabVpnService.EXTRA_PROFILES,
                         new ArrayList<>(pendingOpenVpnProfiles));
                 try {
+                    // Start a fresh diagnostic attempt so old service/JNI events
+                    // cannot be mistaken for the current launch.
+                    android.content.SharedPreferences diagnostics =
+                            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+                    diagnostics.edit()
+                            .putString("service_launch_requested_at",
+                                    new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
+                                            java.util.Locale.US).format(new java.util.Date()))
+                            .remove("service_start_command_entered")
+                            .remove("service_start_received")
+                            .remove("native_bind_result")
+                            .remove("foreground_service_type")
+                            .remove("service_start_error")
+                            .remove("session_start_result")
+                            .remove("native_last_event")
+                            .remove("native_event_history")
+                            .remove("service_status_message")
+                            .commit();
                     if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
                     else startService(service);
-                    setStatus("جستجوی خودکار آغاز شد؛ سرورها یکی‌یکی با تونل واقعی بررسی می‌شوند");
+                    setStatus("درخواست اجرای سرویس ارسال شد؛ منتظر ثبت شروع موتور هستیم…");
                 } catch (RuntimeException error) {
                     discoveryButton.setEnabled(true);
                     disconnectButton.setEnabled(false);
