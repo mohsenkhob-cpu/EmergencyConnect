@@ -124,6 +124,103 @@ public class MainActivity extends Activity {
 
     private void setStatus(String value) {
         if (status != null) status.setText(value);
+        appendAppDiagnostic("وضعیت", value);
+    }
+
+    /** Keep a bounded, local diagnostic history; never store imported VPN credentials here. */
+    private void appendAppDiagnostic(String category, String message) {
+        try {
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+            String old = prefs.getString("app_event_history", "");
+            String stamp = new java.text.SimpleDateFormat(
+                    "yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                    .format(new java.util.Date());
+            String safe = message == null ? "" : message.replace('\\n', ' ').replace('\\r', ' ');
+            String next = old.isEmpty() ? stamp + " | " + category + " | " + safe
+                    : old + "\\n" + stamp + " | " + category + " | " + safe;
+            String[] lines = next.split("\\n");
+            if (lines.length > 120) {
+                StringBuilder trimmed = new StringBuilder();
+                for (int i = lines.length - 120; i < lines.length; i++) {
+                    if (trimmed.length() > 0) trimmed.append('\\n');
+                    trimmed.append(lines[i]);
+                }
+                next = trimmed.toString();
+            }
+            prefs.edit().putString("app_event_history", next).apply();
+        } catch (RuntimeException ignored) {
+            // Diagnostics must never interrupt VPN operation.
+        }
+    }
+
+    private String buildDiagnosticReport() {
+        android.content.SharedPreferences prefs =
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        android.content.SharedPreferences singBox =
+                getSharedPreferences("rah_yab_singbox_status", MODE_PRIVATE);
+        StringBuilder report = new StringBuilder();
+        report.append("گزارش عیب‌یابی راه‌یاب\\n");
+        report.append("زمان تهیه: ").append(new java.text.SimpleDateFormat(
+                "yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                .format(new java.util.Date())).append('\\n');
+        report.append("نسخه اندروید: ").append(Build.VERSION.RELEASE)
+                .append(" (API ").append(Build.VERSION.SDK_INT).append(")\\n");
+        report.append("مدل دستگاه: ").append(Build.MANUFACTURER).append(' ')
+                .append(Build.MODEL).append("\\n\\n");
+
+        appendReportSection(report, "رویدادهای برنامه",
+                prefs.getString("app_event_history", ""));
+        appendReportSection(report, "رویدادهای موتور OpenVPN",
+                prefs.getString("native_event_history", ""));
+        appendReportSection(report, "آخرین وضعیت سرویس",
+                prefs.getString("service_status_message", ""));
+        appendReportSection(report, "نتیجه شروع نشست",
+                prefs.getString("session_start_result", ""));
+        appendReportSection(report, "آخرین رویداد sing-box",
+                singBox.getString("last_event", "") + " | "
+                        + singBox.getString("last_detail", ""));
+        appendReportSection(report, "خطای شروع سرویس",
+                prefs.getString("service_start_error", ""));
+        appendReportSection(report, "وضعیت چراغ اتصال",
+                prefs.getString("connection_lamp_state", "نامشخص"));
+        report.append("\\nپروفایل‌ها و کلیدهای اتصال عمداً در این گزارش درج نمی‌شوند.\\n");
+        return report.toString();
+    }
+
+    private void appendReportSection(StringBuilder report, String title, String value) {
+        report.append("===== ").append(title).append(" =====\\n");
+        report.append(value == null || value.trim().isEmpty()
+                ? "اطلاعاتی ثبت نشده است" : value).append("\\n\\n");
+    }
+
+    private void showDiagnosticsDialog() {
+        TextView content = new TextView(this);
+        content.setText(buildDiagnosticReport());
+        content.setTextSize(12);
+        content.setTextColor(Color.rgb(220, 230, 245));
+        content.setPadding(dp(12), dp(10), dp(12), dp(10));
+        content.setTextIsSelectable(true);
+        ScrollView logScroll = new ScrollView(this);
+        logScroll.setBackgroundColor(Color.rgb(12, 23, 40));
+        logScroll.addView(content);
+        new AlertDialog.Builder(this)
+                .setTitle("گزارش و عیب‌یابی راه‌یاب")
+                .setMessage("گزارش رویدادها و خطاهای اخیر؛ برای ارسال به پشتیبانی، گزارش را کپی کنید.")
+                .setView(logScroll)
+                .setPositiveButton("کپی گزارش", (dialog, which) -> {
+                    android.content.ClipboardManager clipboard =
+                            (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                                "گزارش عیب‌یابی راه‌یاب", buildDiagnosticReport()));
+                        Toast.makeText(this, "گزارش کپی شد؛ آن را در گفت‌وگو جای‌گذاری کنید",
+                                Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNeutralButton("به‌روزرسانی", (dialog, which) -> showDiagnosticsDialog())
+                .setNegativeButton("بستن", null)
+                .show();
     }
 
     @Override public void onCreate(Bundle state) {
@@ -214,6 +311,17 @@ public class MainActivity extends Activity {
         advancedToggleParams.topMargin = dp(16);
         page.addView(advancedToggle, advancedToggleParams);
         page.addView(advancedPanel);
+        Button diagnosticsButton = new Button(this);
+        diagnosticsButton.setText("گزارش و عیب‌یابی  •  کپی گزارش");
+        diagnosticsButton.setAllCaps(false);
+        diagnosticsButton.setTextColor(Color.WHITE);
+        diagnosticsButton.setBackground(shape(Color.rgb(54, 83, 125), 16));
+        LinearLayout.LayoutParams diagnosticsParams =
+                new LinearLayout.LayoutParams(-1, dp(52));
+        diagnosticsParams.topMargin = dp(12);
+        page.addView(diagnosticsButton, diagnosticsParams);
+        diagnosticsButton.setOnClickListener(v -> showDiagnosticsDialog());
+
         advancedToggle.setOnClickListener(v -> {
             boolean show = advancedPanel.getVisibility() != View.VISIBLE;
             advancedPanel.setVisibility(show ? View.VISIBLE : View.GONE);
