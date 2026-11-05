@@ -653,6 +653,12 @@ public final class RahYabVpnService extends VpnService {
                 || searchDomains == null || searchDomains.length > 16) {
             throw new IllegalArgumentException("TUN DNS/routes are invalid or excessive");
         }
+        // Enforce full-tunnel routing before Android creates the interface.
+        // If a profile enables an address family without its default route,
+        // or omits VPN DNS, do not risk traffic/DNS falling back to the base network.
+        FullTunnelPolicy.validate(addresses, dnsServers, routeAddresses,
+                routePrefixes, excludedRouteAddresses);
+
         if (mtu != 0 && (mtu < 576 || mtu > 65535)) {
             throw new IllegalArgumentException("Invalid TUN MTU");
         }
