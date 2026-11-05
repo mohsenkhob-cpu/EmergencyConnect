@@ -1198,13 +1198,34 @@ public final class RahYabVpnService extends VpnService {
             foregroundStarted = false;
         }
         Thread cleanup = new Thread(() -> {
-            synchronized (nativeSessionLock) {
-                OpenVpn3Bridge.stopSession();
-            }
-            closeTun();
-            if (nativeCallbacksBound) {
-                OpenVpn3Bridge.unbindTunService();
-                nativeCallbacksBound = false;
+            try {
+                synchronized (nativeSessionLock) {
+                    OpenVpn3Bridge.stopSession();
+                }
+            } catch (RuntimeException | LinkageError error) {
+                // Continue best-effort teardown even if the Java/JNI bridge
+                // reports a failure. The native stop wrapper normally joins
+                // the worker before returning.
+                android.util.Log.e("RahYabVpnService",
+                        "OpenVPN native stop failed during service cleanup", error);
+            } finally {
+                try {
+                    closeTun();
+                } catch (RuntimeException error) {
+                    android.util.Log.e("RahYabVpnService",
+                            "TUN close failed during service cleanup", error);
+                } finally {
+                    if (nativeCallbacksBound) {
+                        try {
+                            OpenVpn3Bridge.unbindTunService();
+                        } catch (RuntimeException | LinkageError error) {
+                            android.util.Log.e("RahYabVpnService",
+                                    "OpenVPN JNI unbind failed during service cleanup", error);
+                        } finally {
+                            nativeCallbacksBound = false;
+                        }
+                    }
+                }
             }
         }, "RahYab-openvpn-cleanup");
         cleanup.setDaemon(true);
