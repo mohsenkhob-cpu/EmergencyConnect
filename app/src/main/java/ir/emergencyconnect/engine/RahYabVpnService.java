@@ -17,7 +17,7 @@ import java.net.URL;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.IOException;
-import android.util.Base64;
+import com.rahyab.next.VpnGateProvider;
 import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -682,66 +682,35 @@ public final class RahYabVpnService extends VpnService {
         return null;
     }
 
+    /**
+     * Refresh candidates through the same strict parser used by initial
+     * discovery. Do not parse a mirror independently here: that would create
+     * a weaker validation path for profiles received after the first batch.
+     */
     private ArrayList<String> fetchFreshProfiles(int wanted) {
         ArrayList<String> profiles = new ArrayList<>();
-        String[] sources = new String[] { VPN_GATE_API,
-                "https://cdn.jsdelivr.net/gh/GeorgeXie2333/vpngate-list-mirror@latest/data/vpngate.csv" };
-        for (String source : sources) {
-            HttpURLConnection connection = null;
-            BufferedReader reader = null;
-            try {
-                connection = (HttpURLConnection) new URL(source).openConnection();
-                connection.setConnectTimeout(8000);
-                connection.setReadTimeout(10000);
-                connection.setRequestProperty("User-Agent", "RahYabVPN/2.0");
-                if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) continue;
-                reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), "UTF-8"));
-                String line; boolean header = false; int bytes = 0;
-                while ((line = reader.readLine()) != null && profiles.size() < wanted) {
-                    bytes += line.length();
-                    if (bytes > 8 * 1024 * 1024) break;
-                    if (line.startsWith("#HostName")) { header = true; continue; }
-                    if (!header || line.startsWith("#") || line.trim().isEmpty()) continue;
-                    java.util.List<String> fields = parseCsvFields(line);
-                    if (fields.size() < 15) continue;
-                    try {
-                        byte[] raw = Base64.decode(fields.get(14).trim(), Base64.DEFAULT);
-                        if (raw.length == 0 || raw.length > 256 * 1024) continue;
-                        String config = new String(raw, "UTF-8");
-                        if (!config.contains("client") || !config.contains("remote ")) continue;
-                        String endpoint = profileEndpoint(config);
-                        synchronized (triedServerEndpoints) {
-                            if (endpoint.isEmpty() || triedServerEndpoints.contains(endpoint)) continue;
-                        }
-                        profiles.add(config);
-                    } catch (IllegalArgumentException ignored) { }
+        if (wanted <= 0) return profiles;
+        try {
+            VpnGateProvider.Result result = VpnGateProvider.fetch();
+            for (VpnGateProvider.Server server : result.servers) {
+                if (profiles.size() >= wanted) break;
+                String endpoint = server.endpointKey();
+                synchronized (triedServerEndpoints) {
+                    if (endpoint.isEmpty() || triedServerEndpoints.contains(endpoint)) {
+                        continue;
+                    }
                 }
-                if (!profiles.isEmpty()) break;
-            } catch (Exception ignored) {
-            } finally {
-                if (reader != null) try { reader.close(); } catch (IOException ignored) { }
-                if (connection != null) connection.disconnect();
+                profiles.add(server.openVpnProfile);
             }
+            appendAutoHistory("AUTO_REFRESH_SOURCE",
+                    "دریافت تازه از منبع رسمی VPN Gate؛ پروفایل معتبر: "
+                            + profiles.size());
+        } catch (IOException | RuntimeException error) {
+            appendAutoHistory("AUTO_REFRESH_SOURCE_FAILED",
+                    "دریافت یا اعتبارسنجی منبع رسمی ناموفق بود: "
+                            + error.getClass().getSimpleName());
         }
         return profiles;
-    }
-
-    private java.util.List<String> parseCsvFields(String line) {
-        ArrayList<String> fields = new ArrayList<>();
-        StringBuilder field = new StringBuilder();
-        boolean quoted = false;
-        for (int i = 0; i < line.length(); i++) {
-            char c = line.charAt(i);
-            if (c == '"') {
-                if (quoted && i + 1 < line.length() && line.charAt(i + 1) == '"') {
-                    field.append('"'); i++;
-                } else quoted = !quoted;
-            } else if (c == ',' && !quoted) {
-                fields.add(field.toString()); field.setLength(0);
-            } else field.append(c);
-        }
-        fields.add(field.toString());
-        return fields;
     }
 
     private String profileEndpoint(String profile) {
