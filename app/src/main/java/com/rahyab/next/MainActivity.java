@@ -25,6 +25,7 @@ import android.widget.Toast;
 import com.wireguard.android.backend.GoBackend;
 import com.wireguard.android.backend.Tunnel;
 import com.wireguard.config.Config;
+import ir.emergencyconnect.engine.RahYabVpnService;
 
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
@@ -40,10 +41,12 @@ public class MainActivity extends Activity {
     private static final int REQUEST_VPN_PERMISSION = 4102;
     private static final int REQUEST_SINGBOX_PROFILE = 4103;
     private static final int REQUEST_SINGBOX_VPN_PERMISSION = 4104;
+    private static final int REQUEST_OPENVPN_VPN_PERMISSION = 4105;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private GoBackend wireGuardBackend;
     private Config pendingWireGuardConfig;
     private String pendingSingBoxJson;
+    private ArrayList<String> pendingOpenVpnProfiles;
     private Button singBoxConnectButton;
     private Button discoveryButton;
     private TextView status;
@@ -163,7 +166,7 @@ public class MainActivity extends Activity {
         page.addView(helper);
 
         discoveryButton = new Button(this);
-        discoveryButton.setText("جستجوی خودکار سرورهای رایگان");
+        discoveryButton.setText("اتصال هوشمند — یافتن بهترین سرور رایگان");
         discoveryButton.setTextSize(17);
         discoveryButton.setTextColor(Color.WHITE);
         discoveryButton.setAllCaps(false);
@@ -171,7 +174,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams discoveryParams = new LinearLayout.LayoutParams(-1, dp(58));
         discoveryParams.topMargin = dp(16);
         page.addView(discoveryButton, discoveryParams);
-        discoveryButton.setOnClickListener(v -> discoverFreeServers());
+        discoveryButton.setOnClickListener(v -> startSmartOpenVpnSearch());
 
         connectButton = new Button(this);
         connectButton.setText("پیشرفته: انتخاب فایل WireGuard");
@@ -191,7 +194,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams disconnectParams = new LinearLayout.LayoutParams(-1, dp(52));
         disconnectParams.topMargin = dp(10);
         page.addView(disconnectButton, disconnectParams);
-        disconnectButton.setOnClickListener(v -> disconnectWireGuard());
+        disconnectButton.setOnClickListener(v -> disconnectAllEngines());
 
         Button singBoxButton = new Button(this);
         singBoxButton.setText("وارد کردن فایل sing-box (JSON)");
@@ -400,6 +403,10 @@ public class MainActivity extends Activity {
         }
         if (requestCode == REQUEST_SINGBOX_VPN_PERMISSION) {
             startSingBox();
+            return;
+        }
+        if (requestCode == REQUEST_OPENVPN_VPN_PERMISSION) {
+            startOpenVpnService();
             return;
         }
         if (data == null) return;
@@ -662,6 +669,95 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 runOnUiThread(() -> setStatus("خطا در قطع اتصال: " + safeMessage(e)));
             }
+        });
+    }
+
+    private void startSmartOpenVpnSearch() {
+        if (discoveryButton == null || !discoveryButton.isEnabled()) return;
+        discoveryButton.setEnabled(false);
+        setStatus("در حال جستجوی سرورهای رایگان و آماده‌سازی آزمون اتصال…");
+        worker.execute(() -> {
+            try {
+                VpnGateProvider.Result result = VpnGateProvider.fetch();
+                ArrayList<String> profiles = new ArrayList<>();
+                java.util.HashSet<String> seen = new java.util.HashSet<>();
+                for (VpnGateProvider.Server server : result.servers) {
+                    if (profiles.size() >= 30) break;
+                    if (server.openVpnProfile != null && !server.openVpnProfile.isEmpty()
+                            && seen.add(server.endpointKey())) {
+                        profiles.add(server.openVpnProfile);
+                    }
+                }
+                if (profiles.isEmpty()) throw new IllegalStateException("پروفایل قابل استفاده‌ای پیدا نشد");
+                runOnUiThread(() -> {
+                    discoveryButton.setEnabled(true);
+                    pendingOpenVpnProfiles = profiles;
+                    setStatus(profiles.size() + " پروفایل دریافت شد؛ برای اجازه VPN آماده‌اید");
+                    Intent permission = VpnService.prepare(this);
+                    if (permission != null) {
+                        startActivityForResult(permission, REQUEST_OPENVPN_VPN_PERMISSION);
+                    } else {
+                        startOpenVpnService();
+                    }
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    discoveryButton.setEnabled(true);
+                    if (!isFinishing() && !isDestroyed())
+                        setStatus("جستجوی هوشمند ناموفق بود: " + safeMessage(error));
+                });
+            }
+        });
+    }
+
+    private void startOpenVpnService() {
+        if (pendingOpenVpnProfiles == null || pendingOpenVpnProfiles.isEmpty()) {
+            setStatus("فهرست سرورها آماده نیست؛ دوباره اتصال هوشمند را بزنید");
+            return;
+        }
+        setStatus("در حال آماده‌سازی OpenVPN 3 و آزمون سرورها؛ اتصال تا تأیید اینترنت قطعی اعلام نمی‌شود…");
+        discoveryButton.setEnabled(false);
+        disconnectButton.setEnabled(true);
+        // Android allows only one active VpnService tunnel. Stop the other engines
+        // before starting OpenVPN, and serialize WireGuard teardown on the worker.
+        SingBoxVpnService.stop(getApplicationContext());
+        worker.execute(() -> {
+            try {
+                wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
+            } catch (Exception ignored) { }
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                Intent service = new Intent(this, RahYabVpnService.class);
+                service.setAction(RahYabVpnService.ACTION_START);
+                service.putStringArrayListExtra(RahYabVpnService.EXTRA_PROFILES,
+                        new ArrayList<>(pendingOpenVpnProfiles));
+                try {
+                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
+                    else startService(service);
+                    setStatus("جستجوی خودکار آغاز شد؛ سرورها یکی‌یکی با تونل واقعی بررسی می‌شوند");
+                } catch (RuntimeException error) {
+                    discoveryButton.setEnabled(true);
+                    disconnectButton.setEnabled(false);
+                    setStatus("شروع سرویس OpenVPN ناموفق بود: " + safeMessage(error));
+                }
+            });
+        });
+    }
+
+    private void disconnectAllEngines() {
+        setStatus("در حال قطع همه موتورهای VPN…");
+        SingBoxVpnService.stop(getApplicationContext());
+        Intent stop = new Intent(this, RahYabVpnService.class);
+        stop.setAction(RahYabVpnService.ACTION_STOP);
+        try { startService(stop); } catch (RuntimeException ignored) { }
+        worker.execute(() -> {
+            try { wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null); }
+            catch (Exception ignored) { }
+            runOnUiThread(() -> {
+                disconnectButton.setEnabled(false);
+                discoveryButton.setEnabled(true);
+                setStatus("درخواست قطع اتصال به همه موتورها ارسال شد");
+            });
         });
     }
 
