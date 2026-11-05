@@ -316,33 +316,41 @@ public final class RahYabVpnService extends VpnService {
                 updateStatus("تونل برقرار شد؛ بررسی عبور اینترنت و اندازه‌گیری تأخیر…");
                 boolean trafficVerified = verifyTunnelTraffic(baselineExitIp);
                 if (trafficVerified) {
-                    long latency = measureTunnelLatencyMs();
-                    if (latency >= 0) {
-                        measured++;
-                        long throughputKbps = measureTunnelDownloadKbps();
-                        // A small bounded transfer supplements latency; if the
-                        // speed endpoint is unavailable, latency remains usable.
-                        double qualityScore = latency
-                                + (throughputKbps > 0
-                                ? 1000.0 / Math.max(0.1, throughputKbps / 1000.0)
-                                : 0.0);
-                        appendAutoHistory("AUTO_QUALITY_MEASURED",
-                                "سرور " + endpoint + "؛ تأخیر HTTPS: " + latency
-                                        + " ms؛ سرعت دریافت: "
-                                        + (throughputKbps > 0
-                                        ? throughputKbps + " kbps" : "نامشخص")
-                                        + "؛ امتیاز مقایسه: "
-                                        + String.format(java.util.Locale.US, "%.1f", qualityScore));
-                        if (qualityScore < bestQualityScore) {
-                            bestQualityScore = qualityScore;
-                            bestLatencyMs = latency;
-                            bestThroughputKbps = throughputKbps;
-                            bestProfile = profile;
-                            bestEndpoint = endpoint;
+                    int stableProbes = measureTunnelStability();
+                    if (stableProbes >= 4) {
+                        long latency = measureTunnelLatencyMs();
+                        if (latency >= 0) {
+                            measured++;
+                            long throughputKbps = measureTunnelDownloadKbps();
+                            // Stability is a gate first, then a small penalty for
+                            // one missed probe; throughput remains an approximate signal.
+                            double qualityScore = latency + (5 - stableProbes) * 250.0
+                                    + (throughputKbps > 0
+                                    ? 1000.0 / Math.max(0.1, throughputKbps / 1000.0)
+                                    : 0.0);
+                            appendAutoHistory("AUTO_QUALITY_MEASURED",
+                                    "سرور " + endpoint + "؛ پایداری HTTPS: "
+                                            + stableProbes + "/5؛ تأخیر: " + latency
+                                            + " ms؛ سرعت دریافت: "
+                                            + (throughputKbps > 0
+                                            ? throughputKbps + " kbps" : "نامشخص")
+                                            + "؛ امتیاز مقایسه: "
+                                            + String.format(java.util.Locale.US, "%.1f", qualityScore));
+                            if (qualityScore < bestQualityScore) {
+                                bestQualityScore = qualityScore;
+                                bestLatencyMs = latency;
+                                bestThroughputKbps = throughputKbps;
+                                bestProfile = profile;
+                                bestEndpoint = endpoint;
+                            }
+                        } else {
+                            appendAutoHistory("AUTO_QUALITY_FAILED",
+                                    "سرور " + endpoint + " آزمون تأخیر را کامل نکرد");
                         }
                     } else {
-                        appendAutoHistory("AUTO_QUALITY_FAILED",
-                                "سرور " + endpoint + " عبور اینترنت داشت اما آزمون کیفیت کامل نشد");
+                        appendAutoHistory("AUTO_STABILITY_FAILED",
+                                "سرور " + endpoint + " فقط " + stableProbes
+                                        + "/5 آزمون پایداری را گذراند؛ برای انتخاب رد شد");
                     }
                 } else {
                     appendAutoHistory("AUTO_TUNNEL_PROBE_FAILED",
@@ -448,9 +456,45 @@ public final class RahYabVpnService extends VpnService {
     }
 
     /**
-     * Three unprotected HTTPS 204 probes while the full VPN tunnel is active.
-     * Returns the mean successful latency; at least two probes must succeed.
+     * Short burst stability check through the active VPN tunnel.
+     * Four of five independent HTTPS 204 requests must succeed.
      */
+    private int measureTunnelStability() {
+        String[] probes = new String[] {
+                "https://connectivitycheck.gstatic.com/generate_204",
+                "https://cp.cloudflare.com/generate_204",
+                "https://connectivitycheck.gstatic.com/generate_204",
+                "https://cp.cloudflare.com/generate_204",
+                "https://connectivitycheck.gstatic.com/generate_204"
+        };
+        int successes = 0;
+        for (int i = 0; i < probes.length; i++) {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(probes[i]).openConnection();
+                connection.setInstanceFollowRedirects(false);
+                connection.setConnectTimeout(3000);
+                connection.setReadTimeout(3000);
+                connection.setUseCaches(false);
+                connection.setRequestMethod("GET");
+                if (connection.getResponseCode() == 204) successes++;
+            } catch (IOException | RuntimeException ignored) {
+                // A failed sample reduces the stability score.
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+            if (i < probes.length - 1) {
+                try {
+                    Thread.sleep(350L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return successes;
+                }
+            }
+        }
+        return successes;
+    }
+
     /**
      * Measure a small, bounded download through the active VPN tunnel.
      * This is a rough comparison signal, not a full speed-test result.
@@ -489,6 +533,10 @@ public final class RahYabVpnService extends VpnService {
         }
     }
 
+    /**
+     * Three HTTPS 204 probes through the active VPN tunnel.
+     * Returns the mean successful latency; at least two probes must succeed.
+     */
     private long measureTunnelLatencyMs() {
         String[] probes = new String[] {
                 "https://connectivitycheck.gstatic.com/generate_204",
