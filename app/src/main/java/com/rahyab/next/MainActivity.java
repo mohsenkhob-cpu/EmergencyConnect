@@ -319,7 +319,7 @@ public class MainActivity extends Activity {
                         String ping = server.advertisedPingMs == Integer.MAX_VALUE
                                 ? "نامشخص" : server.advertisedPingMs + " ms";
                         long speedMb = server.advertisedSpeedBytesPerSecond / (1024L * 1024L);
-                        labels[i] = country + " | " + host + "\\n" + server.ip + ":" + server.port
+                        labels[i] = country + " | " + host + "\n" + server.ip + ":" + server.port
                                 + " | پینگ اعلامی: " + ping + " | سرعت اعلامی: " + speedMb + " MB/s";
                     }
                     setStatus("فهرست دریافت شد: " + result.servers.size()
