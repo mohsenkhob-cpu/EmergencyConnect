@@ -88,4 +88,65 @@ public class VpnGateProviderTest {
         assertEquals(7, fields.size());
         assertEquals("United, States", fields.get(5));
     }
+
+    @Test public void parsesPinnedMirrorManifestForOfficialVpnGateSource() throws Exception {
+        String json = "{"
+                + "\"schema_version\":1,"
+                + "\"source_url\":\"https://www.vpngate.net/api/iphone/\","
+                + "\"data_commit\":\"523c8da909cb7fe8d42ab511392ebb32b625e04a\","
+                + "\"files\":{\"data/vpngate.csv\":{\"bytes\":1333898,"
+                + "\"server_count\":99,"
+                + "\"sha256\":\"bd7202d6cfe5809ef50777b07cc7d1d56d804304700adfc6947aa86267ca19b9\"}}}";
+        VpnGateProvider.MirrorManifest manifest =
+                VpnGateProvider.parseMirrorManifest(json);
+
+        assertEquals("523c8da909cb7fe8d42ab511392ebb32b625e04a", manifest.commit);
+        assertEquals(1333898, manifest.bytes);
+        assertEquals(99, manifest.serverCount);
+        assertEquals("bd7202d6cfe5809ef50777b07cc7d1d56d804304700adfc6947aa86267ca19b9",
+                manifest.sha256);
+    }
+
+    @Test public void rejectsMirrorManifestWithUnexpectedSourceOrSchema() throws Exception {
+        String json = "{\"schema_version\":2,"
+                + "\"source_url\":\"https://example.com/\","
+                + "\"data_commit\":\"523c8da909cb7fe8d42ab511392ebb32b625e04a\","
+                + "\"files\":{\"data/vpngate.csv\":{\"bytes\":10,\"server_count\":1,"
+                + "\"sha256\":\"bd7202d6cfe5809ef50777b07cc7d1d56d804304700adfc6947aa86267ca19b9\"}}}";
+        try {
+            VpnGateProvider.parseMirrorManifest(json);
+            throw new AssertionError("invalid mirror manifest must be rejected");
+        } catch (java.io.IOException expected) {
+            assertTrue(expected.getMessage().contains("شاخص"));
+        }
+    }
+
+    @Test public void verifiesMirrorCsvExactByteCountAndSha256() throws Exception {
+        byte[] body = "hello".getBytes(StandardCharsets.UTF_8);
+        VpnGateProvider.MirrorManifest valid = new VpnGateProvider.MirrorManifest(
+                "523c8da909cb7fe8d42ab511392ebb32b625e04a",
+                "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+                5, 1);
+        VpnGateProvider.verifyMirrorBytes(body, valid);
+
+        VpnGateProvider.MirrorManifest wrongHash = new VpnGateProvider.MirrorManifest(
+                valid.commit, "0000000000000000000000000000000000000000000000000000000000000000",
+                5, 1);
+        try {
+            VpnGateProvider.verifyMirrorBytes(body, wrongHash);
+            throw new AssertionError("wrong mirror hash must be rejected");
+        } catch (java.io.IOException expected) {
+            assertTrue(expected.getMessage().contains("SHA-256"));
+        }
+    }
+
+    @Test public void parserLabelsServersWithTheActualSource() throws Exception {
+        String profile = "client\nremote 203.0.113.10 1194\n";
+        String csv = "#HostName,IP,Score,Ping,Speed,Country,...\n"
+                + row("relay-a", "203.0.113.10", "US", "5000000", "42", profile);
+        List<VpnGateProvider.Server> servers =
+                VpnGateProvider.parse(csv, "آینه HTTPS ثالث");
+        assertEquals("آینه HTTPS ثالث", servers.get(0).source);
+    }
+
 }
