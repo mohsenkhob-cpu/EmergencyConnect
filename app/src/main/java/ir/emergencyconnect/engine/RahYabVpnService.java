@@ -1177,6 +1177,8 @@ public final class RahYabVpnService extends VpnService {
 
     @Override
     public void onDestroy() {
+        // Mark the service unavailable before scheduling native teardown. JNI
+        // callbacks may still arrive while stopSession() joins the worker.
         serviceDestroyed = true;
         autoSearchEnabled = false;
         autoConnected = false;
@@ -1186,21 +1188,27 @@ public final class RahYabVpnService extends VpnService {
         attemptSignal = null;
         sessionExecutor.shutdownNow();
         setLampState("disconnected");
-        // Stop and join the native worker before closing the TUN or releasing
-        // the JNI service reference. This prevents callbacks into a destroyed
-        // Android service during teardown.
-        synchronized (nativeSessionLock) {
-            OpenVpn3Bridge.stopSession();
-        }
-        closeTun();
+
+        // OpenVPN's native stop() joins its worker and can take noticeable
+        // time. Never perform that join on Android's main/service thread.
+        // Keep the JNI global service reference alive until the worker has
+        // stopped, then close the TUN and unbind callbacks in that order.
         if (foregroundStarted) {
             stopForeground(true);
             foregroundStarted = false;
         }
-        if (nativeCallbacksBound) {
-            OpenVpn3Bridge.unbindTunService();
-            nativeCallbacksBound = false;
-        }
+        Thread cleanup = new Thread(() -> {
+            synchronized (nativeSessionLock) {
+                OpenVpn3Bridge.stopSession();
+            }
+            closeTun();
+            if (nativeCallbacksBound) {
+                OpenVpn3Bridge.unbindTunService();
+                nativeCallbacksBound = false;
+            }
+        }, "RahYab-openvpn-cleanup");
+        cleanup.setDaemon(true);
+        cleanup.start();
         super.onDestroy();
     }
 }
