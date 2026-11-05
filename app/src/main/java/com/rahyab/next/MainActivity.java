@@ -177,8 +177,15 @@ public class MainActivity extends Activity {
         page.addView(discoveryButton, discoveryParams);
         discoveryButton.setOnClickListener(v -> startSmartOpenVpnSearch());
 
+        LinearLayout advancedPanel = new LinearLayout(this);
+        advancedPanel.setOrientation(LinearLayout.VERTICAL);
+        advancedPanel.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        advancedPanel.setPadding(dp(12), dp(8), dp(12), dp(12));
+        advancedPanel.setBackground(shape(Color.rgb(17, 29, 48), 18));
+        advancedPanel.setVisibility(View.GONE);
+
         connectButton = new Button(this);
-        connectButton.setText("پیشرفته: انتخاب فایل WireGuard");
+        connectButton.setText("انتخاب فایل WireGuard");
         connectButton.setTextSize(17);
         connectButton.setTextColor(Color.WHITE);
         connectButton.setAllCaps(false);
@@ -196,13 +203,6 @@ public class MainActivity extends Activity {
         disconnectParams.topMargin = dp(10);
         page.addView(disconnectButton, disconnectParams);
         disconnectButton.setOnClickListener(v -> disconnectAllEngines());
-
-        LinearLayout advancedPanel = new LinearLayout(this);
-        advancedPanel.setOrientation(LinearLayout.VERTICAL);
-        advancedPanel.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        advancedPanel.setPadding(dp(12), dp(8), dp(12), dp(12));
-        advancedPanel.setBackground(shape(Color.rgb(17, 29, 48), 18));
-        advancedPanel.setVisibility(View.GONE);
 
         Button advancedToggle = new Button(this);
         advancedToggle.setText("تنظیمات پیشرفته و ورود دستی  +");
