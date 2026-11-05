@@ -74,9 +74,8 @@ public class MainActivity extends Activity {
                 singBoxConnectButton.setEnabled(true);
                 disconnectButton.setEnabled(true);
             } else if ("STOPPED".equals(event)) {
-                setStatus("اتصال VPN قطع شد");
-                singBoxConnectButton.setEnabled(true);
-                disconnectButton.setEnabled(false);
+                // sing-box may be stopped intentionally while another VPN engine starts.
+                // Do not overwrite the shared VPN status or disable its disconnect control here.
             } else if ("ERROR".equals(event)) {
                 setStatus("خطای sing-box: " + (detail == null ? "نامشخص" : detail));
                 singBoxConnectButton.setEnabled(true);
@@ -177,6 +176,14 @@ public class MainActivity extends Activity {
                 prefs.getString("service_status_message", ""));
         appendReportSection(report, "نتیجه شروع نشست",
                 prefs.getString("session_start_result", ""));
+        appendReportSection(report, "زمان دریافت درخواست شروع سرویس",
+                prefs.getString("service_start_received", ""));
+        appendReportSection(report, "نتیجه اتصال پل JNI",
+                prefs.getString("native_bind_result", ""));
+        appendReportSection(report, "نوع سرویس پیش‌زمینه",
+                prefs.getString("foreground_service_type", ""));
+        appendReportSection(report, "آخرین رویداد داخلی موتور",
+                prefs.getString("native_last_event", ""));
         appendReportSection(report, "آخرین رویداد sing-box",
                 singBox.getString("last_event", "") + " | "
                         + singBox.getString("last_detail", ""));
