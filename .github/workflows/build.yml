@@ -41,6 +41,21 @@ jobs:
           "$SDKMANAGER" "platform-tools"
           "$SDKMANAGER" "platforms;android-35"
           "$SDKMANAGER" "build-tools;35.0.0"
+      - name: Download verified OpenVPN 3 ARM64 native library
+        uses: actions/download-artifact@v4
+        with:
+          name: RahYab-OpenVPN3-native-arm64-compile-check
+          repository: mohsenkhob-cpu/EmergencyConnect
+          run-id: 41993735863
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: app/src/main/jniLibs/arm64-v8a
+      - name: Verify packaged OpenVPN 3 JNI ABI
+        run: |
+          LIB="app/src/main/jniLibs/arm64-v8a/libopenvpn3_jni.so"
+          test -s "$LIB"
+          file "$LIB" | grep -q "ARM aarch64"
+          readelf -Ws "$LIB" | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession"
+          readelf -Ws "$LIB" | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
