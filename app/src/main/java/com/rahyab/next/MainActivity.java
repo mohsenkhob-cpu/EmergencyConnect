@@ -59,17 +59,22 @@ public class MainActivity extends Activity {
             String detail = intent.getStringExtra(SingBoxVpnService.EXTRA_DETAIL);
             if ("STARTING".equals(event)) {
                 setStatus("در حال راه‌اندازی موتور sing-box…");
+                singBoxConnectButton.setEnabled(false);
             } else if ("ENGINE_STARTED".equals(event)) {
                 setStatus("موتور sing-box اجرا شد؛ عبور واقعی اینترنت هنوز تأیید نشده است");
+                singBoxConnectButton.setEnabled(true);
                 disconnectButton.setEnabled(true);
             } else if ("TUN_ESTABLISHED".equals(event)) {
                 setStatus("تونل اندروید ایجاد شد؛ بررسی عبور واقعی اینترنت لازم است");
+                singBoxConnectButton.setEnabled(true);
                 disconnectButton.setEnabled(true);
             } else if ("STOPPED".equals(event)) {
                 setStatus("اتصال VPN قطع شد");
+                singBoxConnectButton.setEnabled(true);
                 disconnectButton.setEnabled(false);
             } else if ("ERROR".equals(event)) {
                 setStatus("خطای sing-box: " + (detail == null ? "نامشخص" : detail));
+                singBoxConnectButton.setEnabled(true);
                 disconnectButton.setEnabled(false);
             }
         }
@@ -239,6 +244,39 @@ public class MainActivity extends Activity {
                 registerReceiver(singBoxReceiver, filter);
             }
             singBoxReceiverRegistered = true;
+        }
+        // Recover the latest service state in case its broadcast arrived while
+        // this Activity was temporarily in the background.
+        restoreSingBoxStatus();
+    }
+
+    private void restoreSingBoxStatus() {
+        android.content.SharedPreferences prefs =
+                getSharedPreferences("rahyab_singbox_status", MODE_PRIVATE);
+        long eventTime = prefs.getLong("last_event_time", 0L);
+        if (eventTime == 0L || System.currentTimeMillis() - eventTime > 10 * 60 * 1000L) return;
+        String event = prefs.getString("last_event", "");
+        String detail = prefs.getString("last_detail", "");
+        if ("STARTING".equals(event)) {
+            setStatus("در حال راه‌اندازی موتور sing-box…");
+            singBoxConnectButton.setEnabled(false);
+        } else if ("ENGINE_STARTED".equals(event)) {
+            setStatus("موتور sing-box اجرا شد؛ عبور واقعی اینترنت هنوز تأیید نشده است");
+            singBoxConnectButton.setEnabled(true);
+            disconnectButton.setEnabled(true);
+        } else if ("TUN_ESTABLISHED".equals(event)) {
+            setStatus("تونل اندروید ایجاد شد؛ بررسی عبور واقعی اینترنت لازم است");
+            singBoxConnectButton.setEnabled(true);
+            disconnectButton.setEnabled(true);
+        } else if ("STOPPED".equals(event)) {
+            setStatus("اتصال VPN قطع شد");
+            singBoxConnectButton.setEnabled(true);
+            disconnectButton.setEnabled(false);
+        } else if ("ERROR".equals(event)) {
+            setStatus("خطای sing-box: " +
+                    (detail == null || detail.trim().isEmpty() ? "نامشخص" : detail));
+            singBoxConnectButton.setEnabled(true);
+            disconnectButton.setEnabled(false);
         }
     }
 
