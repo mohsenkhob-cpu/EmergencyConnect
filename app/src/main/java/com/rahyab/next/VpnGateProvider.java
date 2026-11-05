@@ -150,7 +150,7 @@ public final class VpnGateProvider {
                 if (seen.add(key)) {
                     result.add(new Server(hostName, ip, country, speed, ping, port, profile));
                 }
-            } catch (IllegalArgumentException | NumberFormatException ignored) {
+            } catch (IllegalArgumentException ignored) {
                 // A malformed row must not invalidate otherwise usable rows.
             }
         }
