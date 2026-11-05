@@ -1,9 +1,9 @@
-def ciVersionCode = project.findProperty('ciVersionCode')
-
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
 }
+
+def ciVersionCode = project.findProperty('ciVersionCode')
 
 android {
     namespace 'com.rahyab.next'
