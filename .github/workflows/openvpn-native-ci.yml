@@ -82,6 +82,7 @@ jobs:
         run: |
           cmake -S overlay/native/android-jni -B build/openvpn3-arm64 \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DVCPKG_TARGET_TRIPLET=arm64-android \
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/overlay/native/vcpkg_installed" \
             -DOPENVPN3_SOURCE_DIR="$GITHUB_WORKSPACE/openvpn3" \
