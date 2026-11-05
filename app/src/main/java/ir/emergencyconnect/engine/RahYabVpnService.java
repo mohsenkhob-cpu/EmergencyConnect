@@ -451,8 +451,25 @@ public final class RahYabVpnService extends VpnService {
         }
         autoProfiles = new ArrayList<>(freshProfiles);
         appendAutoHistory("AUTO_REFRESH_READY",
-                freshProfiles.size() + " سرور تازه دریافت شد");
-        runAutoSearch(freshProfiles, 0, startId);
+                freshProfiles.size() + " سرور تازه دریافت شد؛ نوبت بعدی در صف سرویس قرار گرفت");
+
+        // Do not recurse from runAutoSearch(). This method already runs on the
+        // single-thread session executor; direct recursion would grow the Java
+        // stack forever when every batch fails. Queue the next batch so this
+        // invocation can return and the executor can process stop requests.
+        try {
+            sessionExecutor.execute(() -> {
+                if (!autoSearchEnabled || serviceDestroyed) return;
+                runAutoSearch(freshProfiles, 0, startId);
+            });
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
+            autoSearchEnabled = false;
+            autoConnected = false;
+            setLampState("disconnected");
+            appendAutoHistory("AUTO_REFRESH_QUEUE_FAILED",
+                    "صف اجرای جست‌وجوی بعدی در دسترس نیست؛ جست‌وجو متوقف شد");
+            updateStatus("ادامه جست‌وجوی خودکار ممکن نشد؛ دوباره اتصال هوشمند را بزنید.");
+        }
     }
 
     /**
