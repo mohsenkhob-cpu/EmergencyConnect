@@ -42,12 +42,30 @@ jobs:
           "$SDKMANAGER" "platform-tools"
           "$SDKMANAGER" "platforms;android-35"
           "$SDKMANAGER" "build-tools;35.0.0"
+      - name: Locate latest successful OpenVPN 3 native artifact
+        id: native-artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/openvpn-native-ci.yml/runs?status=success&per_page=20" --jq '[.workflow_runs[] | select(.conclusion == "success")] | sort_by(.created_at) | last | .id')"
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful OpenVPN 3 native build is available."
+            exit 1
+          fi
+          ARTIFACT_COUNT="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --jq '[.artifacts[] | select(.name == "RahYab-OpenVPN3-native-arm64-compile-check" and .expired == false)] | length')"
+          if [ "$ARTIFACT_COUNT" -lt 1 ]; then
+            echo "The latest successful native workflow has no usable ARM64 artifact."
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Using successful native build run $RUN_ID"
+
       - name: Download verified OpenVPN 3 ARM64 native library
         uses: actions/download-artifact@v4
         with:
           name: RahYab-OpenVPN3-native-arm64-compile-check
           repository: mohsenkhob-cpu/EmergencyConnect
-          run-id: 41993735863
+          run-id: ${{ steps.native-artifact.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: app/src/main/jniLibs/arm64-v8a
       - name: Verify packaged OpenVPN 3 JNI ABI
