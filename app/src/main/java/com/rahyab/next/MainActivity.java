@@ -62,9 +62,9 @@ public class MainActivity extends Activity {
                 setStatus("در حال راه‌اندازی موتور sing-box…");
                 singBoxConnectButton.setEnabled(false);
             } else if ("ENGINE_STARTED".equals(event)) {
-                setStatus("موتور sing-box اجرا شد؛ عبور واقعی اینترنت هنوز تأیید نشده است");
                 singBoxConnectButton.setEnabled(true);
                 disconnectButton.setEnabled(true);
+                verifyTunnel("sing-box");
             } else if ("TUN_ESTABLISHED".equals(event)) {
                 setStatus("تونل اندروید ایجاد شد؛ بررسی عبور واقعی اینترنت لازم است");
                 singBoxConnectButton.setEnabled(true);
@@ -84,9 +84,15 @@ public class MainActivity extends Activity {
     private final Tunnel wireGuardTunnel = new Tunnel() {
         @Override public String getName() { return "RahYab-WireGuard"; }
         @Override public void onStateChange(State state) {
-            runOnUiThread(() -> setStatus(state == State.UP
-                    ? "تونل WireGuard روشن شد؛ بررسی عبور اینترنت لازم است"
-                    : "تونل WireGuard خاموش شد"));
+            runOnUiThread(() -> {
+                if (state == State.UP) {
+                    disconnectButton.setEnabled(true);
+                    verifyTunnel("WireGuard");
+                } else {
+                    setStatus("تونل WireGuard خاموش شد");
+                    disconnectButton.setEnabled(false);
+                }
+            });
         }
     };
 
@@ -273,9 +279,9 @@ public class MainActivity extends Activity {
             setStatus("در حال راه‌اندازی موتور sing-box…");
             singBoxConnectButton.setEnabled(false);
         } else if ("ENGINE_STARTED".equals(event)) {
-            setStatus("موتور sing-box اجرا شد؛ عبور واقعی اینترنت هنوز تأیید نشده است");
             singBoxConnectButton.setEnabled(true);
             disconnectButton.setEnabled(true);
+            verifyTunnel("sing-box");
         } else if ("TUN_ESTABLISHED".equals(event)) {
             setStatus("تونل اندروید ایجاد شد؛ بررسی عبور واقعی اینترنت لازم است");
             singBoxConnectButton.setEnabled(true);
@@ -298,6 +304,30 @@ public class MainActivity extends Activity {
             singBoxReceiverRegistered = false;
         }
         super.onStop();
+    }
+
+    /**
+     * A running engine or an established Android TUN is not proof of working VPN traffic.
+     * Confirm that Android routes this app over a VPN transport and that HTTPS egress works.
+     */
+    private void verifyTunnel(String engineName) {
+        if (worker.isShutdown()) return;
+        setStatus("تونل " + engineName + " آماده شد؛ در حال بررسی عبور واقعی اینترنت…");
+        try {
+            worker.execute(() -> {
+                TunnelVerifier.Result result = TunnelVerifier.verify(this);
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (result.verified) {
+                        setStatus("اتصال " + engineName + " تأیید شد • IP خروجی: " + result.exitIp);
+                    } else {
+                        setStatus("اتصال " + engineName + " هنوز تأیید نشده: " + result.message);
+                    }
+                });
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // Activity is shutting down; do not report a false connection state.
+        }
     }
 
     private void discoverFreeServers() {
