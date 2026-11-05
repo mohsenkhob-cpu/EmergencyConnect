@@ -36,6 +36,15 @@ public class FullTunnelPolicyTest {
         }
     }
 
+    @Test public void acceptsIpv6SplitDefaultRoutes() {
+        FullTunnelPolicy.validate(
+                new String[]{"fd00::2"},
+                new String[]{"fd00::1"},
+                new String[]{"::", "8000::"},
+                new int[]{1, 1},
+                new String[0]);
+    }
+
     @Test public void rejectsIpv4WithoutDefaultRoute() {
         try {
             FullTunnelPolicy.validate(
