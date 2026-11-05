@@ -249,29 +249,38 @@ public final class RahYabVpnService extends VpnService {
         autoConnected = false;
         int count = autoProfiles.size();
         int begin = Math.max(0, Math.min(startIndex, count - 1));
-        // Capture the device's public egress before starting any candidate.
-        // A CONNECTED callback and an HTTP 204 alone cannot prove that traffic
-        // left through the selected VPN relay.
+        // Test a small bounded group: measure actual tunnel traffic rather than
+        // trusting VPN Gate's advertised ping/speed or accepting first success.
+        final int candidatesToMeasure = Math.min(4, count);
         String baselineExitIp = fetchPublicIp();
         appendAutoHistory("AUTO_BASELINE_IP",
                 baselineExitIp == null ? "IP پیش از تونل قابل تشخیص نبود؛ تأیید نهایی IP ممکن نیست"
                         : "IP خروجی پیش از تونل ثبت شد");
-        for (int offset = 0; offset < count; offset++) {
+
+        String bestProfile = null;
+        String bestEndpoint = "";
+        long bestLatencyMs = Long.MAX_VALUE;
+        int measured = 0;
+
+        for (int offset = 0; offset < candidatesToMeasure; offset++) {
             int i = (begin + offset) % count;
             if (!autoSearchEnabled || serviceDestroyed) return;
             String profile = autoProfiles.get(i);
             String endpoint = profileEndpoint(profile);
-            synchronized (triedServerEndpoints) { if (!endpoint.isEmpty()) triedServerEndpoints.add(endpoint); }
+            synchronized (triedServerEndpoints) {
+                if (!endpoint.isEmpty()) triedServerEndpoints.add(endpoint);
+            }
             CountDownLatch signal = new CountDownLatch(1);
             attemptConnected = false;
-            String progress = "در حال آزمایش سرور " + (i + 1) + " از " + count
-                    + (endpoint.isEmpty() ? "" : " — " + endpoint)
-                    + "؛ حداکثر ۳۰ ثانیه";
+            String progress = "در حال آزمایش سرور " + (i + 1) + " از "
+                    + candidatesToMeasure + (endpoint.isEmpty() ? "" : " — " + endpoint)
+                    + "؛ بررسی اتصال و کیفیت";
             updateStatus(progress);
             setServerTestStatus(endpoint, "testing");
             setLampState("searching");
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("session_start_result", progress).apply();
+
             final String result;
             synchronized (nativeSessionLock) {
                 if (!autoSearchEnabled || serviceDestroyed) {
@@ -286,10 +295,10 @@ public final class RahYabVpnService extends VpnService {
                     && result.startsWith("درخواست اتصال به هسته OpenVPN 3 تحویل شد");
             if (!accepted) {
                 setServerTestStatus(endpoint, "failed");
-                appendAutoHistory("AUTO_SEARCH_SKIP", "پاسخ شروع موتور برای " + endpoint + ": " + (result == null ? "بدون پاسخ" : result));
+                appendAutoHistory("AUTO_SEARCH_SKIP",
+                        "پاسخ شروع موتور برای " + endpoint + ": "
+                                + (result == null ? "بدون پاسخ" : result));
                 attemptSignal = null;
-                appendAutoHistory("AUTO_SEARCH_SKIP", "سرور " + (i + 1)
-                        + ": " + (result == null ? "بدون پاسخ" : result));
                 continue;
             }
             try {
@@ -299,40 +308,109 @@ public final class RahYabVpnService extends VpnService {
                 attemptSignal = null;
                 return;
             }
-            boolean connected = attemptConnected;
             attemptSignal = null;
-            if (connected) {
-                updateStatus("تونل برقرار شد؛ در حال بررسی عبور واقعی اینترنت…");
-                appendAutoHistory("AUTO_TUNNEL_PROBE", "اتصال OpenVPN برقرار شد؛ آزمون اینترنت از داخل تونل آغاز شد");
+
+            if (attemptConnected) {
+                updateStatus("تونل برقرار شد؛ بررسی عبور اینترنت و اندازه‌گیری تأخیر…");
                 boolean trafficVerified = verifyTunnelTraffic(baselineExitIp);
                 if (trafficVerified) {
-                    setServerTestStatus(endpoint, "connected");
-                    autoConnected = true;
-                    nextAutoIndex = (i + 1) % count;
-                    getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                            .putString("session_start_result", "اتصال برقرار شد و عبور اینترنت از تونل تأیید شد.").apply();
-                    appendAutoHistory("AUTO_SEARCH_CONNECTED", "سرور " + (i + 1)
-                            + " از " + count + "؛ عبور واقعی اینترنت از تونل تأیید شد");
-                    setLampState("connected");
-                    updateStatus("اتصال برقرار است؛ اینترنت از VPN عبور می‌کند"
-                            + (endpoint.isEmpty() ? "" : " — " + endpoint));
-                    return;
+                    long latency = measureTunnelLatencyMs();
+                    if (latency >= 0) {
+                        measured++;
+                        appendAutoHistory("AUTO_QUALITY_MEASURED",
+                                "سرور " + endpoint + "؛ میانگین تأخیر HTTPS: "
+                                        + latency + " میلی‌ثانیه");
+                        if (latency < bestLatencyMs) {
+                            bestLatencyMs = latency;
+                            bestProfile = profile;
+                            bestEndpoint = endpoint;
+                        }
+                    } else {
+                        appendAutoHistory("AUTO_QUALITY_FAILED",
+                                "سرور " + endpoint + " عبور اینترنت داشت اما آزمون کیفیت کامل نشد");
+                    }
+                } else {
+                    appendAutoHistory("AUTO_TUNNEL_PROBE_FAILED",
+                            "تونل سرور " + endpoint
+                                    + " عبور واقعی اینترنت را تأیید نکرد");
                 }
-                appendAutoHistory("AUTO_TUNNEL_PROBE_FAILED", "تونل بالا آمد اما عبور اینترنت تأیید نشد؛ آزمایش سرور بعدی");
             }
 
-            setServerTestStatus(endpoint, "failed");
+            setServerTestStatus(endpoint, "tested");
             synchronized (nativeSessionLock) {
                 OpenVpn3Bridge.stopSession();
             }
-            appendAutoHistory("AUTO_SEARCH_NEXT", "سرور " + (i + 1)
-                    + " موفق نشد؛ انتقال به سرور بعدی");
+            if (bestProfile != null) {
+                updateStatus("مقایسه سرورها: بهترین نتیجه فعلی "
+                        + bestLatencyMs + " میلی‌ثانیه؛ ادامه بررسی…");
+            }
         }
+
         if (!autoSearchEnabled || serviceDestroyed) return;
-        appendAutoHistory("AUTO_REFRESH", "این نوبت تمام شد؛ دریافت حداکثر ۴۰ سرور تازه آغاز می‌شود");
-        updateStatus(count + " سرور این نوبت موفق نشدند؛ در حال دریافت حداکثر ۴۰ سرور تازه…");
+
+        // Reconnect to the measured winner; never leave the last test candidate active.
+        if (bestProfile != null) {
+            updateStatus("بهترین سرور آزمایش شد؛ در حال برقراری اتصال نهایی…");
+            CountDownLatch finalSignal = new CountDownLatch(1);
+            attemptConnected = false;
+            attemptSignal = finalSignal;
+            String startResult;
+            synchronized (nativeSessionLock) {
+                if (!autoSearchEnabled || serviceDestroyed) {
+                    attemptSignal = null;
+                    return;
+                }
+                OpenVpn3Bridge.stopSession();
+                startResult = OpenVpn3Bridge.startSession(bestProfile);
+            }
+            boolean started = startResult != null
+                    && startResult.startsWith("درخواست اتصال به هسته OpenVPN 3 تحویل شد");
+            boolean connected = false;
+            if (started) {
+                try {
+                    connected = finalSignal.await(AUTO_ATTEMPT_TIMEOUT_SECONDS,
+                            TimeUnit.SECONDS) && attemptConnected;
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            attemptSignal = null;
+            if (connected && verifyTunnelTraffic(baselineExitIp)) {
+                autoConnected = true;
+                nextAutoIndex = (begin + candidatesToMeasure) % count;
+                setServerTestStatus(bestEndpoint, "connected");
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("session_start_result",
+                                "بهترین سرور از میان " + candidatesToMeasure
+                                        + " گزینه با تأخیر " + bestLatencyMs
+                                        + " میلی‌ثانیه انتخاب شد؛ عبور اینترنت دوباره تأیید شد.")
+                        .apply();
+                appendAutoHistory("AUTO_BEST_SELECTED",
+                        "از میان " + candidatesToMeasure + " گزینه، "
+                                + bestEndpoint + " با میانگین " + bestLatencyMs
+                                + " میلی‌ثانیه انتخاب و اتصال نهایی تأیید شد");
+                setLampState("connected");
+                updateStatus("اتصال هوشمند برقرار است — بهترین نتیجه آزمایش‌شده: "
+                        + bestEndpoint + " (" + bestLatencyMs + " ms)");
+                return;
+            }
+            appendAutoHistory("AUTO_BEST_RECONNECT_FAILED",
+                    "اتصال مجدد به بهترین گزینه تأیید نشد؛ اتصال امن متوقف و جست‌وجو ادامه می‌یابد");
+            synchronized (nativeSessionLock) {
+                OpenVpn3Bridge.stopSession();
+            }
+        }
+
+        if (!autoSearchEnabled || serviceDestroyed) return;
+        appendAutoHistory("AUTO_REFRESH",
+                "هیچ‌یک از " + candidatesToMeasure
+                        + " گزینه اتصال نهایی قابل‌تأیید نداشتند؛ دریافت سرورهای تازه آغاز می‌شود");
+        updateStatus("این گروه سرور نتیجه قابل‌قبول نداشت؛ دریافت فهرست تازه…");
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                .putString("session_start_result", count + " سرور بررسی شد؛ در حال دریافت فهرست تازه…").apply();
+                .putString("session_start_result",
+                        "تعداد گزینه‌های دارای آزمون کیفیت: " + measured
+                                + "؛ در حال دریافت فهرست تازه…")
+                .apply();
         ArrayList<String> freshProfiles = fetchFreshProfiles(40);
         if (!autoSearchEnabled || serviceDestroyed) return;
         if (freshProfiles.isEmpty()) {
@@ -340,13 +418,52 @@ public final class RahYabVpnService extends VpnService {
             autoConnected = false;
             setLampState("disconnected");
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                    .putString("session_start_result", "سرور تازه‌ای از منبع دریافت نشد؛ بعداً دوباره تلاش کنید.").apply();
+                    .putString("session_start_result",
+                            "سرور تازه‌ای از منبع دریافت نشد؛ بعداً دوباره تلاش کنید.")
+                    .apply();
             updateStatus("سرور تازه‌ای دریافت نشد؛ منبع فعلاً پاسخ‌گو نیست یا سرور جدیدی باقی نمانده است.");
             return;
         }
         autoProfiles = new ArrayList<>(freshProfiles);
-        appendAutoHistory("AUTO_REFRESH_READY", freshProfiles.size() + " سرور تازه دریافت شد");
+        appendAutoHistory("AUTO_REFRESH_READY",
+                freshProfiles.size() + " سرور تازه دریافت شد");
         runAutoSearch(freshProfiles, 0, startId);
+    }
+
+    /**
+     * Three unprotected HTTPS 204 probes while the full VPN tunnel is active.
+     * Returns the mean successful latency; at least two probes must succeed.
+     */
+    private long measureTunnelLatencyMs() {
+        String[] probes = new String[] {
+                "https://connectivitycheck.gstatic.com/generate_204",
+                "https://cp.cloudflare.com/generate_204",
+                "https://connectivitycheck.gstatic.com/generate_204"
+        };
+        long totalMs = 0L;
+        int successes = 0;
+        for (String probe : probes) {
+            HttpURLConnection connection = null;
+            long startedAt = System.nanoTime();
+            try {
+                connection = (HttpURLConnection) new URL(probe).openConnection();
+                connection.setInstanceFollowRedirects(false);
+                connection.setConnectTimeout(4500);
+                connection.setReadTimeout(4500);
+                connection.setUseCaches(false);
+                connection.setRequestMethod("GET");
+                if (connection.getResponseCode() == 204) {
+                    totalMs += TimeUnit.NANOSECONDS.toMillis(
+                            System.nanoTime() - startedAt);
+                    successes++;
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // A failed probe is not counted as a latency success.
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }
+        return successes >= 2 ? totalMs / successes : -1L;
     }
 
     /**
