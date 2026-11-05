@@ -1040,6 +1040,9 @@ public final class RahYabVpnService extends VpnService {
 
     /** Receive OpenVPN core events on its worker thread and reflect them in the foreground notification. */
     public void onNativeEvent(String name, String info, boolean error, boolean fatal) {
+        // Native shutdown can emit a final callback while the service is being
+        // revoked/destroyed. Do not touch Android state after teardown begins.
+        if (serviceDestroyed) return;
         if (name == null) name = "UNKNOWN";
         // Keep each OpenVPN callback as one history entry. Some CORE_LOG
         // messages contain embedded newlines (for example Peer Info); without
@@ -1144,6 +1147,12 @@ public final class RahYabVpnService extends VpnService {
     @Override
     public void onRevoke() {
         serviceDestroyed = true;
+        autoSearchEnabled = false;
+        autoConnected = false;
+        autoProfiles = null;
+        CountDownLatch activeAttempt = attemptSignal;
+        if (activeAttempt != null) activeAttempt.countDown();
+        attemptSignal = null;
         setLampState("disconnected");
         try {
             sessionExecutor.execute(() -> {
@@ -1169,6 +1178,8 @@ public final class RahYabVpnService extends VpnService {
         autoSearchEnabled = false;
         autoConnected = false;
         autoProfiles = null;
+        CountDownLatch activeAttempt = attemptSignal;
+        if (activeAttempt != null) activeAttempt.countDown();
         attemptSignal = null;
         sessionExecutor.shutdownNow();
         setLampState("disconnected");
