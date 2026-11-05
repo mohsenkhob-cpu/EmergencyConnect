@@ -162,12 +162,12 @@ public class MainActivity extends Activity {
         orbParams.bottomMargin = dp(12);
         page.addView(orb, orbParams);
 
-        TextView helper = label("برای یافتن سرورهای رایگان آزمایشی، جستجوی خودکار را اجرا کنید", 14,
+        TextView helper = label("یافتن خودکار سرورهای عمومی رایگان؛ کیفیت و حریم خصوصی آن‌ها تضمین‌شده نیست", 14,
                 Color.rgb(164, 181, 205), false);
         page.addView(helper);
 
         discoveryButton = new Button(this);
-        discoveryButton.setText("اتصال هوشمند — یافتن بهترین سرور رایگان");
+        discoveryButton.setText("اتصال هوشمند");
         discoveryButton.setTextSize(17);
         discoveryButton.setTextColor(Color.WHITE);
         discoveryButton.setAllCaps(false);
@@ -185,7 +185,7 @@ public class MainActivity extends Activity {
         connectButton.setBackground(shape(Color.rgb(31, 151, 137), 18));
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(-1, dp(58));
         buttonParams.topMargin = dp(24);
-        page.addView(connectButton, buttonParams);
+        advancedPanel.addView(connectButton, buttonParams);
         connectButton.setOnClickListener(v -> chooseWireGuardFile());
 
         disconnectButton = new Button(this);
@@ -197,6 +197,31 @@ public class MainActivity extends Activity {
         page.addView(disconnectButton, disconnectParams);
         disconnectButton.setOnClickListener(v -> disconnectAllEngines());
 
+        LinearLayout advancedPanel = new LinearLayout(this);
+        advancedPanel.setOrientation(LinearLayout.VERTICAL);
+        advancedPanel.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        advancedPanel.setPadding(dp(12), dp(8), dp(12), dp(12));
+        advancedPanel.setBackground(shape(Color.rgb(17, 29, 48), 18));
+        advancedPanel.setVisibility(View.GONE);
+
+        Button advancedToggle = new Button(this);
+        advancedToggle.setText("تنظیمات پیشرفته و ورود دستی  +");
+        advancedToggle.setAllCaps(false);
+        advancedToggle.setTextColor(Color.rgb(220, 230, 245));
+        advancedToggle.setBackground(shape(Color.rgb(34, 49, 72), 16));
+        LinearLayout.LayoutParams advancedToggleParams =
+                new LinearLayout.LayoutParams(-1, dp(50));
+        advancedToggleParams.topMargin = dp(16);
+        page.addView(advancedToggle, advancedToggleParams);
+        page.addView(advancedPanel);
+        advancedToggle.setOnClickListener(v -> {
+            boolean show = advancedPanel.getVisibility() != View.VISIBLE;
+            advancedPanel.setVisibility(show ? View.VISIBLE : View.GONE);
+            advancedToggle.setText(show
+                    ? "بستن تنظیمات پیشرفته  −"
+                    : "تنظیمات پیشرفته و ورود دستی  +");
+        });
+
         Button singBoxButton = new Button(this);
         singBoxButton.setText("وارد کردن فایل sing-box (JSON)");
         singBoxButton.setAllCaps(false);
@@ -204,7 +229,7 @@ public class MainActivity extends Activity {
         singBoxButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
         LinearLayout.LayoutParams singBoxParams = new LinearLayout.LayoutParams(-1, dp(54));
         singBoxParams.topMargin = dp(12);
-        page.addView(singBoxButton, singBoxParams);
+        advancedPanel.addView(singBoxButton, singBoxParams);
         singBoxButton.setOnClickListener(v -> chooseSingBoxFile());
 
         Button pasteLinkButton = new Button(this);
@@ -214,7 +239,7 @@ public class MainActivity extends Activity {
         pasteLinkButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
         LinearLayout.LayoutParams pasteLinkParams = new LinearLayout.LayoutParams(-1, dp(54));
         pasteLinkParams.topMargin = dp(8);
-        page.addView(pasteLinkButton, pasteLinkParams);
+        advancedPanel.addView(pasteLinkButton, pasteLinkParams);
         pasteLinkButton.setOnClickListener(v -> showOtherImportDialog());
 
         Button vlessButton = new Button(this);
@@ -224,7 +249,7 @@ public class MainActivity extends Activity {
         vlessButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
         LinearLayout.LayoutParams vlessParams = new LinearLayout.LayoutParams(-1, dp(54));
         vlessParams.topMargin = dp(8);
-        page.addView(vlessButton, vlessParams);
+        advancedPanel.addView(vlessButton, vlessParams);
         vlessButton.setOnClickListener(v -> showVlessImportDialog());
 
         singBoxConnectButton = new Button(this);
@@ -235,7 +260,7 @@ public class MainActivity extends Activity {
         singBoxConnectButton.setBackground(shape(Color.rgb(31, 151, 137), 18));
         LinearLayout.LayoutParams singBoxConnectParams = new LinearLayout.LayoutParams(-1, dp(54));
         singBoxConnectParams.topMargin = dp(8);
-        page.addView(singBoxConnectButton, singBoxConnectParams);
+        advancedPanel.addView(singBoxConnectButton, singBoxConnectParams);
         singBoxConnectButton.setOnClickListener(v -> requestSingBoxConnection());
 
         Button savedServersButton = new Button(this);
@@ -245,14 +270,14 @@ public class MainActivity extends Activity {
         savedServersButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
         LinearLayout.LayoutParams savedParams = new LinearLayout.LayoutParams(-1, dp(54));
         savedParams.topMargin = dp(8);
-        page.addView(savedServersButton, savedParams);
+        advancedPanel.addView(savedServersButton, savedParams);
         savedServersButton.setOnClickListener(v -> showSavedServers());
 
         TextView note = label("پروفایل‌های WireGuard، sing-box، VLESS، VMess و Trojan قابل وارد کردن هستند. پشتیبانی هر قالب به ساختار لینک یا فایل بستگی دارد.",
                 12, Color.rgb(235, 190, 115), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
         noteParams.topMargin = dp(24);
-        page.addView(note, noteParams);
+        advancedPanel.addView(note, noteParams);
         setContentView(scroll);
     }
 
