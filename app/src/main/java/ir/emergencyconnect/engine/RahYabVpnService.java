@@ -159,13 +159,20 @@ public final class RahYabVpnService extends VpnService {
             if (activeAttempt != null) activeAttempt.countDown();
             attemptSignal = null;
             setLampState("disconnected");
-            sessionExecutor.execute(() -> {
-                synchronized (nativeSessionLock) {
-                    OpenVpn3Bridge.stopSession();
-                }
-                closeTun();
-                stopSelf(startId);
-            });
+            try {
+                sessionExecutor.execute(() -> {
+                    synchronized (nativeSessionLock) {
+                        OpenVpn3Bridge.stopSession();
+                    }
+                    closeTun();
+                    stopSelf(startId);
+                });
+            } catch (java.util.concurrent.RejectedExecutionException rejected) {
+                // onDestroy already owns native/TUN cleanup; a late stop
+                // command must not crash Android's service main thread.
+                appendAutoHistory("STOP_QUEUE_CLOSED",
+                        "درخواست توقف پس از بسته‌شدن صف سرویس دریافت شد؛ پاک‌سازی نهایی در حال انجام است");
+            }
             return START_NOT_STICKY;
         }
         if (ACTION_START.equals(action)) {
@@ -188,7 +195,8 @@ public final class RahYabVpnService extends VpnService {
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
-            sessionExecutor.execute(() -> {
+            try {
+                sessionExecutor.execute(() -> {
                 if (serviceDestroyed) return;
                 // JNI binding can perform native initialization. Keep it off
                 // Android's service main thread: the service must already be
@@ -212,7 +220,16 @@ public final class RahYabVpnService extends VpnService {
                 } else {
                     startSingleProfile(profile);
                 }
-            });
+                });
+            } catch (java.util.concurrent.RejectedExecutionException rejected) {
+                autoSearchEnabled = false;
+                autoConnected = false;
+                setLampState("disconnected");
+                appendAutoHistory("START_QUEUE_CLOSED",
+                        "صف اجرای سرویس برای شروع نشست در دسترس نیست");
+                updateStatus("شروع اتصال ممکن نشد؛ سرویس در حال بسته‌شدن است.");
+                stopSelf(startId);
+            }
             return START_NOT_STICKY;
         }
         stopSelf(startId);
@@ -768,12 +785,21 @@ public final class RahYabVpnService extends VpnService {
         if (!autoSearchEnabled || !autoConnected
                 || !failoverQueued.compareAndSet(false, true)) return;
         autoConnected = false;
-        sessionExecutor.execute(() -> {
+        try {
+            sessionExecutor.execute(() -> {
+                failoverQueued.set(false);
+                if (!autoSearchEnabled || serviceDestroyed || autoProfiles == null) return;
+                appendAutoHistory("AUTO_FAILOVER", "قطع نشست؛ جست‌وجوی سرور جایگزین آغاز شد");
+                runAutoSearch(autoProfiles, nextAutoIndex, autoStartId);
+            });
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
             failoverQueued.set(false);
-            if (!autoSearchEnabled || serviceDestroyed || autoProfiles == null) return;
-            appendAutoHistory("AUTO_FAILOVER", "قطع نشست؛ جست‌وجوی سرور جایگزین آغاز شد");
-            runAutoSearch(autoProfiles, nextAutoIndex, autoStartId);
-        });
+            autoSearchEnabled = false;
+            autoConnected = false;
+            setLampState("disconnected");
+            appendAutoHistory("AUTO_FAILOVER_QUEUE_CLOSED",
+                    "صف سرویس بسته شده بود؛ جست‌وجوی جایگزین آغاز نشد");
+        }
     }
 
     @Override
