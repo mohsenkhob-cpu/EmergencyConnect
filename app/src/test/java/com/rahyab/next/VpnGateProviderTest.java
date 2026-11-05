@@ -46,6 +46,14 @@ public class VpnGateProviderTest {
         assertEquals("VPN Gate رسمی", servers.get(0).source);
     }
 
+    @Test public void rejectsProfileWhoseRemoteDoesNotMatchAdvertisedIp() throws Exception {
+        String profile = "client\\nremote attacker.example 1194\\n";
+        String csv = "#HostName,IP,Score,Ping,Speed,Country,...\\n"
+                + row("relay-a", "203.0.113.10", "US", "1000", "30", profile);
+
+        assertTrue(VpnGateProvider.parse(csv).isEmpty());
+    }
+
     @Test public void removesDuplicateEndpoints() throws Exception {
         String profile = "client\nremote 203.0.113.10 1194\n";
         String first = row("relay-a", "203.0.113.10", "US", "1000", "30", profile);
