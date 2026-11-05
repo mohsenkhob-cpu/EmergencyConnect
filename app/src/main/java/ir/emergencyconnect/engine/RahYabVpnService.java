@@ -197,22 +197,28 @@ public final class RahYabVpnService extends VpnService {
             }
             try {
                 sessionExecutor.execute(() -> {
-                if (serviceDestroyed) return;
-                // JNI binding can perform native initialization. Keep it off
-                // Android's service main thread: the service must already be
-                // foreground before any native work begins.
-                if (!nativeCallbacksBound) {
-                    nativeBindDiagnostic = OpenVpn3Bridge.bindTunService(this);
-                    nativeCallbacksBound = "OK".equals(nativeBindDiagnostic);
-                    getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                            .putString("native_bind_result", nativeBindDiagnostic).apply();
-                }
-                if (!nativeCallbacksBound) {
-                    setLampState("disconnected");
-                    updateStatus("اتصال داخلی در دسترس نیست: اتصال پل JNI برقرار نشد — "
-                            + nativeBindDiagnostic);
-                    stopSelf(startId);
-                    return;
+                // Serialize JNI binding with native stop/unbind. Otherwise
+                // onDestroy() could unbind first and a late bind could recreate
+                // a leaked global service reference after teardown.
+                synchronized (nativeSessionLock) {
+                    if (serviceDestroyed) return;
+                    // JNI binding can perform native initialization. Keep it off
+                    // Android's service main thread: foreground promotion is
+                    // already complete before this executor task can run.
+                    if (!nativeCallbacksBound) {
+                        nativeBindDiagnostic = OpenVpn3Bridge.bindTunService(this);
+                        nativeCallbacksBound = "OK".equals(nativeBindDiagnostic);
+                        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                                .putString("native_bind_result", nativeBindDiagnostic).apply();
+                    }
+                    if (!nativeCallbacksBound) {
+                        setLampState("disconnected");
+                        updateStatus("اتصال داخلی در دسترس نیست: اتصال پل JNI برقرار نشد — "
+                                + nativeBindDiagnostic);
+                        stopSelf(startId);
+                        return;
+                    }
+                    if (serviceDestroyed) return;
                 }
                 if (profiles != null && !profiles.isEmpty()) {
                     synchronized (triedServerEndpoints) { triedServerEndpoints.clear(); }
@@ -1198,31 +1204,34 @@ public final class RahYabVpnService extends VpnService {
             foregroundStarted = false;
         }
         Thread cleanup = new Thread(() -> {
-            try {
-                synchronized (nativeSessionLock) {
-                    OpenVpn3Bridge.stopSession();
-                }
-            } catch (RuntimeException | LinkageError error) {
-                // Continue best-effort teardown even if the Java/JNI bridge
-                // reports a failure. The native stop wrapper normally joins
-                // the worker before returning.
-                android.util.Log.e("RahYabVpnService",
-                        "OpenVPN native stop failed during service cleanup", error);
-            } finally {
+            // Keep the lifecycle lock for the complete stop -> TUN close ->
+            // JNI unbind sequence. Binding and session starts use this same
+            // lock, so no late task can recreate native state after teardown.
+            synchronized (nativeSessionLock) {
                 try {
-                    closeTun();
-                } catch (RuntimeException error) {
+                    OpenVpn3Bridge.stopSession();
+                } catch (RuntimeException | LinkageError error) {
+                    // Continue best-effort teardown even if the Java/JNI bridge
+                    // reports a failure. The native stop wrapper normally joins
+                    // the worker before returning.
                     android.util.Log.e("RahYabVpnService",
-                            "TUN close failed during service cleanup", error);
+                            "OpenVPN native stop failed during service cleanup", error);
                 } finally {
-                    if (nativeCallbacksBound) {
-                        try {
-                            OpenVpn3Bridge.unbindTunService();
-                        } catch (RuntimeException | LinkageError error) {
-                            android.util.Log.e("RahYabVpnService",
-                                    "OpenVPN JNI unbind failed during service cleanup", error);
-                        } finally {
-                            nativeCallbacksBound = false;
+                    try {
+                        closeTun();
+                    } catch (RuntimeException error) {
+                        android.util.Log.e("RahYabVpnService",
+                                "TUN close failed during service cleanup", error);
+                    } finally {
+                        if (nativeCallbacksBound) {
+                            try {
+                                OpenVpn3Bridge.unbindTunService();
+                            } catch (RuntimeException | LinkageError error) {
+                                android.util.Log.e("RahYabVpnService",
+                                        "OpenVPN JNI unbind failed during service cleanup", error);
+                            } finally {
+                                nativeCallbacksBound = false;
+                            }
                         }
                     }
                 }
