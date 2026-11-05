@@ -32,17 +32,26 @@ jobs:
           path: openvpn3
           fetch-depth: 1
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Locate Android SDK tools
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager was not found under $SDK_ROOT/cmdline-tools"
+            exit 1
+          fi
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
 
       - name: Install Android SDK and NDK packages
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-35"
-          sdkmanager "build-tools;35.0.0"
-          sdkmanager "ndk;27.2.12479018"
-          sdkmanager "cmake;3.31.6"
+          yes | "$SDKMANAGER" --licenses
+          "$SDKMANAGER" "platform-tools"
+          "$SDKMANAGER" "platforms;android-35"
+          "$SDKMANAGER" "build-tools;35.0.0"
+          "$SDKMANAGER" "ndk;27.2.12479018"
+          "$SDKMANAGER" "cmake;3.31.6"
 
       - name: Set up vcpkg
         run: |
