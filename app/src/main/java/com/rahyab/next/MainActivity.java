@@ -136,14 +136,14 @@ public class MainActivity extends Activity {
             String stamp = new java.text.SimpleDateFormat(
                     "yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
                     .format(new java.util.Date());
-            String safe = message == null ? "" : message.replace('\\n', ' ').replace('\\r', ' ');
+            String safe = message == null ? "" : message.replace('\n', ' ').replace('\r', ' ');
             String next = old.isEmpty() ? stamp + " | " + category + " | " + safe
-                    : old + "\\n" + stamp + " | " + category + " | " + safe;
-            String[] lines = next.split("\\n");
+                    : old + "\n" + stamp + " | " + category + " | " + safe;
+            String[] lines = next.split("\n");
             if (lines.length > 120) {
                 StringBuilder trimmed = new StringBuilder();
                 for (int i = lines.length - 120; i < lines.length; i++) {
-                    if (trimmed.length() > 0) trimmed.append('\\n');
+                    if (trimmed.length() > 0) trimmed.append('\n');
                     trimmed.append(lines[i]);
                 }
                 next = trimmed.toString();
@@ -160,14 +160,14 @@ public class MainActivity extends Activity {
         android.content.SharedPreferences singBox =
                 getSharedPreferences("rah_yab_singbox_status", MODE_PRIVATE);
         StringBuilder report = new StringBuilder();
-        report.append("گزارش عیب‌یابی راه‌یاب\\n");
+        report.append("گزارش عیب‌یابی راه‌یاب\n");
         report.append("زمان تهیه: ").append(new java.text.SimpleDateFormat(
                 "yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
-                .format(new java.util.Date())).append('\\n');
+                .format(new java.util.Date())).append('\n');
         report.append("نسخه اندروید: ").append(Build.VERSION.RELEASE)
-                .append(" (API ").append(Build.VERSION.SDK_INT).append(")\\n");
+                .append(" (API ").append(Build.VERSION.SDK_INT).append(")\n");
         report.append("مدل دستگاه: ").append(Build.MANUFACTURER).append(' ')
-                .append(Build.MODEL).append("\\n\\n");
+                .append(Build.MODEL).append("\n\n");
 
         appendReportSection(report, "رویدادهای برنامه",
                 prefs.getString("app_event_history", ""));
@@ -184,14 +184,14 @@ public class MainActivity extends Activity {
                 prefs.getString("service_start_error", ""));
         appendReportSection(report, "وضعیت چراغ اتصال",
                 prefs.getString("connection_lamp_state", "نامشخص"));
-        report.append("\\nپروفایل‌ها و کلیدهای اتصال عمداً در این گزارش درج نمی‌شوند.\\n");
+        report.append("\nپروفایل‌ها و کلیدهای اتصال عمداً در این گزارش درج نمی‌شوند.\n");
         return report.toString();
     }
 
     private void appendReportSection(StringBuilder report, String title, String value) {
-        report.append("===== ").append(title).append(" =====\\n");
+        report.append("===== ").append(title).append(" =====\n");
         report.append(value == null || value.trim().isEmpty()
-                ? "اطلاعاتی ثبت نشده است" : value).append("\\n\\n");
+                ? "اطلاعاتی ثبت نشده است" : value).append("\n\n");
     }
 
     private void showDiagnosticsDialog() {
