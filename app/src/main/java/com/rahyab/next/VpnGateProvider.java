@@ -143,6 +143,11 @@ public final class VpnGateProvider {
                 int port = Integer.parseInt(matcher.group(2));
                 if (port < 1 || port > 65535) continue;
 
+                // Accept exactly one remote directive. OpenVPN can rotate across
+                // multiple "remote" entries; allowing a second unvalidated endpoint
+                // would bypass the CSV-to-profile endpoint binding below.
+                if (matcher.find()) continue;
+
                 // Reject malformed or unexpected endpoints rather than trusting CSV text.
                 // The profile must connect to the exact IP advertised by this CSV row.
                 // Accepting an arbitrary hostname here would let a malformed or altered
