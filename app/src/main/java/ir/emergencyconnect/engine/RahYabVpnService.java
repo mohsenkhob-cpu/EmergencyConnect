@@ -1111,8 +1111,11 @@ public final class RahYabVpnService extends VpnService {
         } else {
             message = "وضعیت VPN: " + name;
         }
-        if (info != null && !info.isEmpty() && (error || fatal)) {
-            message += " — " + info;
+        if (!safeInfo.isEmpty() && (error || fatal)) {
+            // Reuse the already-redacted, newline-normalized diagnostic text.
+            // Raw native error details must never leak credentials into the
+            // Android foreground notification.
+            message += " — " + safeInfo;
         }
         if (foregroundStarted && !"CORE_LOG".equals(name)) {
             NotificationManager manager = getSystemService(NotificationManager.class);
