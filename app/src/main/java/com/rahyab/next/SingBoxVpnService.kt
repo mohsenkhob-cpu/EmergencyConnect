@@ -276,6 +276,14 @@ class SingBoxVpnService : VpnService() {
     }
 
     private fun sendEvent(event: String, detail: String? = null) {
+        // Persist the latest engine state before broadcasting. MainActivity may be
+        // backgrounded while Android starts the VPN foreground service, so a
+        // broadcast alone is not reliable for keeping the UI in sync.
+        getSharedPreferences(PREFS_STATUS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_LAST_EVENT, event)
+            .putString(KEY_LAST_DETAIL, detail ?: "")
+            .putLong(KEY_LAST_EVENT_TIME, System.currentTimeMillis())
+            .apply()
         val intent = Intent(ACTION_EVENT).setPackage(packageName)
             .putExtra(EXTRA_EVENT, event)
         if (detail != null) intent.putExtra(EXTRA_DETAIL, detail)
@@ -317,6 +325,10 @@ class SingBoxVpnService : VpnService() {
 
     companion object {
         private const val TAG = "RahYabSingBox"
+        private const val PREFS_STATUS = "rahyab_singbox_status"
+        private const val KEY_LAST_EVENT = "last_event"
+        private const val KEY_LAST_DETAIL = "last_detail"
+        private const val KEY_LAST_EVENT_TIME = "last_event_time"
         private const val EXTRA_PROFILE = "rahyab.profile"
         private const val ACTION_STOP = "com.rahyab.next.STOP_SINGBOX"
         const val ACTION_EVENT = "com.rahyab.next.SINGBOX_EVENT"
