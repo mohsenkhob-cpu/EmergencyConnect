@@ -775,6 +775,12 @@ public final class RahYabVpnService extends VpnService {
     }
 
     private void updateStatus(String message) {
+        // Persist the latest service state so the activity can display it when
+        // it is visible again; notification updates remain foreground-only.
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("service_status_message", message)
+                .putLong("service_status_updated_at", System.currentTimeMillis())
+                .apply();
         if (!foregroundStarted) return;
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) manager.notify(NOTIFICATION_ID, buildStatusNotification(message));
