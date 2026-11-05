@@ -144,7 +144,10 @@ public final class VpnGateProvider {
                 if (port < 1 || port > 65535) continue;
 
                 // Reject malformed or unexpected endpoints rather than trusting CSV text.
-                if (!remoteHost.equals(ip) && !remoteHost.matches("[A-Za-z0-9.-]{1,253}")) continue;
+                // The profile must connect to the exact IP advertised by this CSV row.
+                // Accepting an arbitrary hostname here would let a malformed or altered
+                // profile silently redirect the tunnel to an unrelated endpoint.
+                if (!remoteHost.equals(ip)) continue;
 
                 String key = ip + ":" + port;
                 if (seen.add(key)) {
