@@ -260,6 +260,8 @@ public final class RahYabVpnService extends VpnService {
         String bestProfile = null;
         String bestEndpoint = "";
         long bestLatencyMs = Long.MAX_VALUE;
+        long bestThroughputKbps = -1L;
+        double bestQualityScore = Double.MAX_VALUE;
         int measured = 0;
 
         for (int offset = 0; offset < candidatesToMeasure; offset++) {
@@ -317,11 +319,24 @@ public final class RahYabVpnService extends VpnService {
                     long latency = measureTunnelLatencyMs();
                     if (latency >= 0) {
                         measured++;
+                        long throughputKbps = measureTunnelDownloadKbps();
+                        // A small bounded transfer supplements latency; if the
+                        // speed endpoint is unavailable, latency remains usable.
+                        double qualityScore = latency
+                                + (throughputKbps > 0
+                                ? 1000.0 / Math.max(0.1, throughputKbps / 1000.0)
+                                : 0.0);
                         appendAutoHistory("AUTO_QUALITY_MEASURED",
-                                "سرور " + endpoint + "؛ میانگین تأخیر HTTPS: "
-                                        + latency + " میلی‌ثانیه");
-                        if (latency < bestLatencyMs) {
+                                "سرور " + endpoint + "؛ تأخیر HTTPS: " + latency
+                                        + " ms؛ سرعت دریافت: "
+                                        + (throughputKbps > 0
+                                        ? throughputKbps + " kbps" : "نامشخص")
+                                        + "؛ امتیاز مقایسه: "
+                                        + String.format(java.util.Locale.US, "%.1f", qualityScore));
+                        if (qualityScore < bestQualityScore) {
+                            bestQualityScore = qualityScore;
                             bestLatencyMs = latency;
+                            bestThroughputKbps = throughputKbps;
                             bestProfile = profile;
                             bestEndpoint = endpoint;
                         }
@@ -390,8 +405,10 @@ public final class RahYabVpnService extends VpnService {
                                 + bestEndpoint + " با میانگین " + bestLatencyMs
                                 + " میلی‌ثانیه انتخاب و اتصال نهایی تأیید شد");
                 setLampState("connected");
-                updateStatus("اتصال هوشمند برقرار است — بهترین نتیجه آزمایش‌شده: "
-                        + bestEndpoint + " (" + bestLatencyMs + " ms)");
+                updateStatus("اتصال هوشمند برقرار است — "
+                        + bestEndpoint + "؛ تأخیر " + bestLatencyMs + " ms"
+                        + (bestThroughputKbps > 0
+                        ? "؛ دریافت " + bestThroughputKbps + " kbps" : ""));
                 return;
             }
             appendAutoHistory("AUTO_BEST_RECONNECT_FAILED",
@@ -434,6 +451,44 @@ public final class RahYabVpnService extends VpnService {
      * Three unprotected HTTPS 204 probes while the full VPN tunnel is active.
      * Returns the mean successful latency; at least two probes must succeed.
      */
+    /**
+     * Measure a small, bounded download through the active VPN tunnel.
+     * This is a rough comparison signal, not a full speed-test result.
+     * Returns kilobits per second, or -1 when the probe is unavailable.
+     */
+    private long measureTunnelDownloadKbps() {
+        HttpURLConnection connection = null;
+        long bytesRead = 0L;
+        long startedAt = System.nanoTime();
+        try {
+            URL url = new URL("https://speed.cloudflare.com/__down?bytes=131072");
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setInstanceFollowRedirects(false);
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(6000);
+            connection.setUseCaches(false);
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            connection.setRequestMethod("GET");
+            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) return -1L;
+            try (java.io.InputStream input = connection.getInputStream()) {
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    bytesRead += count;
+                    if (bytesRead >= 256L * 1024L) break;
+                }
+            }
+            long elapsedNanos = System.nanoTime() - startedAt;
+            if (bytesRead < 16L * 1024L || elapsedNanos <= 0L) return -1L;
+            double seconds = elapsedNanos / 1_000_000_000.0;
+            return Math.max(1L, Math.round(bytesRead * 8.0 / seconds / 1000.0));
+        } catch (IOException | RuntimeException ignored) {
+            return -1L;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
     private long measureTunnelLatencyMs() {
         String[] probes = new String[] {
                 "https://connectivitycheck.gstatic.com/generate_204",
