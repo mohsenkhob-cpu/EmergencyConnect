@@ -45,6 +45,7 @@ public class MainActivity extends Activity {
     private Config pendingWireGuardConfig;
     private String pendingSingBoxJson;
     private Button singBoxConnectButton;
+    private Button discoveryButton;
     private TextView status;
     private Button connectButton;
     private Button disconnectButton;
@@ -151,12 +152,23 @@ public class MainActivity extends Activity {
         orbParams.bottomMargin = dp(12);
         page.addView(orb, orbParams);
 
-        TextView helper = label("برای اتصال، فایل پیکربندی WireGuard را وارد کنید", 14,
+        TextView helper = label("برای یافتن سرورهای رایگان آزمایشی، جستجوی خودکار را اجرا کنید", 14,
                 Color.rgb(164, 181, 205), false);
         page.addView(helper);
 
+        discoveryButton = new Button(this);
+        discoveryButton.setText("جستجوی خودکار سرورهای رایگان");
+        discoveryButton.setTextSize(17);
+        discoveryButton.setTextColor(Color.WHITE);
+        discoveryButton.setAllCaps(false);
+        discoveryButton.setBackground(shape(Color.rgb(31, 151, 137), 18));
+        LinearLayout.LayoutParams discoveryParams = new LinearLayout.LayoutParams(-1, dp(58));
+        discoveryParams.topMargin = dp(16);
+        page.addView(discoveryButton, discoveryParams);
+        discoveryButton.setOnClickListener(v -> discoverFreeServers());
+
         connectButton = new Button(this);
-        connectButton.setText("انتخاب فایل WireGuard");
+        connectButton.setText("پیشرفته: انتخاب فایل WireGuard");
         connectButton.setTextSize(17);
         connectButton.setTextColor(Color.WHITE);
         connectButton.setAllCaps(false);
@@ -286,6 +298,52 @@ public class MainActivity extends Activity {
             singBoxReceiverRegistered = false;
         }
         super.onStop();
+    }
+
+    private void discoverFreeServers() {
+        if (discoveryButton == null || !discoveryButton.isEnabled()) return;
+        discoveryButton.setEnabled(false);
+        setStatus("در حال دریافت فهرست سرورهای رایگان از منبع رسمی VPN Gate…");
+        worker.execute(() -> {
+            try {
+                VpnGateProvider.Result result = VpnGateProvider.fetch();
+                runOnUiThread(() -> {
+                    discoveryButton.setEnabled(true);
+                    if (isFinishing() || isDestroyed()) return;
+                    int count = Math.min(result.servers.size(), 25);
+                    String[] labels = new String[count];
+                    for (int i = 0; i < count; i++) {
+                        VpnGateProvider.Server server = result.servers.get(i);
+                        String country = server.country.isEmpty() ? "کشور نامشخص" : server.country;
+                        String host = server.hostName.isEmpty() ? server.ip : server.hostName;
+                        String ping = server.advertisedPingMs == Integer.MAX_VALUE
+                                ? "نامشخص" : server.advertisedPingMs + " ms";
+                        long speedMb = server.advertisedSpeedBytesPerSecond / (1024L * 1024L);
+                        labels[i] = country + " | " + host + "\\n" + server.ip + ":" + server.port
+                                + " | پینگ اعلامی: " + ping + " | سرعت اعلامی: " + speedMb + " MB/s";
+                    }
+                    setStatus("فهرست دریافت شد: " + result.servers.size()
+                            + " پروفایل عمومی؛ هنوز هیچ سروری آزمایش یا متصل نشده است");
+                    new AlertDialog.Builder(this)
+                            .setTitle("سرورهای عمومی VPN Gate")
+                            .setMessage("این سرورها داوطلبانه و عمومی‌اند. اطلاعات پینگ و سرعت را خود منبع اعلام کرده و کیفیت واقعی یا امنیت را ثابت نمی‌کند. در این مرحله فقط فهرست دریافت می‌شود؛ اتصال خودکار هنوز فعال نیست.")
+                            .setItems(labels, (dialog, which) -> {
+                                VpnGateProvider.Server selected = result.servers.get(which);
+                                setStatus("سرور انتخاب‌شده فقط شناسایی شد: " + selected.ip
+                                        + ":" + selected.port + "؛ موتور اتصال داخلی OpenVPN هنوز آماده نیست");
+                            })
+                            .setPositiveButton("بستن", null)
+                            .show();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    discoveryButton.setEnabled(true);
+                    if (isFinishing() || isDestroyed()) return;
+                    setStatus("جستجوی سرورهای رایگان ناموفق بود: " + safeMessage(error));
+                    Toast.makeText(this, "دریافت فهرست سرورها انجام نشد", Toast.LENGTH_LONG).show();
+                });
+            }
+        });
     }
 
     private void chooseWireGuardFile() {
