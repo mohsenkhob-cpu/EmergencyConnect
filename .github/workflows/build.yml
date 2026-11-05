@@ -45,6 +45,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Verify experimental OpenVPN JNI and TUN safety contracts
+        run: bash overlay/native/android-jni/check_session_gate.sh
       - name: Build debug APK
         run: gradle --no-daemon testDebugUnitTest assembleDebug
       - name: Upload APK
