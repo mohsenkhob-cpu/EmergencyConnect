@@ -3,8 +3,8 @@ package com.rahyab.next.engine;
 import java.util.Locale;
 
 /**
- * Routes profiles to the matching engine family.
- * This class selects an adapter only; it does not claim that a tunnel is connected.
+ * Routes only to engine adapters that are actually integrated in the active :app module.
+ * A protocol name is not evidence that an engine implementation is present.
  */
 public final class EngineRouter {
     public EngineType route(VpnProfile profile) {
@@ -26,7 +26,8 @@ public final class EngineRouter {
                 return EngineType.WIREGUARD;
             case "ovpn":
             case "openvpn":
-                return EngineType.OPENVPN;
+                throw new UnsupportedOperationException(
+                        "موتور داخلی OpenVPN هنوز به ماژول اجرایی راه‌یاب متصل نشده است");
             default:
                 throw new IllegalArgumentException("پروتکل این فایل هنوز پشتیبانی نمی‌شود: " + scheme);
         }
