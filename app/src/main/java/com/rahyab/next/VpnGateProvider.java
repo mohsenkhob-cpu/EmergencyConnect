@@ -1,6 +1,6 @@
 package com.rahyab.next;
 
-import android.util.Base64;
+import java.util.Base64;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -132,7 +132,7 @@ public final class VpnGateProvider {
                 int ping = parseInt(fields.get(3));
                 String country = fields.get(5).trim();
 
-                byte[] decoded = Base64.decode(fields.get(14).trim(), Base64.DEFAULT);
+                byte[] decoded = Base64.getMimeDecoder().decode(fields.get(14).trim());
                 if (decoded.length == 0 || decoded.length > MAX_PROFILE_BYTES) continue;
                 String profile = new String(decoded, StandardCharsets.UTF_8);
                 if (!looksLikeOpenVpnProfile(profile)) continue;
