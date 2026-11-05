@@ -89,6 +89,13 @@ jobs:
           done
           readelf -Ws app/src/main/jniLibs/arm64-v8a/libopenvpn3_jni.so | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession"
           readelf -Ws app/src/main/jniLibs/arm64-v8a/libopenvpn3_jni.so | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService"
+      - name: Prepare persistent debug signing cache
+        run: mkdir -p "$HOME/.android"
+      - name: Reuse debug signing key across CI builds
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: rahyab-debug-keystore-v1
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -96,10 +103,28 @@ jobs:
       - name: Verify experimental OpenVPN JNI and TUN safety contracts
         run: bash overlay/native/android-jni/check_session_gate.sh
       - name: Build debug APK
-        run: gradle --no-daemon testDebugUnitTest assembleDebug
-      - name: Upload APK
+        run: gradle --no-daemon -PciVersionCode="$GITHUB_RUN_NUMBER" testDebugUnitTest assembleDebug
+      - name: Verify APK signature, package, ABI, alignment and checksum
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          test -s "$APK"
+          unzip -tq "$APK"
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          "$TOOLS/zipalign" -c -v 4 "$APK"
+          "$TOOLS/aapt" dump badging "$APK" | grep -F "package: name='com.rahyab.next'"
+          "$TOOLS/aapt" dump badging "$APK" | grep -F "native-code: 'arm64-v8a'"
+          {
+            echo "APK bytes: $(stat -c%s "$APK")"
+            sha256sum "$APK"
+            "$TOOLS/apksigner" verify --print-certs "$APK" | grep -E "Signer #1 certificate SHA-256 digest:"
+          } | tee "app/build/outputs/apk/debug/APK-INTEGRITY.txt"
+      - name: Upload verified APK and integrity report
         uses: actions/upload-artifact@v4
         with:
           name: RahYab-Next-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/debug/APK-INTEGRITY.txt
           if-no-files-found: error
