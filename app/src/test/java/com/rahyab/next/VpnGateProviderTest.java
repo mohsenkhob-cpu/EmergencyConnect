@@ -54,6 +54,15 @@ public class VpnGateProviderTest {
         assertTrue(VpnGateProvider.parse(csv).isEmpty());
     }
 
+    @Test public void rejectsProfilesWithMultipleRemoteDirectives() throws Exception {
+        String profile = "client\\nremote 203.0.113.10 1194\\n"
+                + "remote 198.51.100.20 443\\n";
+        String csv = "#HostName,IP,Score,Ping,Speed,Country,...\\n"
+                + row("relay-a", "203.0.113.10", "US", "1000", "30", profile);
+
+        assertTrue(VpnGateProvider.parse(csv).isEmpty());
+    }
+
     @Test public void removesDuplicateEndpoints() throws Exception {
         String profile = "client\nremote 203.0.113.10 1194\n";
         String first = row("relay-a", "203.0.113.10", "US", "1000", "30", profile);
