@@ -13,6 +13,29 @@ public class FullTunnelPolicyTest {
                 new String[0]);
     }
 
+    @Test public void acceptsIpv4RedirectGatewayDef1SplitDefaultRoutes() {
+        FullTunnelPolicy.validate(
+                new String[]{"10.8.0.2"},
+                new String[]{"10.8.0.1"},
+                new String[]{"0.0.0.0", "128.0.0.0"},
+                new int[]{1, 1},
+                new String[0]);
+    }
+
+    @Test public void rejectsIncompleteSplitDefaultRoutes() {
+        try {
+            FullTunnelPolicy.validate(
+                    new String[]{"10.8.0.2"},
+                    new String[]{"10.8.0.1"},
+                    new String[]{"0.0.0.0"},
+                    new int[]{1},
+                    new String[0]);
+            fail("Expected incomplete split default routes to be rejected");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().contains("IPv4"));
+        }
+    }
+
     @Test public void rejectsIpv4WithoutDefaultRoute() {
         try {
             FullTunnelPolicy.validate(
