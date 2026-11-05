@@ -249,6 +249,13 @@ public final class RahYabVpnService extends VpnService {
         autoConnected = false;
         int count = autoProfiles.size();
         int begin = Math.max(0, Math.min(startIndex, count - 1));
+        // Capture the device's public egress before starting any candidate.
+        // A CONNECTED callback and an HTTP 204 alone cannot prove that traffic
+        // left through the selected VPN relay.
+        String baselineExitIp = fetchPublicIp();
+        appendAutoHistory("AUTO_BASELINE_IP",
+                baselineExitIp == null ? "IP پیش از تونل قابل تشخیص نبود؛ تأیید نهایی IP ممکن نیست"
+                        : "IP خروجی پیش از تونل ثبت شد");
         for (int offset = 0; offset < count; offset++) {
             int i = (begin + offset) % count;
             if (!autoSearchEnabled || serviceDestroyed) return;
@@ -297,7 +304,7 @@ public final class RahYabVpnService extends VpnService {
             if (connected) {
                 updateStatus("تونل برقرار شد؛ در حال بررسی عبور واقعی اینترنت…");
                 appendAutoHistory("AUTO_TUNNEL_PROBE", "اتصال OpenVPN برقرار شد؛ آزمون اینترنت از داخل تونل آغاز شد");
-                boolean trafficVerified = verifyTunnelTraffic();
+                boolean trafficVerified = verifyTunnelTraffic(baselineExitIp);
                 if (trafficVerified) {
                     setServerTestStatus(endpoint, "connected");
                     autoConnected = true;
@@ -347,11 +354,17 @@ public final class RahYabVpnService extends VpnService {
      * These requests are intentionally NOT protected(), so a full-tunnel
      * profile must carry them through the VPN interface.
      */
-    private boolean verifyTunnelTraffic() {
+    private boolean verifyTunnelTraffic(String baselineExitIp) {
+        if (baselineExitIp == null || baselineExitIp.isEmpty()) {
+            appendAutoHistory("AUTO_EXIT_IP_UNVERIFIED",
+                    "IP پیش از اتصال ثبت نشده؛ برای جلوگیری از تأیید اشتباه، این سرور پذیرفته نشد");
+            return false;
+        }
         String[] probes = new String[] {
                 "https://connectivitycheck.gstatic.com/generate_204",
                 "https://cp.cloudflare.com/generate_204"
         };
+        boolean httpsTrafficOk = false;
         for (String probe : probes) {
             HttpURLConnection connection = null;
             try {
@@ -363,18 +376,73 @@ public final class RahYabVpnService extends VpnService {
                 connection.setRequestMethod("GET");
                 int code = connection.getResponseCode();
                 if (code == 204) {
-                    appendAutoHistory("AUTO_TUNNEL_PROBE_OK", "پاسخ ۲۰۴ از آزمون اینترنت داخل تونل دریافت شد");
-                    return true;
+                    httpsTrafficOk = true;
+                    appendAutoHistory("AUTO_TUNNEL_PROBE_OK",
+                            "پاسخ HTTP ۲۰۴ از آزمون اینترنت در زمان فعال بودن تونل دریافت شد");
+                    break;
                 }
-                appendAutoHistory("AUTO_TUNNEL_PROBE_RESPONSE", "آزمون اینترنت پاسخ HTTP " + code + " داد");
+                appendAutoHistory("AUTO_TUNNEL_PROBE_RESPONSE",
+                        "آزمون اینترنت پاسخ HTTP " + code + " داد");
             } catch (IOException | RuntimeException e) {
-                String reason = e.getClass().getSimpleName();
-                appendAutoHistory("AUTO_TUNNEL_PROBE_ERROR", "آزمون اینترنت ناموفق: " + reason);
+                appendAutoHistory("AUTO_TUNNEL_PROBE_ERROR",
+                        "آزمون اینترنت ناموفق: " + e.getClass().getSimpleName());
             } finally {
                 if (connection != null) connection.disconnect();
             }
         }
-        return false;
+        if (!httpsTrafficOk) return false;
+
+        String tunnelExitIp = fetchPublicIp();
+        if (tunnelExitIp == null || tunnelExitIp.isEmpty()) {
+            appendAutoHistory("AUTO_EXIT_IP_UNVERIFIED",
+                    "IP خروجی در زمان تونل قابل دریافت نبود؛ اتصال تأیید نشد");
+            return false;
+        }
+        if (baselineExitIp.equals(tunnelExitIp)) {
+            appendAutoHistory("AUTO_EXIT_IP_UNCHANGED",
+                    "IP خروجی با IP پیش از تونل تفاوت نداشت؛ احتمال عبور نکردن ترافیک از رله");
+            return false;
+        }
+        appendAutoHistory("AUTO_EXIT_IP_CHANGED",
+                "IP خروجی در زمان تونل با IP پیش از اتصال متفاوت است");
+        return true;
+    }
+
+    /** Fetch a literal public IP over ordinary, unprotected HTTPS traffic. */
+    private String fetchPublicIp() {
+        String[] endpoints = new String[] {
+                "https://api.ipify.org",
+                "https://icanhazip.com"
+        };
+        for (String endpoint : endpoints) {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(endpoint).openConnection();
+                connection.setConnectTimeout(4500);
+                connection.setReadTimeout(4500);
+                connection.setUseCaches(false);
+                connection.setRequestMethod("GET");
+                if (connection.getResponseCode() != 200) continue;
+                try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(connection.getInputStream(),
+                                java.nio.charset.StandardCharsets.UTF_8))) {
+                    String value = reader.readLine();
+                    if (value != null) {
+                        value = value.trim();
+                        if (value.length() <= 45
+                                && value.matches("[0-9a-fA-F:.]+")
+                                && (value.indexOf('.') >= 0 || value.indexOf(':') >= 0)) {
+                            return value;
+                        }
+                    }
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // Try the second independent endpoint.
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }
+        return null;
     }
 
     private ArrayList<String> fetchFreshProfiles(int wanted) {
