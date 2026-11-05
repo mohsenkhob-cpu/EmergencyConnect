@@ -397,6 +397,13 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_OPENVPN_VPN_PERMISSION && resultCode != RESULT_OK) {
+            pendingOpenVpnProfiles = null;
+            if (discoveryButton != null) discoveryButton.setEnabled(true);
+            if (disconnectButton != null) disconnectButton.setEnabled(false);
+            setStatus("اجازه ایجاد اتصال VPN داده نشد؛ برای اتصال هوشمند دوباره تلاش کنید");
+            return;
+        }
         if (resultCode != RESULT_OK) return;
         if (requestCode == REQUEST_VPN_PERMISSION) {
             startWireGuard();
@@ -765,6 +772,24 @@ public class MainActivity extends Activity {
     private String safeMessage(Exception e) {
         String message = e.getMessage();
         return message == null || message.trim().isEmpty() ? e.getClass().getSimpleName() : message;
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (status == null) return;
+        android.content.SharedPreferences diagnostics =
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        long updatedAt = diagnostics.getLong("service_status_updated_at", 0L);
+        String savedStatus = diagnostics.getString("service_status_message", null);
+        String lamp = diagnostics.getString("connection_lamp_state", "disconnected");
+        boolean recent = updatedAt > 0L
+                && System.currentTimeMillis() - updatedAt < 24L * 60L * 60L * 1000L;
+        if (recent && savedStatus != null && !savedStatus.trim().isEmpty()) {
+            setStatus(savedStatus);
+            boolean active = "connected".equals(lamp) || "searching".equals(lamp);
+            if (disconnectButton != null) disconnectButton.setEnabled(active);
+            if (discoveryButton != null) discoveryButton.setEnabled(!"searching".equals(lamp));
+        }
     }
 
     @Override protected void onDestroy() {
