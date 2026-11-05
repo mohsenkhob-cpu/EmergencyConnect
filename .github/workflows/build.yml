@@ -42,6 +42,7 @@ jobs:
           "$SDKMANAGER" "platform-tools"
           "$SDKMANAGER" "platforms;android-35"
           "$SDKMANAGER" "build-tools;35.0.0"
+          "$SDKMANAGER" "ndk;27.2.12479018"
       - name: Locate latest successful OpenVPN 3 native artifact
         id: native-artifact
         env:
@@ -75,6 +76,19 @@ jobs:
           file "$LIB" | grep -q "ARM aarch64"
           readelf -Ws "$LIB" | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession"
           readelf -Ws "$LIB" | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService"
+      - name: Strip native debug sections to reduce APK size
+        run: |
+          NDK_ROOT="$ANDROID_HOME/ndk/27.2.12479018"
+          STRIP="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          test -x "$STRIP"
+          find app/src/main/jniLibs -type f -name '*.so' -print0 | while IFS= read -r -d '' LIB; do
+            BEFORE="$(stat -c%s "$LIB")"
+            "$STRIP" --strip-debug "$LIB"
+            AFTER="$(stat -c%s "$LIB")"
+            echo "$(basename "$LIB"): $BEFORE -> $AFTER bytes"
+          done
+          readelf -Ws app/src/main/jniLibs/arm64-v8a/libopenvpn3_jni.so | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession"
+          readelf -Ws app/src/main/jniLibs/arm64-v8a/libopenvpn3_jni.so | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
