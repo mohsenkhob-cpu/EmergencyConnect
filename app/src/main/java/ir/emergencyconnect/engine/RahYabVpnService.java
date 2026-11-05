@@ -335,6 +335,20 @@ public final class RahYabVpnService extends VpnService {
             }
             attemptSignal = null;
 
+            // A user stop/revoke may release the latch before the connection
+            // attempt itself finishes. Do not run HTTPS/quality probes against
+            // a tunnel that is being cancelled; stop it and leave cleanup to
+            // the serialized lifecycle path.
+            if (!autoSearchEnabled || serviceDestroyed) {
+                synchronized (nativeSessionLock) {
+                    OpenVpn3Bridge.stopSession();
+                }
+                setServerTestStatus(endpoint, "cancelled");
+                appendAutoHistory("AUTO_ATTEMPT_CANCELLED",
+                        "آزمون سرور به‌دلیل توقف یا خروج سرویس لغو شد");
+                return;
+            }
+
             if (attemptConnected) {
                 updateStatus("تونل برقرار شد؛ بررسی عبور اینترنت و اندازه‌گیری تأخیر…");
                 boolean trafficVerified = verifyTunnelTraffic(baselineExitIp);
@@ -421,6 +435,12 @@ public final class RahYabVpnService extends VpnService {
                 }
             }
             attemptSignal = null;
+            if (!autoSearchEnabled || serviceDestroyed) {
+                synchronized (nativeSessionLock) {
+                    OpenVpn3Bridge.stopSession();
+                }
+                return;
+            }
             if (connected && verifyTunnelTraffic(baselineExitIp)) {
                 autoConnected = true;
                 nextAutoIndex = (begin + candidatesToMeasure) % count;
