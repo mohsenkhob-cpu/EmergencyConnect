@@ -26,10 +26,11 @@ final class FullTunnelPolicy {
         if (addresses == null || addresses.length == 0) {
             throw new IllegalArgumentException("TUN address is required");
         }
-        if (dnsServers == null || dnsServers.length == 0) {
+        if (dnsServers == null || dnsServers.length == 0 || dnsServers.length > 8) {
             throw new IllegalArgumentException(
-                    "Profile has no VPN DNS server; refusing possible DNS fallback outside the tunnel");
+                    "Profile must supply between 1 and 8 VPN DNS servers; refusing possible DNS fallback");
         }
+        validateDnsServers(dnsServers);
         if (routeAddresses == null || routePrefixes == null
                 || routeAddresses.length == 0
                 || routeAddresses.length != routePrefixes.length) {
@@ -62,6 +63,38 @@ final class FullTunnelPolicy {
         if (ipv6Enabled && !coversEntireFamily(routeAddresses, routePrefixes, true)) {
             throw new IllegalArgumentException(
                     "IPv6 is enabled but VPN routes do not cover all IPv6 destinations");
+        }
+    }
+
+    /**
+     * DNS endpoints must be numeric unicast IP literals. Hostnames would cause
+     * resolution before the VPN DNS path is established; duplicates add no
+     * resilience and can hide malformed profile data.
+     */
+    private static void validateDnsServers(String[] dnsServers) {
+        java.util.Set<String> unique = new java.util.HashSet<>();
+        for (String dns : dnsServers) {
+            if (dns == null || dns.isEmpty() || dns.length() > 64
+                    || !dns.matches("[0-9a-fA-F:.]+")) {
+                throw new IllegalArgumentException("VPN DNS server must be a numeric IP address");
+            }
+            try {
+                InetAddress address = InetAddress.getByName(dns);
+                byte[] raw = address.getAddress();
+                if (address.isAnyLocalAddress() || address.isLoopbackAddress()
+                        || address.isMulticastAddress()) {
+                    throw new IllegalArgumentException(
+                            "VPN DNS server must be a unicast, non-loopback address");
+                }
+                String normalized = java.util.Arrays.toString(raw);
+                if (!unique.add(normalized)) {
+                    throw new IllegalArgumentException("Duplicate VPN DNS server");
+                }
+            } catch (IllegalArgumentException error) {
+                throw error;
+            } catch (Exception error) {
+                throw new IllegalArgumentException("Invalid VPN DNS server address", error);
+            }
         }
     }
 
