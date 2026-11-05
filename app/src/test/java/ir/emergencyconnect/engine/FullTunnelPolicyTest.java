@@ -167,4 +167,47 @@ public class FullTunnelPolicyTest {
             assertTrue(expected.getMessage().contains("1 and 8"));
         }
     }
+
+    @Test public void rejectsIpv6DnsWhenIpv6RouteIsMissing() {
+        try {
+            FullTunnelPolicy.validate(
+                    new String[]{"10.8.0.2"},
+                    new String[]{"fd00::1"},
+                    new String[]{"0.0.0.0"},
+                    new int[]{0},
+                    new String[0]);
+            fail("Expected IPv6 DNS without IPv6 route to be rejected");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().contains("IPv6"));
+        }
+    }
+
+    @Test public void rejectsUnspecifiedVpnDnsServer() {
+        try {
+            FullTunnelPolicy.validate(
+                    new String[]{"10.8.0.2"},
+                    new String[]{"0.0.0.0"},
+                    new String[]{"0.0.0.0"},
+                    new int[]{0},
+                    new String[0]);
+            fail("Expected unspecified DNS server to be rejected");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().contains("unicast"));
+        }
+    }
+
+    @Test public void rejectsMulticastVpnDnsServer() {
+        try {
+            FullTunnelPolicy.validate(
+                    new String[]{"10.8.0.2"},
+                    new String[]{"224.0.0.1"},
+                    new String[]{"0.0.0.0"},
+                    new int[]{0},
+                    new String[0]);
+            fail("Expected multicast DNS server to be rejected");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().contains("unicast"));
+        }
+    }
+
 }
