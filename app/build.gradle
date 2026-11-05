@@ -33,4 +33,7 @@ dependencies {
 
     // sing-box Android binding; the AAR is fetched by the JitPack build script.
     implementation 'com.github.singbox-android:libbox:1.14.0'
+
+    // Local JVM tests for provider parsing and ranking rules.
+    testImplementation 'junit:junit:4.13.2'
 }
