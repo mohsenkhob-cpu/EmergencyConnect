@@ -40,9 +40,9 @@ public final class RahYabVpnService extends VpnService {
     private static final String CHANNEL_ID = "rah_yab_vpn_status";
     private static final int NOTIFICATION_ID = 7301;
     private ParcelFileDescriptor tunInterface;
-    private boolean nativeCallbacksBound;
+    private volatile boolean nativeCallbacksBound;
     private String nativeBindDiagnostic = "NOT_INITIALIZED";
-    private boolean foregroundStarted;
+    private volatile boolean foregroundStarted;
     private final ExecutorService sessionExecutor = Executors.newSingleThreadExecutor();
     private final Object nativeSessionLock = new Object();
     private volatile boolean serviceDestroyed;
