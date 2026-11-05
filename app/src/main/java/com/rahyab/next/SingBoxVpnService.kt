@@ -220,7 +220,8 @@ class SingBoxVpnService : VpnService() {
             if (item.isLoopback) continue
             val addresses = item.interfaceAddresses.mapNotNull { entry ->
                 val host = entry.address ?: return@mapNotNull null
-                val ip = if (host is Inet6Address) host.hostAddress.substringBefore('%') else host.hostAddress
+                val hostAddress = host.hostAddress ?: return@mapNotNull null
+                val ip = if (host is Inet6Address) hostAddress.substringBefore('%') else hostAddress
                 "$ip/${entry.networkPrefixLength}"
             }
             val value = io.nekohasekai.libbox.NetworkInterface().apply {
