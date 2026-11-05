@@ -266,7 +266,7 @@ public final class RahYabVpnService extends VpnService {
             attemptConnected = false;
             String progress = "در حال آزمایش سرور " + (i + 1) + " از " + count
                     + (endpoint.isEmpty() ? "" : " — " + endpoint)
-                    + "؛ حداکثر ۱۲ ثانیه";
+                    + "؛ حداکثر ۳۰ ثانیه";
             updateStatus(progress);
             setServerTestStatus(endpoint, "testing");
             setLampState("searching");
@@ -329,10 +329,10 @@ public final class RahYabVpnService extends VpnService {
                     + " موفق نشد؛ انتقال به سرور بعدی");
         }
         if (!autoSearchEnabled || serviceDestroyed) return;
-        appendAutoHistory("AUTO_REFRESH", "این نوبت تمام شد؛ دریافت ۴۰ سرور تازه آغاز می‌شود");
-        updateStatus("۴۰ سرور این نوبت موفق نشدند؛ در حال دریافت ۴۰ سرور تازه…");
+        appendAutoHistory("AUTO_REFRESH", "این نوبت تمام شد؛ دریافت حداکثر ۴۰ سرور تازه آغاز می‌شود");
+        updateStatus(count + " سرور این نوبت موفق نشدند؛ در حال دریافت حداکثر ۴۰ سرور تازه…");
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                .putString("session_start_result", "۴۰ سرور بررسی شد؛ در حال دریافت فهرست تازه…").apply();
+                .putString("session_start_result", count + " سرور بررسی شد؛ در حال دریافت فهرست تازه…").apply();
         ArrayList<String> freshProfiles = fetchFreshProfiles(40);
         if (!autoSearchEnabled || serviceDestroyed) return;
         if (freshProfiles.isEmpty()) {
