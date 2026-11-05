@@ -642,11 +642,25 @@ public final class RahYabVpnService extends VpnService {
                 .putString("server_test_" + endpoint, state).apply();
     }
 
+    private String redactDiagnosticText(String value) {
+        if (value == null || value.isEmpty()) return "";
+        // Diagnostic reports must never expose credentials or private keys.
+        return value.replaceAll(
+                "(?i)(password|passwd|auth[_-]?token|private[_ -]?key|secret|token|username)"
+                        + "\\s*[:=]\\s*[^\\s,;]+",
+                "$1=<redacted>");
+    }
+
     private void appendAutoHistory(String name, String info) {
         android.content.SharedPreferences diagnostics =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         String history = diagnostics.getString("native_event_history", "");
-        String detail = name + " — " + info.replace('\n', ' ').replace('\r', ' ');
+        String safeInfo = redactDiagnosticText(
+                info == null ? "" : info.replace('\n', ' ').replace('\r', ' '));
+        String timestamp = new java.text.SimpleDateFormat(
+                "yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+                .format(new java.util.Date());
+        String detail = timestamp + " | " + name + " — " + safeInfo;
         String next = history.isEmpty() ? detail : history + "\n" + detail;
         String[] entries = next.split("\n");
         if (entries.length > 30) {
@@ -916,9 +930,14 @@ public final class RahYabVpnService extends VpnService {
         // messages contain embedded newlines (for example Peer Info); without
         // normalization those lines consume the history limit and hide the
         // actual sequence of connection events.
-        String safeInfo = info == null ? "" : info.replace('\r', ' ').replace('\n', ' ').trim();
+        String safeInfo = redactDiagnosticText(
+                info == null ? "" : info.replace('\r', ' ').replace('\n', ' ').trim());
         if (safeInfo.length() > 1200) safeInfo = safeInfo.substring(0, 1200);
-        String detail = name + (safeInfo.isEmpty() ? "" : " — " + safeInfo)
+        String timestamp = new java.text.SimpleDateFormat(
+                "yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+                .format(new java.util.Date());
+        String detail = timestamp + " | " + name
+                + (safeInfo.isEmpty() ? "" : " — " + safeInfo)
                 + (error || fatal ? " [ERROR]" : "");
         android.content.SharedPreferences diagnostics =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
