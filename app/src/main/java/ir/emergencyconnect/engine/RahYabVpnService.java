@@ -44,7 +44,10 @@ public final class RahYabVpnService extends VpnService {
     // Pending start requests exist only to bridge Android's one-shot service
     // delivery/recovery window; they are not persistent auto-connect settings.
     private static final long PENDING_START_MAX_AGE_MS = 90_000L;
-    private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 30;
+    // Public VPN Gate relays often do not answer at all. Keep each candidate
+    // bounded so one dead relay cannot stall a user-initiated smart search.
+    // 15 seconds allows an initial OpenVPN poll while cutting the old 30s wait.
+    private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 15;
     private static final String CHANNEL_ID = "rah_yab_vpn_status";
     private static final int NOTIFICATION_ID = 7301;
     private ParcelFileDescriptor tunInterface;
