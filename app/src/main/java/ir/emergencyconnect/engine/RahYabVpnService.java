@@ -46,8 +46,10 @@ public final class RahYabVpnService extends VpnService {
     private static final long PENDING_START_MAX_AGE_MS = 90_000L;
     // Public VPN Gate relays often do not answer at all. Keep each candidate
     // bounded so one dead relay cannot stall a user-initiated smart search.
-    // 15 seconds allows an initial OpenVPN poll while cutting the old 30s wait.
-    private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 15;
+    // Public relays can remain in CONNECTING during a slow TLS handshake.
+    // Allow 22 seconds before abandoning a candidate, while keeping every
+    // candidate bounded and preserving the 12-candidate per-request limit.
+    private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 22;
     // Connected-session quality supervision. A single bad sample never triggers a switch.
     private static final long AUTO_MONITOR_INTERVAL_SECONDS = 45L;
     private static final long AUTO_MONITOR_LATENCY_LIMIT_MS = 1500L;
