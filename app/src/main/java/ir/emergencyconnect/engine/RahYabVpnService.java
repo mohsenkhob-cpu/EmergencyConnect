@@ -48,6 +48,14 @@ public final class RahYabVpnService extends VpnService {
     // bounded so one dead relay cannot stall a user-initiated smart search.
     // 15 seconds allows an initial OpenVPN poll while cutting the old 30s wait.
     private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 15;
+    // Connected-session quality supervision. A single bad sample never triggers a switch.
+    private static final long AUTO_MONITOR_INTERVAL_SECONDS = 45L;
+    private static final long AUTO_MONITOR_LATENCY_LIMIT_MS = 1500L;
+    private static final long AUTO_MONITOR_SPEED_LIMIT_KBPS = 250L;
+    private static final int AUTO_MONITOR_BAD_SAMPLES_TO_SWITCH = 2;
+    private static final int AUTO_FAILOVER_CANDIDATES = 3;
+    private static final int AUTO_MAX_FAILOVERS_PER_SESSION = 2;
+    private static final long AUTO_FAILOVER_COOLDOWN_MS = 180_000L;
     private static final String CHANNEL_ID = "rah_yab_vpn_status";
     private static final int NOTIFICATION_ID = 7301;
     private ParcelFileDescriptor tunInterface;
@@ -55,6 +63,13 @@ public final class RahYabVpnService extends VpnService {
     private String nativeBindDiagnostic = "NOT_INITIALIZED";
     private volatile boolean foregroundStarted;
     private final ExecutorService sessionExecutor = Executors.newSingleThreadExecutor();
+    private final java.util.concurrent.ScheduledExecutorService qualityMonitorExecutor =
+            Executors.newSingleThreadScheduledExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "RahYab-quality-monitor");
+                thread.setDaemon(true);
+                return thread;
+            });
+    private volatile java.util.concurrent.ScheduledFuture<?> qualityMonitorFuture;
     private final Object nativeSessionLock = new Object();
     private volatile boolean serviceDestroyed;
     // Set at the very first instruction of ACTION_STOP to close the race between
@@ -72,6 +87,14 @@ public final class RahYabVpnService extends VpnService {
     // list must not turn a single tap into an endless background search.
     private static final int AUTO_MAX_CANDIDATES_PER_REQUEST = 12;
     private volatile int autoCandidatesTried;
+    private volatile String activeAutoProfile;
+    private volatile String activeTunnelExitIp;
+    private volatile long activeTunnelLatencyMs = -1L;
+    private volatile long activeTunnelThroughputKbps = -1L;
+    private volatile int monitorBadSamples;
+    private volatile int monitorSampleCount;
+    private volatile int autoFailoversThisSession;
+    private volatile long lastAutoFailoverAtMs;
     private volatile int autoStartId;
     private final AtomicBoolean failoverQueued = new AtomicBoolean(false);
     private final java.util.Set<String> triedServerEndpoints = new java.util.HashSet<>();
@@ -210,10 +233,20 @@ public final class RahYabVpnService extends VpnService {
             return START_NOT_STICKY;
         }
         if (ACTION_START.equals(action)) {
+            cancelQualityMonitor();
             stopRequested.set(false);
             autoCandidatesTried = 0;
             autoConnected = false;
             autoSearchEnabled = false;
+            activeAutoProfile = null;
+            activeTunnelExitIp = null;
+            activeTunnelLatencyMs = -1L;
+            activeTunnelThroughputKbps = -1L;
+            monitorBadSamples = 0;
+            monitorSampleCount = 0;
+            autoFailoversThisSession = 0;
+            lastAutoFailoverAtMs = 0L;
+            failoverQueued.set(false);
         }
         android.util.Log.i("RahYabVpnService", "onStartCommand entered; startId="
                 + startId + ", action=" + String.valueOf(action));
@@ -255,7 +288,9 @@ public final class RahYabVpnService extends VpnService {
             pending.edit().clear().commit();
             autoSearchEnabled = false;
             autoConnected = false;
+            cancelQualityMonitor();
             autoProfiles = null;
+            activeAutoProfile = null;
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("service_stop_requested_at", formatDiagnosticTime(System.currentTimeMillis()))
                     .putString("service_stop_reason", "ACTION_STOP received; active automatic attempt released if waiting")
@@ -364,7 +399,9 @@ public final class RahYabVpnService extends VpnService {
     private void startSingleProfile(String profile) {
         autoSearchEnabled = false;
         autoConnected = false;
+        cancelQualityMonitor();
         autoProfiles = null;
+        activeAutoProfile = null;
         CountDownLatch activeAttempt = attemptSignal;
         if (activeAttempt != null) activeAttempt.countDown();
         attemptSignal = null;
@@ -615,6 +652,9 @@ public final class RahYabVpnService extends VpnService {
             }
             if (connected && verifyTunnelTraffic(baselineExitIp)) {
                 autoConnected = true;
+                activeAutoProfile = bestProfile;
+                activeAutoLatencyMs = bestLatencyMs;
+                activeAutoThroughputKbps = bestThroughputKbps;
                 nextAutoIndex = (begin + candidatesToMeasure) % count;
                 setServerTestStatus(bestEndpoint, "connected");
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
@@ -632,6 +672,7 @@ public final class RahYabVpnService extends VpnService {
                         + bestEndpoint + "؛ تأخیر " + bestLatencyMs + " ms"
                         + (bestThroughputKbps > 0
                         ? "؛ دریافت " + bestThroughputKbps + " kbps" : ""));
+                startQualityMonitor();
                 return;
             }
             appendAutoHistory("AUTO_BEST_RECONNECT_FAILED",
@@ -872,6 +913,7 @@ public final class RahYabVpnService extends VpnService {
                     "IP خروجی با IP پیش از تونل تفاوت نداشت؛ احتمال عبور نکردن ترافیک از رله");
             return false;
         }
+        activeTunnelExitIp = tunnelExitIp;
         appendAutoHistory("AUTO_EXIT_IP_CHANGED",
                 "IP خروجی در زمان تونل با IP پیش از اتصال متفاوت است");
         return true;
@@ -996,25 +1038,317 @@ public final class RahYabVpnService extends VpnService {
                 .putString("native_event_history", next).apply();
     }
 
-    private void scheduleAutoFailover() {
-        if (!autoSearchEnabled || !autoConnected
-                || !failoverQueued.compareAndSet(false, true)) return;
-        autoConnected = false;
+    private void cancelQualityMonitor() {
+        java.util.concurrent.ScheduledFuture<?> task = qualityMonitorFuture;
+        qualityMonitorFuture = null;
+        if (task != null) task.cancel(false);
+    }
+
+    private void startQualityMonitor() {
+        cancelQualityMonitor();
+        if (!autoSearchEnabled || !autoConnected || stopRequested.get()
+                || serviceDestroyed || qualityMonitorExecutor.isShutdown()) return;
+        try {
+            qualityMonitorFuture = qualityMonitorExecutor.scheduleWithFixedDelay(
+                    this::monitorTunnelQuality,
+                    AUTO_MONITOR_INTERVAL_SECONDS,
+                    AUTO_MONITOR_INTERVAL_SECONDS,
+                    TimeUnit.SECONDS);
+            appendAutoHistory("AUTO_MONITOR_STARTED",
+                    "پایش کیفیت تونل پس از تأیید اتصال آغاز شد؛ فاصله نمونه‌برداری ۴۵ ثانیه");
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
+            appendAutoHistory("AUTO_MONITOR_START_FAILED",
+                    "صف پایش کیفیت در دسترس نیست");
+        }
+    }
+
+    private void monitorTunnelQuality() {
+        if (!autoSearchEnabled || !autoConnected || stopRequested.get()
+                || serviceDestroyed || failoverQueued.get()) return;
+        int sampleNumber = ++monitorSampleCount;
+        long latency = measureTunnelLatencyMs();
+        int stable = measureTunnelStability();
+        // Run the bounded download probe every third cycle to limit background data use.
+        long speed = sampleNumber % 3 == 0 ? measureTunnelDownloadKbps() : -1L;
+        if (!autoSearchEnabled || !autoConnected || stopRequested.get()
+                || serviceDestroyed) return;
+
+        activeAutoLatencyMs = latency;
+        if (speed > 0) activeAutoThroughputKbps = speed;
+        String sample = "نمونه " + sampleNumber + "؛ تأخیر=" + latency
+                + "ms؛ پایداری=" + stable + "/5؛ دریافت="
+                + (speed > 0 ? speed + "kbps" : "اندازه‌گیری نشد");
+        appendAutoHistory("AUTO_MONITOR_SAMPLE", sample);
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putLong("auto_monitor_last_at", System.currentTimeMillis())
+                .putLong("auto_monitor_latency_ms", latency)
+                .putInt("auto_monitor_stability", stable)
+                .putLong("auto_monitor_download_kbps", speed)
+                .putInt("auto_monitor_bad_samples", monitorBadSamples)
+                .commit();
+
+        boolean poorLatency = latency < 0L || latency > AUTO_MONITOR_LATENCY_LIMIT_MS;
+        boolean poorStability = stable < 4;
+        boolean poorSpeed = speed > 0L && speed < AUTO_MONITOR_SPEED_LIMIT_KBPS;
+        boolean degraded = poorLatency || poorStability || poorSpeed;
+        if (degraded) {
+            monitorBadSamples++;
+            appendAutoHistory("AUTO_QUALITY_DEGRADED",
+                    "افت کیفیت در نمونه " + sampleNumber + "؛ شمار نمونه‌های نامطلوب متوالی="
+                            + monitorBadSamples);
+        } else {
+            monitorBadSamples = 0;
+        }
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putInt("auto_monitor_bad_samples", monitorBadSamples).apply();
+
+        if (monitorBadSamples >= AUTO_MONITOR_BAD_SAMPLES_TO_SWITCH) {
+            String reason = "افت کیفیت در دو نمونه متوالی؛ تأخیر " + latency
+                    + "ms، پایداری " + stable + "/5، سرعت "
+                    + (speed > 0 ? speed + "kbps" : "نمونه‌گیری نشده");
+            requestAutoFailover(reason);
+        } else if (sampleNumber == 1 || sampleNumber % 3 == 0) {
+            updateStatus("اتصال برقرار است؛ پایش هوشمند کیفیت — تأخیر "
+                    + (latency >= 0 ? latency + " ms" : "نامشخص")
+                    + "؛ پایداری " + stable + "/5"
+                    + (speed > 0 ? "؛ دریافت " + speed + " kbps" : ""));
+        }
+    }
+
+    private void requestAutoFailover(String reason) {
+        if (!autoSearchEnabled || !autoConnected || stopRequested.get()
+                || serviceDestroyed || !failoverQueued.compareAndSet(false, true)) return;
+        long now = System.currentTimeMillis();
+        if (autoFailoversThisSession >= AUTO_MAX_FAILOVERS_PER_SESSION) {
+            failoverQueued.set(false);
+            cancelQualityMonitor();
+            appendAutoHistory("AUTO_FAILOVER_SESSION_LIMIT",
+                    "سقف دو تعویض خودکار این نشست تکمیل شد؛ اتصال فعلی حفظ می‌شود");
+            updateStatus("کیفیت اتصال پایین است؛ سقف تعویض خودکار این نشست تکمیل شد. برای جست‌وجوی تازه، خودتان اتصال هوشمند را بزنید.");
+            return;
+        }
+        if (lastAutoFailoverAtMs > 0L
+                && now - lastAutoFailoverAtMs < AUTO_FAILOVER_COOLDOWN_MS) {
+            failoverQueued.set(false);
+            appendAutoHistory("AUTO_FAILOVER_COOLDOWN",
+                    "برای جلوگیری از جابه‌جایی پیاپی، تعویض خودکار در دوره مکث نادیده گرفته شد");
+            monitorBadSamples = 0;
+            startQualityMonitor();
+            return;
+        }
+        cancelQualityMonitor();
         try {
             sessionExecutor.execute(() -> {
-                failoverQueued.set(false);
-                if (!autoSearchEnabled || serviceDestroyed || autoProfiles == null) return;
-                appendAutoHistory("AUTO_FAILOVER", "قطع نشست؛ جست‌وجوی سرور جایگزین آغاز شد");
-                runAutoSearch(autoProfiles, nextAutoIndex, autoStartId);
+                try {
+                    if (!autoSearchEnabled || serviceDestroyed || stopRequested.get()) return;
+                    runAutoFailover(reason);
+                } finally {
+                    failoverQueued.set(false);
+                }
             });
         } catch (java.util.concurrent.RejectedExecutionException rejected) {
             failoverQueued.set(false);
-            autoSearchEnabled = false;
-            autoConnected = false;
-            setLampState("disconnected");
             appendAutoHistory("AUTO_FAILOVER_QUEUE_CLOSED",
-                    "صف سرویس بسته شده بود؛ جست‌وجوی جایگزین آغاز نشد");
+                    "صف سرویس بسته شده بود؛ تعویض خودکار آغاز نشد");
         }
+    }
+
+    private boolean connectProfileForFailover(String profile) {
+        if (profile == null || profile.trim().isEmpty() || isSessionCancelled()) return false;
+        CountDownLatch signal = new CountDownLatch(1);
+        attemptConnected = false;
+        attemptSignal = signal;
+        String result;
+        synchronized (nativeSessionLock) {
+            if (isSessionCancelled()) {
+                attemptSignal = null;
+                return false;
+            }
+            stopNativeSession();
+            result = OpenVpn3Bridge.startSession(profile);
+        }
+        boolean accepted = result != null
+                && result.startsWith("درخواست اتصال به هسته OpenVPN 3 تحویل شد");
+        boolean connected = false;
+        if (accepted) {
+            try {
+                connected = signal.await(AUTO_ATTEMPT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        && attemptConnected;
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        attemptSignal = null;
+        return connected && !isSessionCancelled();
+    }
+
+    private boolean verifyTunnelTrafficForFailover(String previousExitIp,
+                                                    boolean requireDifferentExitIp) {
+        if (isSessionCancelled()) return false;
+        String[] probes = new String[] {
+                "https://connectivitycheck.gstatic.com/generate_204",
+                "https://cp.cloudflare.com/generate_204"
+        };
+        boolean trafficOk = false;
+        for (String probe : probes) {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(probe).openConnection();
+                connection.setInstanceFollowRedirects(false);
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                connection.setUseCaches(false);
+                connection.setRequestMethod("GET");
+                if (connection.getResponseCode() == 204) {
+                    trafficOk = true;
+                    break;
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // Try the second independent endpoint.
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }
+        if (!trafficOk) return false;
+        String exitIp = fetchPublicIp();
+        if (exitIp == null || exitIp.isEmpty()) return false;
+        if (requireDifferentExitIp && previousExitIp != null
+                && previousExitIp.equals(exitIp)) return false;
+        activeTunnelExitIp = exitIp;
+        return true;
+    }
+
+    private void runAutoFailover(String reason) {
+        if (!autoSearchEnabled || serviceDestroyed || stopRequested.get()) return;
+        final String previousProfile = activeAutoProfile;
+        final String previousEndpoint = profileEndpoint(previousProfile);
+        final String previousExitIp = activeTunnelExitIp;
+        if (previousProfile == null || previousProfile.trim().isEmpty()) {
+            appendAutoHistory("AUTO_FAILOVER_NO_ROLLBACK",
+                    "پروفایل اتصال قبلی برای بازیابی در دسترس نیست؛ تعویض خودکار انجام نشد");
+            return;
+        }
+        autoConnected = false;
+        autoFailoversThisSession++;
+        lastAutoFailoverAtMs = System.currentTimeMillis();
+        setLampState("searching");
+        appendAutoHistory("AUTO_FAILOVER_START",
+                reason + "؛ سرور قبلی " + previousEndpoint
+                        + "؛ نوبت تعویض " + autoFailoversThisSession
+                        + " از " + AUTO_MAX_FAILOVERS_PER_SESSION);
+        updateStatus("کیفیت اتصال افت کرده است؛ در حال بررسی حداکثر سه سرور جایگزین…");
+
+        ArrayList<String> profiles = autoProfiles;
+        if (profiles == null || profiles.isEmpty()) profiles = new ArrayList<>();
+        String bestProfile = null;
+        String bestEndpoint = "";
+        long bestLatency = Long.MAX_VALUE;
+        long bestSpeed = -1L;
+        double bestScore = Double.MAX_VALUE;
+        int tested = 0;
+        int count = profiles.size();
+        int start = count == 0 ? 0 : Math.max(0, nextAutoIndex % count);
+
+        for (int offset = 0; offset < count && tested < AUTO_FAILOVER_CANDIDATES; offset++) {
+            if (isSessionCancelled()) return;
+            int index = (start + offset) % count;
+            String candidate = profiles.get(index);
+            String endpoint = profileEndpoint(candidate);
+            if (candidate == null || candidate.trim().isEmpty()
+                    || endpoint.isEmpty() || endpoint.equals(previousEndpoint)) continue;
+            synchronized (triedServerEndpoints) {
+                if (triedServerEndpoints.contains(endpoint)) continue;
+                triedServerEndpoints.add(endpoint);
+            }
+            tested++;
+            appendAutoHistory("AUTO_FAILOVER_CANDIDATE",
+                    "آزمون جایگزین " + tested + " از " + AUTO_FAILOVER_CANDIDATES
+                            + "؛ " + endpoint);
+            if (!connectProfileForFailover(candidate)) {
+                appendAutoHistory("AUTO_FAILOVER_CANDIDATE_FAILED",
+                        endpoint + "؛ رویداد اتصال در مهلت مقرر تأیید نشد");
+                continue;
+            }
+            if (!verifyTunnelTrafficForFailover(previousExitIp, true)) {
+                appendAutoHistory("AUTO_FAILOVER_CANDIDATE_FAILED",
+                        endpoint + "؛ عبور اینترنت یا تغییر IP خروجی تأیید نشد");
+                synchronized (nativeSessionLock) { stopNativeSession(); }
+                continue;
+            }
+            int stable = measureTunnelStability();
+            long latency = measureTunnelLatencyMs();
+            long speed = measureTunnelDownloadKbps();
+            if (stable < 4 || latency < 0L) {
+                appendAutoHistory("AUTO_FAILOVER_CANDIDATE_FAILED",
+                        endpoint + "؛ کیفیت کافی نبود؛ پایداری " + stable
+                                + "/5 و تأخیر " + latency + "ms");
+                synchronized (nativeSessionLock) { stopNativeSession(); }
+                continue;
+            }
+            double score = latency + (5 - stable) * 250.0
+                    + (speed > 0 ? 1000.0 / Math.max(0.1, speed / 1000.0) : 0.0);
+            if (score < bestScore) {
+                bestScore = score;
+                bestProfile = candidate;
+                bestEndpoint = endpoint;
+                bestLatency = latency;
+                bestSpeed = speed;
+            }
+            synchronized (nativeSessionLock) { stopNativeSession(); }
+        }
+
+        if (isSessionCancelled()) return;
+        if (bestProfile != null && connectProfileForFailover(bestProfile)
+                && verifyTunnelTrafficForFailover(previousExitIp, true)
+                && measureTunnelStability() >= 4) {
+            autoConnected = true;
+            activeAutoProfile = bestProfile;
+            activeAutoLatencyMs = bestLatency;
+            activeAutoThroughputKbps = bestSpeed;
+            nextAutoIndex = count == 0 ? 0
+                    : (profiles.indexOf(bestProfile) + 1) % count;
+            setServerTestStatus(bestEndpoint, "connected");
+            setLampState("connected");
+            appendAutoHistory("AUTO_FAILOVER_SUCCESS",
+                    "اتصال به سرور جایگزین " + bestEndpoint
+                            + " تأیید شد؛ تأخیر " + bestLatency + "ms؛ سرعت "
+                            + (bestSpeed > 0 ? bestSpeed + "kbps" : "نامشخص"));
+            updateStatus("سرور جایگزین انتخاب شد — " + bestEndpoint
+                    + "؛ تأخیر " + bestLatency + " ms"
+                    + (bestSpeed > 0 ? "؛ دریافت " + bestSpeed + " kbps" : ""));
+            monitorBadSamples = 0;
+            startQualityMonitor();
+            return;
+        }
+
+        if (isSessionCancelled()) return;
+        appendAutoHistory("AUTO_FAILOVER_ROLLBACK",
+                "جایگزین مناسبی پیدا نشد؛ تلاش برای بازیابی سرور قبلی " + previousEndpoint);
+        if (connectProfileForFailover(previousProfile)
+                && verifyTunnelTrafficForFailover(null, false)) {
+            autoConnected = true;
+            activeAutoProfile = previousProfile;
+            setLampState("connected");
+            appendAutoHistory("AUTO_FAILOVER_ROLLBACK_OK",
+                    "اتصال قبلی " + previousEndpoint + " بازیابی و عبور اینترنت تأیید شد");
+            updateStatus("سرور جایگزین مناسبی پیدا نشد؛ اتصال قبلی بازیابی شد — "
+                    + previousEndpoint);
+            monitorBadSamples = 0;
+            startQualityMonitor();
+        } else {
+            autoConnected = false;
+            autoSearchEnabled = false;
+            activeAutoProfile = null;
+            setLampState("disconnected");
+            appendAutoHistory("AUTO_FAILOVER_ROLLBACK_FAILED",
+                    "بازیابی سرور قبلی نیز تأیید نشد؛ برای جلوگیری از تلاش بی‌پایان، نشست متوقف شد");
+            updateStatus("تعویض سرور موفق نبود و اتصال قبلی هم بازیابی نشد؛ برای تلاش تازه، اتصال هوشمند را بزنید.");
+        }
+    }
+
+    private void scheduleAutoFailover() {
+        if (!autoSearchEnabled || !autoConnected) return;
+        requestAutoFailover("قطع غیرمنتظره نشست VPN");
     }
 
     private void recordLifecycleEvent(String key, Intent intent) {
@@ -1594,8 +1928,11 @@ public final class RahYabVpnService extends VpnService {
         stopRequested.set(true);
         serviceDestroyed = true;
         autoSearchEnabled = false;
+        qualityMonitorExecutor.shutdownNow();
         autoConnected = false;
+        cancelQualityMonitor();
         autoProfiles = null;
+        activeAutoProfile = null;
         CountDownLatch activeAttempt = attemptSignal;
         if (activeAttempt != null) activeAttempt.countDown();
         attemptSignal = null;
@@ -1636,6 +1973,7 @@ public final class RahYabVpnService extends VpnService {
         if (activeAttempt != null) activeAttempt.countDown();
         attemptSignal = null;
         sessionExecutor.shutdownNow();
+        qualityMonitorExecutor.shutdownNow();
         setLampState("disconnected");
 
         // OpenVPN's native stop() joins its worker and can take noticeable
