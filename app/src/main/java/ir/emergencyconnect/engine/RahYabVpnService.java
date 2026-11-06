@@ -448,7 +448,7 @@ public final class RahYabVpnService extends VpnService {
             // A stop/revoke also releases this latch. Check cancellation BEFORE
             // interpreting the signal as an OpenVPN callback, otherwise a user
             // pressing Disconnect is misreported as a failed server callback.
-            final boolean cancelled = !autoSearchEnabled || serviceDestroyed;
+            final boolean cancelled = isSessionCancelled();
             String attemptOutcome = cancelled ? "CANCELLED_BY_STOP_OR_SERVICE"
                     : attemptConnected ? "OPENVPN_CONNECTED_EVENT"
                     : callbackReceived ? "NATIVE_CALLBACK_WITHOUT_CONNECTED"
@@ -1401,6 +1401,11 @@ public final class RahYabVpnService extends VpnService {
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         String lowerInfo = safeInfo.toLowerCase(java.util.Locale.ROOT);
         String failureClass = classifyNativeFailure(name, lowerInfo, error || fatal);
+        // DISCONNECTED/EXITING emitted by our own STOP command is lifecycle noise,
+        // not a network/server failure. The explicit stop flag is set before native stop.
+        if (stopRequested.get() || !autoSearchEnabled || serviceDestroyed) {
+            if ("DISCONNECTED".equals(name) || "EXITING".equals(name)) failureClass = "";
+        }
         String observedTransport = nativeTransportProtocol(lowerInfo);
         if (!observedTransport.isEmpty()) {
             diagnostics.edit()
