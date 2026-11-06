@@ -925,9 +925,17 @@ public class MainActivity extends Activity {
                             .remove("native_event_history")
                             .remove("service_status_message")
                             .commit();
-                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
-                    else startService(service);
-                    setStatus("درخواست اجرای سرویس ارسال شد؛ منتظر ثبت شروع موتور هستیم…");
+                    // This call is made from the visible Activity immediately after
+                    // the VPN permission flow. RahYabVpnService promotes itself to
+                    // foreground in onCreate(), so startService is valid here and
+                    // ensures Android delivers the explicit ACTION_START command.
+                    // startForegroundService previously created the service but the
+                    // command was not observed in device diagnostics.
+                    diagnostics.edit()
+                            .putString("service_start_dispatch", "startService from visible Activity")
+                            .commit();
+                    startService(service);
+                    setStatus("درخواست شروع سرویس ارسال شد؛ منتظر ثبت onStartCommand هستیم…");
                 } catch (RuntimeException error) {
                     discoveryButton.setEnabled(true);
                     disconnectButton.setEnabled(false);
