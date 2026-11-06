@@ -174,8 +174,14 @@ public class MainActivity extends Activity {
                 prefs.getString("native_event_history", ""));
         appendReportSection(report, "آخرین وضعیت سرویس",
                 prefs.getString("service_status_message", ""));
-        appendReportSection(report, "زمان ورود دستور به سرویس اندروید",
+        appendReportSection(report, "ورود سرویس به onCreate (چرخه ایجاد)",
+                prefs.getString("service_on_create_entered_at", ""));
+        appendReportSection(report, "نتیجه ایجاد و پیش‌زمینه‌سازی سرویس",
+                prefs.getString("service_on_create_result", ""));
+        appendReportSection(report, "ورود دستور به onStartCommand",
                 prefs.getString("service_start_command_entered", ""));
+        appendReportSection(report, "زمان خروج سرویس از چرخه حیات",
+                prefs.getString("service_on_destroy_at", ""));
         appendReportSection(report, "زمان دریافت درخواست شروع اتصال",
                 prefs.getString("service_start_received", ""));
         appendReportSection(report, "نتیجه شروع نشست",
