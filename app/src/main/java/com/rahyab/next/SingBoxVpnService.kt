@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -20,6 +21,7 @@ import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import java.net.Inet6Address
+import java.net.InetSocketAddress
 import java.net.NetworkInterface as JavaNetworkInterface
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -146,6 +148,9 @@ class SingBoxVpnService : VpnService() {
                 }
                 "openTun" -> openTun(a[0] as TunOptions)
                 "getInterfaces" -> getInterfaces()
+                "findConnectionOwner" -> findConnectionOwner(
+                    a[0] as Int, a[1] as String, a[2] as Int, a[3] as String, a[4] as Int
+                )
                 "startDefaultInterfaceMonitor", "closeDefaultInterfaceMonitor",
                 "clearDNSCache", "startNeighborMonitor", "closeNeighborMonitor",
                 "registerMyInterface" -> null
@@ -158,6 +163,34 @@ class SingBoxVpnService : VpnService() {
                 "equals" -> proxy === a.firstOrNull()
                 else -> primitiveDefault(method.returnType)
             }
+        }
+    }
+
+    private fun findConnectionOwner(
+        protocol: Int, sourceAddress: String, sourcePort: Int,
+        destinationAddress: String, destinationPort: Int,
+    ): ConnectionOwner {
+        // libbox dereferences the result even when Android cannot identify the owner.
+        // Use an explicit unknown UID on older Android or when the socket is already gone.
+        val uid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                getSystemService(ConnectivityManager::class.java)?.getConnectionOwnerUid(
+                    protocol,
+                    InetSocketAddress(sourceAddress, sourcePort),
+                    InetSocketAddress(destinationAddress, destinationPort),
+                ) ?: -1
+            } catch (_: RuntimeException) {
+                -1
+            }
+        } else {
+            -1
+        }
+        val packages = if (uid >= 0) packageManager.getPackagesForUid(uid).orEmpty()
+            else emptyArray<String>()
+        return ConnectionOwner().apply {
+            userId = uid
+            userName = packages.firstOrNull().orEmpty()
+            setAndroidPackageNames(iterator(packages.toList(), StringIterator::class.java))
         }
     }
 
