@@ -889,7 +889,7 @@ public final class RahYabVpnService extends VpnService {
                     "IP پیش از اتصال ثبت نشده؛ برای جلوگیری از تأیید اشتباه، این سرور پذیرفته نشد");
             return false;
         }
-        Network vpn = activeVpnNetwork();
+        Network vpn = awaitActiveVpnNetwork();
         if (vpn == null) return false;
         String[] probes = new String[] {
                 "https://connectivitycheck.gstatic.com/generate_204",
@@ -939,6 +939,24 @@ public final class RahYabVpnService extends VpnService {
         appendAutoHistory("AUTO_EXIT_IP_CHANGED",
                 "IP خروجی در زمان تونل با IP پیش از اتصال متفاوت است");
         return true;
+    }
+
+    private Network awaitActiveVpnNetwork() {
+        // Android can publish the VPN as our active network after the native CONNECTED event.
+        long deadline = android.os.SystemClock.elapsedRealtime() + 8_000L;
+        while (!isSessionCancelled() && !Thread.currentThread().isInterrupted()) {
+            Network vpn = activeVpnNetwork();
+            if (vpn != null) return vpn;
+            long remaining = deadline - android.os.SystemClock.elapsedRealtime();
+            if (remaining <= 0) break;
+            try {
+                Thread.sleep(Math.min(remaining, 200L));
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        return null;
     }
 
     private Network activeVpnNetwork() {
@@ -1231,7 +1249,7 @@ public final class RahYabVpnService extends VpnService {
     private boolean verifyTunnelTrafficForFailover(String previousExitIp,
                                                     boolean requireDifferentExitIp) {
         if (isSessionCancelled()) return false;
-        Network vpn = activeVpnNetwork();
+        Network vpn = awaitActiveVpnNetwork();
         if (vpn == null) return false;
         String[] probes = new String[] {
                 "https://connectivitycheck.gstatic.com/generate_204",
