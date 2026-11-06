@@ -364,14 +364,39 @@ public final class RahYabVpnService extends VpnService {
                 attemptSignal = null;
                 continue;
             }
+            long attemptStartedAt = System.currentTimeMillis();
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("auto_current_endpoint", endpoint)
+                    .putString("auto_current_started_at", formatDiagnosticTime(attemptStartedAt))
+                    .putString("auto_current_protocol", profileProtocol(profile))
+                    .putString("auto_current_wait_state", "waiting_for_native_event")
+                    .commit();
+            final boolean callbackReceived;
             try {
-                signal.await(AUTO_ATTEMPT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                callbackReceived = signal.await(AUTO_ATTEMPT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 attemptSignal = null;
                 return;
             }
             attemptSignal = null;
+            String attemptOutcome = attemptConnected ? "OPENVPN_CONNECTED_EVENT"
+                    : callbackReceived ? "NATIVE_CALLBACK_WITHOUT_CONNECTED"
+                    : "NATIVE_CALLBACK_TIMEOUT";
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("auto_last_attempt_endpoint", endpoint)
+                    .putString("auto_last_attempt_protocol", profileProtocol(profile))
+                    .putString("auto_last_attempt_started_at", formatDiagnosticTime(attemptStartedAt))
+                    .putString("auto_last_attempt_finished_at", formatDiagnosticTime(System.currentTimeMillis()))
+                    .putString("auto_last_attempt_outcome", attemptOutcome)
+                    .putString("auto_last_attempt_connected_event", String.valueOf(attemptConnected))
+                    .putString("auto_last_attempt_callback_received", String.valueOf(callbackReceived))
+                    .commit();
+            appendAutoHistory("AUTO_ATTEMPT_RESULT",
+                    "سرور " + endpoint + "؛ پروتکل " + profileProtocol(profile)
+                            + "؛ نتیجه " + attemptOutcome
+                            + "؛ رویداد اتصال " + attemptConnected
+                            + "؛ دریافت callback " + callbackReceived);
 
             // A user stop/revoke may release the latch before the connection
             // attempt itself finishes. Do not run HTTPS/quality probes against
@@ -1204,6 +1229,39 @@ public final class RahYabVpnService extends VpnService {
         if (manager != null) manager.notify(NOTIFICATION_ID, buildStatusNotification(message));
     }
 
+    private static String formatDiagnosticTime(long millis) {
+        return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
+                java.util.Locale.US).format(new java.util.Date(millis));
+    }
+
+    private static String profileProtocol(String profile) {
+        if (profile == null) return "unknown";
+        String lower = profile.toLowerCase(java.util.Locale.ROOT);
+        if (lower.contains("proto udp")) return "UDP";
+        if (lower.contains("proto tcp")) return "TCP";
+        return "OpenVPN";
+    }
+
+    private static String classifyNativeFailure(String eventName, String lowerInfo,
+                                                boolean error) {
+        if (lowerInfo.contains("tls") || lowerInfo.contains("handshake")) return "TLS_HANDSHAKE";
+        if (lowerInfo.contains("auth_failed") || lowerInfo.contains("authentication")
+                || lowerInfo.contains("auth failure")) return "AUTHENTICATION";
+        if (lowerInfo.contains("no route to host") || lowerInfo.contains("network is unreachable"))
+            return "NO_ROUTE";
+        if (lowerInfo.contains("connection refused")) return "CONNECTION_REFUSED";
+        if (lowerInfo.contains("timed out") || lowerInfo.contains("timeout")) return "TIMEOUT";
+        if (lowerInfo.contains("resolve") || lowerInfo.contains("name or service not known"))
+            return "DNS_RESOLUTION";
+        if (lowerInfo.contains("reset by peer") || lowerInfo.contains("connection reset"))
+            return "PEER_RESET";
+        if (error && ("NATIVE_CONNECT_EXCEPTION".equals(eventName)
+                || "NATIVE_CONNECT_RESULT".equals(eventName))) return "NATIVE_CONNECT_ERROR";
+        if ("DISCONNECTED".equals(eventName) || "EXITING".equals(eventName))
+            return "DISCONNECTED_WITHOUT_DETAIL";
+        return "";
+    }
+
     /** Receive OpenVPN core events on its worker thread and reflect them in the foreground notification. */
     public void onNativeEvent(String name, String info, boolean error, boolean fatal) {
         // Native shutdown can emit a final callback while the service is being
@@ -1225,6 +1283,25 @@ public final class RahYabVpnService extends VpnService {
                 + (error || fatal ? " [ERROR]" : "");
         android.content.SharedPreferences diagnostics =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        String lowerInfo = safeInfo.toLowerCase(java.util.Locale.ROOT);
+        String failureClass = classifyNativeFailure(name, lowerInfo, error || fatal);
+        android.content.SharedPreferences.Editor eventEditor = diagnostics.edit()
+                .putString("native_last_event_at", timestamp)
+                .putString("native_last_event_name", name)
+                .putString("native_last_event_detail", safeInfo);
+        if (!failureClass.isEmpty()) {
+            eventEditor.putString("native_last_failure_class", failureClass)
+                    .putString("native_last_failure_at", timestamp)
+                    .putString("native_last_failure_event", name)
+                    .putString("native_last_failure_detail", safeInfo);
+        }
+        if ("CONNECTED".equals(name)) {
+            eventEditor.putString("native_connected_event_at", timestamp);
+        } else if ("DISCONNECTED".equals(name) || "EXITING".equals(name)) {
+            eventEditor.putString("native_disconnected_event_at", timestamp)
+                    .putString("native_disconnected_event_detail", safeInfo);
+        }
+        eventEditor.apply();
         String history = diagnostics.getString("native_event_history", "");
         String nextHistory = history.isEmpty() ? detail : history + "\n" + detail;
         String[] entries = nextHistory.split("\n");
