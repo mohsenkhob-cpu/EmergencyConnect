@@ -134,12 +134,15 @@ jobs:
           test -s "$APK"
           unzip -tq "$APK"
           "$TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          KEYSTORE="$HOME/.config/.android/debug.keystore"
+          test -s "$KEYSTORE"
+          EXPECTED_SIGNER="$(keytool -list -v -keystore "$KEYSTORE" -storepass android -alias AndroidDebugKey | awk -F': ' '/SHA256:/ {gsub(/:/, "", $2); print tolower($2); exit}')"
           ACTUAL_SIGNER="$( "$TOOLS/apksigner" verify --print-certs "$APK" | awk -F": " '/Signer #1 certificate SHA-256 digest:/ {print tolower($2)}' )"
-          EXPECTED_SIGNER="916c245f795349236986a843b3ba5226c936047f499058e2aa3f4ad7e633d28e"
-          echo "Expected signer: $EXPECTED_SIGNER"
-          echo "Actual signer:   $ACTUAL_SIGNER"
+          test -n "$EXPECTED_SIGNER"
+          echo "Persistent keystore signer: $EXPECTED_SIGNER"
+          echo "APK signer:                 $ACTUAL_SIGNER"
           if [ "$ACTUAL_SIGNER" != "$EXPECTED_SIGNER" ]; then
-            echo "ERROR: APK signing identity differs from installed RahYab 353. Refusing to publish."
+            echo "ERROR: APK signer does not match the persistent Gradle debug keystore. Refusing to publish."
             exit 1
           fi
           "$TOOLS/zipalign" -c -v 4 "$APK"
