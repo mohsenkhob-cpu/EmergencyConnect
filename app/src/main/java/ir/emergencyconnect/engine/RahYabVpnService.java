@@ -344,6 +344,13 @@ public final class RahYabVpnService extends VpnService {
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("session_start_result", progress).apply();
 
+            // Clear the previous candidate's transport observation so a
+            // missing event cannot make the report display a stale TCP/UDP value.
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .remove("native_observed_transport_protocol")
+                    .remove("native_observed_transport_at")
+                    .remove("native_observed_transport_detail")
+                    .commit();
             final String result;
             synchronized (nativeSessionLock) {
                 if (!autoSearchEnabled || serviceDestroyed) {
@@ -1236,11 +1243,20 @@ public final class RahYabVpnService extends VpnService {
     }
 
     private static String profileProtocol(String profile) {
-        if (profile == null) return "unknown";
-        String lower = profile.toLowerCase(java.util.Locale.ROOT);
-        if (lower.contains("proto udp")) return "UDP";
-        if (lower.contains("proto tcp")) return "TCP";
-        return "OpenVPN";
+        if (profile == null || profile.trim().isEmpty()) return "نامشخص";
+        // Read only active OpenVPN directives. A commented example such as
+        // "# proto udp" must never override the actual "proto tcp-client".
+        String configured = "نامشخص";
+        for (String rawLine : profile.split("\\r?\\n")) {
+            String line = rawLine.trim();
+            if (line.isEmpty() || line.startsWith("#") || line.startsWith(";")) continue;
+            String[] parts = line.split("\\s+");
+            if (parts.length < 2 || !"proto".equalsIgnoreCase(parts[0])) continue;
+            String value = parts[1].toLowerCase(java.util.Locale.ROOT);
+            if (value.startsWith("udp")) configured = "UDP";
+            else if (value.startsWith("tcp")) configured = "TCP";
+        }
+        return configured;
     }
 
     private static String classifyNativeFailure(String eventName, String lowerInfo,
