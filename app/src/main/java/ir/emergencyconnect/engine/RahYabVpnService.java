@@ -1245,21 +1245,36 @@ public final class RahYabVpnService extends VpnService {
 
     private static String classifyNativeFailure(String eventName, String lowerInfo,
                                                 boolean error) {
-        if (lowerInfo.contains("tls") || lowerInfo.contains("handshake")) return "TLS_HANDSHAKE";
-        if (lowerInfo.contains("auth_failed") || lowerInfo.contains("authentication")
+        // OpenVPN options routinely contain "tls-client". That is configuration,
+        // not evidence of a TLS failure. Only classify explicit failure messages.
+        if (lowerInfo.contains("tls error") || lowerInfo.contains("tls handshake failed")
+                || lowerInfo.contains("tls key negotiation failed")
+                || lowerInfo.contains("handshake failed")) return "TLS_HANDSHAKE";
+        if (lowerInfo.contains("auth_failed") || lowerInfo.contains("authentication failed")
                 || lowerInfo.contains("auth failure")) return "AUTHENTICATION";
         if (lowerInfo.contains("no route to host") || lowerInfo.contains("network is unreachable"))
             return "NO_ROUTE";
         if (lowerInfo.contains("connection refused")) return "CONNECTION_REFUSED";
-        if (lowerInfo.contains("timed out") || lowerInfo.contains("timeout")) return "TIMEOUT";
-        if (lowerInfo.contains("resolve") || lowerInfo.contains("name or service not known"))
-            return "DNS_RESOLUTION";
+        if (lowerInfo.contains("timed out") || lowerInfo.contains("timeout")
+                || lowerInfo.contains("poll timeout")) return "TIMEOUT";
+        if (lowerInfo.contains("resolve failed") || lowerInfo.contains("name or service not known")
+                || lowerInfo.contains("unable to resolve")) return "DNS_RESOLUTION";
         if (lowerInfo.contains("reset by peer") || lowerInfo.contains("connection reset"))
             return "PEER_RESET";
         if (error && ("NATIVE_CONNECT_EXCEPTION".equals(eventName)
                 || "NATIVE_CONNECT_RESULT".equals(eventName))) return "NATIVE_CONNECT_ERROR";
+        if (error && ("CORE_LOG".equals(eventName) || "CORE_ERROR".equals(eventName)))
+            return "NATIVE_CORE_ERROR";
         if ("DISCONNECTED".equals(eventName) || "EXITING".equals(eventName))
             return "DISCONNECTED_WITHOUT_DETAIL";
+        return "";
+    }
+
+    private static String nativeTransportProtocol(String lowerInfo) {
+        if (lowerInfo.contains(" via tcp") || lowerInfo.contains(" via tcp4")
+                || lowerInfo.contains(" via tcp6")) return "TCP";
+        if (lowerInfo.contains(" via udp") || lowerInfo.contains(" via udp4")
+                || lowerInfo.contains(" via udp6")) return "UDP";
         return "";
     }
 
@@ -1286,6 +1301,14 @@ public final class RahYabVpnService extends VpnService {
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         String lowerInfo = safeInfo.toLowerCase(java.util.Locale.ROOT);
         String failureClass = classifyNativeFailure(name, lowerInfo, error || fatal);
+        String observedTransport = nativeTransportProtocol(lowerInfo);
+        if (!observedTransport.isEmpty()) {
+            diagnostics.edit()
+                    .putString("native_observed_transport_protocol", observedTransport)
+                    .putString("native_observed_transport_at", timestamp)
+                    .putString("native_observed_transport_detail", safeInfo)
+                    .apply();
+        }
         android.content.SharedPreferences.Editor eventEditor = diagnostics.edit()
                 .putString("native_last_event_at", timestamp)
                 .putString("native_last_event_name", name)
