@@ -54,6 +54,9 @@ public final class RahYabVpnService extends VpnService {
     private final ExecutorService sessionExecutor = Executors.newSingleThreadExecutor();
     private final Object nativeSessionLock = new Object();
     private volatile boolean serviceDestroyed;
+    // Set at the very first instruction of ACTION_STOP to close the race between
+    // a native callback and the session worker waking from its latch.
+    private final AtomicBoolean stopRequested = new AtomicBoolean(false);
     private volatile boolean autoSearchEnabled;
     private volatile boolean autoConnected;
     private volatile boolean attemptConnected;
@@ -177,6 +180,7 @@ public final class RahYabVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+        if (ACTION_STOP.equals(action)) stopRequested.set(true);
         String requestId = intent == null ? null : intent.getStringExtra(EXTRA_REQUEST_ID);
         android.content.SharedPreferences entryDiagnostics =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
@@ -196,6 +200,7 @@ public final class RahYabVpnService extends VpnService {
                     .commit();
             return START_NOT_STICKY;
         }
+        if (ACTION_START.equals(action)) stopRequested.set(false);
         android.util.Log.i("RahYabVpnService", "onStartCommand entered; startId="
                 + startId + ", action=" + String.valueOf(action));
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
@@ -380,7 +385,7 @@ public final class RahYabVpnService extends VpnService {
 
         for (int offset = 0; offset < candidatesToMeasure; offset++) {
             int i = (begin + offset) % count;
-            if (!autoSearchEnabled || serviceDestroyed) return;
+            if (isSessionCancelled()) return;
             String profile = autoProfiles.get(i);
             String endpoint = profileEndpoint(profile);
             synchronized (triedServerEndpoints) {
@@ -1295,6 +1300,10 @@ public final class RahYabVpnService extends VpnService {
         return parsed;
     }
 
+    private boolean isSessionCancelled() {
+        return stopRequested.get() || !autoSearchEnabled || serviceDestroyed;
+    }
+
     private void setLampState(String state) {
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("connection_lamp_state", state).apply();
@@ -1507,6 +1516,7 @@ public final class RahYabVpnService extends VpnService {
      */
     @Override
     public void onRevoke() {
+        stopRequested.set(true);
         serviceDestroyed = true;
         autoSearchEnabled = false;
         autoConnected = false;
@@ -1535,6 +1545,7 @@ public final class RahYabVpnService extends VpnService {
 
     @Override
     public void onDestroy() {
+        stopRequested.set(true);
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("service_on_destroy_at", new java.text.SimpleDateFormat(
                         "yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
