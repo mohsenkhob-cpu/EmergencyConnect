@@ -145,6 +145,17 @@ public final class RahYabVpnService extends VpnService {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         String requestId = intent == null ? null : intent.getStringExtra(EXTRA_REQUEST_ID);
+        android.content.SharedPreferences entryDiagnostics =
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        entryDiagnostics.edit()
+                .putString("service_start_callback_observed_at",
+                        new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
+                                java.util.Locale.US).format(new java.util.Date()))
+                .putString("service_start_callback_action", String.valueOf(action))
+                .putString("service_start_callback_request_id", String.valueOf(requestId))
+                .commit();
+        android.util.Log.i("RahYabVpnService", "onStartCommand callback observed; action="
+                + String.valueOf(action) + ", requestId=" + String.valueOf(requestId));
         if (ACTION_START.equals(action) && requestId != null && !claimStartRequest(requestId)) {
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("service_start_duplicate_ignored", requestId)
@@ -916,18 +927,35 @@ public final class RahYabVpnService extends VpnService {
             return;
         }
 
-        // Recovery path: MainActivity persists the exact request before startService().
-        // If service creation is observed but the start callback is not, replay once.
+        // Recovery path: record every decision before attempting a one-shot replay.
         new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
             android.content.SharedPreferences pending =
                     getSharedPreferences(PENDING_START_PREFS, MODE_PRIVATE);
-            String requestId = pending.getString(PENDING_START_ID, null);
-            String profilesJson = pending.getString(PENDING_START_PROFILES, null);
-            if (requestId == null || requestId.trim().isEmpty()
-                    || profilesJson == null || profilesJson.trim().isEmpty()) return;
             android.content.SharedPreferences diagnosticsNow =
                     getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
-            if (requestId.equals(diagnosticsNow.getString("service_claimed_request_id", null))) return;
+            String requestId = pending.getString(PENDING_START_ID, null);
+            String profilesJson = pending.getString(PENDING_START_PROFILES, null);
+            String claimedId = diagnosticsNow.getString("service_claimed_request_id", null);
+            diagnosticsNow.edit()
+                    .putString("service_recovery_handler_ran_at",
+                            new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
+                                    java.util.Locale.US).format(new java.util.Date()))
+                    .putString("service_recovery_pending_request_id", String.valueOf(requestId))
+                    .putString("service_recovery_claimed_request_id", String.valueOf(claimedId))
+                    .putString("service_recovery_profiles_present",
+                            String.valueOf(profilesJson != null && !profilesJson.trim().isEmpty()))
+                    .commit();
+            if (requestId == null || requestId.trim().isEmpty()
+                    || profilesJson == null || profilesJson.trim().isEmpty()) {
+                diagnosticsNow.edit().putString("service_start_recovery",
+                        "skipped: no pending request/profiles").commit();
+                return;
+            }
+            if (requestId.equals(claimedId)) {
+                diagnosticsNow.edit().putString("service_start_recovery",
+                        "skipped: request already claimed").commit();
+                return;
+            }
             try {
                 org.json.JSONArray json = new org.json.JSONArray(profilesJson);
                 ArrayList<String> profiles = new ArrayList<>();
@@ -935,7 +963,13 @@ public final class RahYabVpnService extends VpnService {
                     String item = json.optString(i, "");
                     if (!item.trim().isEmpty()) profiles.add(item);
                 }
-                if (profiles.isEmpty()) return;
+                diagnosticsNow.edit().putInt("service_recovery_profile_count",
+                        profiles.size()).commit();
+                if (profiles.isEmpty()) {
+                    diagnosticsNow.edit().putString("service_start_recovery",
+                            "skipped: parsed profile list empty").commit();
+                    return;
+                }
                 Intent replay = new Intent(this, RahYabVpnService.class);
                 replay.setAction(ACTION_START);
                 replay.putExtra(EXTRA_REQUEST_ID, requestId);
