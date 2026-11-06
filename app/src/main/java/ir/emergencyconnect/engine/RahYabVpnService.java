@@ -57,6 +57,8 @@ public final class RahYabVpnService extends VpnService {
     // Set at the very first instruction of ACTION_STOP to close the race between
     // a native callback and the session worker waking from its latch.
     private final AtomicBoolean stopRequested = new AtomicBoolean(false);
+    // Distinguish DISCONNECTED callbacks caused by our own native cleanup.
+    private final AtomicBoolean nativeStopInProgress = new AtomicBoolean(false);
     private volatile boolean autoSearchEnabled;
     private volatile boolean autoConnected;
     private volatile boolean attemptConnected;
@@ -255,10 +257,19 @@ public final class RahYabVpnService extends VpnService {
             if (activeAttempt != null) activeAttempt.countDown();
             attemptSignal = null;
             setLampState("disconnected");
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .remove("auto_current_endpoint")
+                    .remove("auto_current_started_at")
+                    .remove("auto_current_protocol")
+                    .putString("auto_current_wait_state", "CANCELLED_BY_STOP_OR_SERVICE")
+                    .putString("session_start_result",
+                            "اتصال به درخواست کاربر متوقف شد؛ برای شروع دوباره اتصال هوشمند را بزنید.")
+                    .commit();
+            updateStatus("اتصال برقرار نیست؛ برای شروع، دکمه اتصال هوشمند را بزنید.");
             try {
                 sessionExecutor.execute(() -> {
                     synchronized (nativeSessionLock) {
-                        OpenVpn3Bridge.stopSession();
+                        stopNativeSession();
                     }
                     closeTun();
                     stopSelf(startId);
@@ -350,7 +361,7 @@ public final class RahYabVpnService extends VpnService {
         final String result;
         synchronized (nativeSessionLock) {
             if (serviceDestroyed) return;
-            OpenVpn3Bridge.stopSession();
+            stopNativeSession();
             if (serviceDestroyed) return;
             result = OpenVpn3Bridge.startSession(profile);
         }
@@ -415,7 +426,7 @@ public final class RahYabVpnService extends VpnService {
                     attemptSignal = null;
                     return;
                 }
-                OpenVpn3Bridge.stopSession();
+                stopNativeSession();
                 attemptSignal = signal;
                 result = OpenVpn3Bridge.startSession(profile);
             }
@@ -467,7 +478,7 @@ public final class RahYabVpnService extends VpnService {
                     .commit();
             if (cancelled) {
                 synchronized (nativeSessionLock) {
-                    OpenVpn3Bridge.stopSession();
+                    stopNativeSession();
                 }
                 setServerTestStatus(endpoint, "cancelled");
                 appendAutoHistory("AUTO_ATTEMPT_CANCELLED",
@@ -530,7 +541,7 @@ public final class RahYabVpnService extends VpnService {
 
             setServerTestStatus(endpoint, "tested");
             synchronized (nativeSessionLock) {
-                OpenVpn3Bridge.stopSession();
+                stopNativeSession();
             }
             if (bestProfile != null) {
                 updateStatus("مقایسه سرورها: بهترین نتیجه فعلی "
@@ -552,7 +563,7 @@ public final class RahYabVpnService extends VpnService {
                     attemptSignal = null;
                     return;
                 }
-                OpenVpn3Bridge.stopSession();
+                stopNativeSession();
                 startResult = OpenVpn3Bridge.startSession(bestProfile);
             }
             boolean started = startResult != null
@@ -569,7 +580,7 @@ public final class RahYabVpnService extends VpnService {
             attemptSignal = null;
             if (!autoSearchEnabled || serviceDestroyed) {
                 synchronized (nativeSessionLock) {
-                    OpenVpn3Bridge.stopSession();
+                    stopNativeSession();
                 }
                 return;
             }
@@ -597,7 +608,7 @@ public final class RahYabVpnService extends VpnService {
             appendAutoHistory("AUTO_BEST_RECONNECT_FAILED",
                     "اتصال مجدد به بهترین گزینه تأیید نشد؛ اتصال امن متوقف و جست‌وجو ادامه می‌یابد");
             synchronized (nativeSessionLock) {
-                OpenVpn3Bridge.stopSession();
+                stopNativeSession();
             }
         }
 
@@ -1304,6 +1315,15 @@ public final class RahYabVpnService extends VpnService {
         return stopRequested.get() || !autoSearchEnabled || serviceDestroyed;
     }
 
+    private void stopNativeSession() {
+        nativeStopInProgress.set(true);
+        try {
+            OpenVpn3Bridge.stopSession();
+        } finally {
+            nativeStopInProgress.set(false);
+        }
+    }
+
     private void setLampState(String state) {
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("connection_lamp_state", state).apply();
@@ -1401,11 +1421,13 @@ public final class RahYabVpnService extends VpnService {
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         String lowerInfo = safeInfo.toLowerCase(java.util.Locale.ROOT);
         String failureClass = classifyNativeFailure(name, lowerInfo, error || fatal);
-        // DISCONNECTED/EXITING emitted by our own STOP command is lifecycle noise,
-        // not a network/server failure. The explicit stop flag is set before native stop.
-        if (stopRequested.get() || !autoSearchEnabled || serviceDestroyed) {
-            if ("DISCONNECTED".equals(name) || "EXITING".equals(name)) failureClass = "";
-        }
+        boolean disconnectEvent = "DISCONNECTED".equals(name) || "EXITING".equals(name);
+        // Native stop() itself emits DISCONNECTED. Suppress that lifecycle callback
+        // for user stops and for internal per-candidate timeout/cleanup.
+        boolean lifecycleStopEvent = disconnectEvent
+                && (stopRequested.get() || nativeStopInProgress.get()
+                || !autoSearchEnabled || serviceDestroyed);
+        if (lifecycleStopEvent) failureClass = "";
         String observedTransport = nativeTransportProtocol(lowerInfo);
         if (!observedTransport.isEmpty()) {
             diagnostics.edit()
@@ -1460,16 +1482,18 @@ public final class RahYabVpnService extends VpnService {
                 || "DISCONNECTED".equals(name) || "EXITING".equals(name))) {
             scheduleAutoFailover();
         }
-        if ("CONNECTED".equals(name) && !error && !fatal) {
-            // OpenVPN's CONNECTED event is not proof of working internet.
-            // The automatic-search worker sets the connected lamp only
-            // after an unprotected HTTP probe succeeds through Android VPN.
-            if (autoSearchEnabled) setLampState("searching");
-            else setLampState("connected");
-        } else if (error || fatal || "DISCONNECTED".equals(name) || "EXITING".equals(name)) {
-            setLampState("disconnected");
-        } else if ("CONNECTING".equals(name) || "WAIT".equals(name)) {
-            setLampState("searching");
+        if (!lifecycleStopEvent) {
+            if ("CONNECTED".equals(name) && !error && !fatal) {
+                // OpenVPN's CONNECTED event is not proof of working internet.
+                // The automatic-search worker sets the connected lamp only
+                // after an unprotected HTTP probe succeeds through Android VPN.
+                if (autoSearchEnabled) setLampState("searching");
+                else setLampState("connected");
+            } else if (error || fatal || disconnectEvent) {
+                setLampState("disconnected");
+            } else if ("CONNECTING".equals(name) || "WAIT".equals(name)) {
+                setLampState("searching");
+            }
         }
         String message;
         if ("CONNECTED".equals(name)) {
@@ -1489,7 +1513,7 @@ public final class RahYabVpnService extends VpnService {
             // Android foreground notification.
             message += " — " + safeInfo;
         }
-        if (foregroundStarted && !"CORE_LOG".equals(name)) {
+        if (foregroundStarted && !"CORE_LOG".equals(name) && !lifecycleStopEvent) {
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
                 manager.notify(NOTIFICATION_ID, buildStatusNotification(message));
@@ -1533,7 +1557,7 @@ public final class RahYabVpnService extends VpnService {
         try {
             sessionExecutor.execute(() -> {
                 synchronized (nativeSessionLock) {
-                    OpenVpn3Bridge.stopSession();
+                    stopNativeSession();
                 }
                 closeTun();
                 if (foregroundStarted) {
@@ -1582,7 +1606,7 @@ public final class RahYabVpnService extends VpnService {
             // lock, so no late task can recreate native state after teardown.
             synchronized (nativeSessionLock) {
                 try {
-                    OpenVpn3Bridge.stopSession();
+                    stopNativeSession();
                 } catch (RuntimeException | LinkageError error) {
                     // Continue best-effort teardown even if the Java/JNI bridge
                     // reports a failure. The native stop wrapper normally joins
