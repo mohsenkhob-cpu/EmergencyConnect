@@ -272,8 +272,11 @@ public class MainActivity extends Activity {
                 prefs.getString("auto_last_attempt_callback_received", ""));
         appendReportSection(report, "سرور در حال آزمایش",
                 prefs.getString("auto_current_endpoint", ""));
-        appendReportSection(report, "پروتکل در حال آزمایش",
+        appendReportSection(report, "پروتکل در حال آزمایش (از پروفایل)",
                 prefs.getString("auto_current_protocol", ""));
+        appendReportSection(report, "پروتکل مشاهده‌شده توسط موتور",
+                prefs.getString("native_observed_transport_protocol", "")
+                        + " | " + prefs.getString("native_observed_transport_at", ""));
         appendReportSection(report, "وضعیت انتظار موتور",
                 prefs.getString("auto_current_wait_state", ""));
         appendReportSection(report, "آخرین رویداد sing-box",
