@@ -237,6 +237,15 @@ public final class RahYabVpnService extends VpnService {
             autoSearchEnabled = false;
             autoConnected = false;
             autoProfiles = null;
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("service_stop_requested_at", formatDiagnosticTime(System.currentTimeMillis()))
+                    .putString("service_stop_reason", "ACTION_STOP received; active automatic attempt released if waiting")
+                    .putString("service_stop_active_endpoint",
+                            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
+                                    .getString("auto_current_endpoint", ""))
+                    .commit();
+            appendAutoHistory("AUTO_STOP_REQUESTED",
+                    "دستور توقف دریافت شد؛ آزمون جاری در صورت انتظار لغو می‌شود و به‌عنوان خرابی سرور شمرده نخواهد شد");
             CountDownLatch activeAttempt = attemptSignal;
             if (activeAttempt != null) activeAttempt.countDown();
             attemptSignal = null;
@@ -431,7 +440,12 @@ public final class RahYabVpnService extends VpnService {
                 return;
             }
             attemptSignal = null;
-            String attemptOutcome = attemptConnected ? "OPENVPN_CONNECTED_EVENT"
+            // A stop/revoke also releases this latch. Check cancellation BEFORE
+            // interpreting the signal as an OpenVPN callback, otherwise a user
+            // pressing Disconnect is misreported as a failed server callback.
+            final boolean cancelled = !autoSearchEnabled || serviceDestroyed;
+            String attemptOutcome = cancelled ? "CANCELLED_BY_STOP_OR_SERVICE"
+                    : attemptConnected ? "OPENVPN_CONNECTED_EVENT"
                     : callbackReceived ? "NATIVE_CALLBACK_WITHOUT_CONNECTED"
                     : "NATIVE_CALLBACK_TIMEOUT";
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
@@ -441,28 +455,26 @@ public final class RahYabVpnService extends VpnService {
                     .putString("auto_last_attempt_finished_at", formatDiagnosticTime(System.currentTimeMillis()))
                     .putString("auto_last_attempt_outcome", attemptOutcome)
                     .putString("auto_last_attempt_connected_event", String.valueOf(attemptConnected))
-                    .putString("auto_last_attempt_callback_received", String.valueOf(callbackReceived))
+                    .putString("auto_last_attempt_callback_received",
+                            String.valueOf(callbackReceived && !cancelled))
+                    .putString("auto_last_attempt_cancelled", String.valueOf(cancelled))
                     .putString("auto_current_wait_state", attemptOutcome)
                     .commit();
-            appendAutoHistory("AUTO_ATTEMPT_RESULT",
-                    "سرور " + endpoint + "؛ پروتکل " + profileProtocol(profile)
-                            + "؛ نتیجه " + attemptOutcome
-                            + "؛ رویداد اتصال " + attemptConnected
-                            + "؛ دریافت callback " + callbackReceived);
-
-            // A user stop/revoke may release the latch before the connection
-            // attempt itself finishes. Do not run HTTPS/quality probes against
-            // a tunnel that is being cancelled; stop it and leave cleanup to
-            // the serialized lifecycle path.
-            if (!autoSearchEnabled || serviceDestroyed) {
+            if (cancelled) {
                 synchronized (nativeSessionLock) {
                     OpenVpn3Bridge.stopSession();
                 }
                 setServerTestStatus(endpoint, "cancelled");
                 appendAutoHistory("AUTO_ATTEMPT_CANCELLED",
-                        "آزمون سرور به‌دلیل توقف یا خروج سرویس لغو شد");
+                        "آزمون سرور " + endpoint
+                                + " با درخواست توقف یا خروج سرویس لغو شد؛ نتیجه شبکه‌ای برای این سرور ثبت نشد");
                 return;
             }
+            appendAutoHistory("AUTO_ATTEMPT_RESULT",
+                    "سرور " + endpoint + "؛ پروتکل " + profileProtocol(profile)
+                            + "؛ نتیجه " + attemptOutcome
+                            + "؛ رویداد اتصال " + attemptConnected
+                            + "؛ دریافت callback " + callbackReceived);
 
             if (attemptConnected) {
                 updateStatus("تونل برقرار شد؛ بررسی عبور اینترنت و اندازه‌گیری تأخیر…");
