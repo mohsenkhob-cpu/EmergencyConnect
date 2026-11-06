@@ -197,6 +197,31 @@ public class MainActivity extends Activity {
                 prefs.getString("service_on_create_result", ""));
         appendReportSection(report, "ورود دستور به onStartCommand",
                 prefs.getString("service_start_command_entered", ""));
+        appendReportSection(report, "مشاهده مستقیم فراخوانی onStartCommand",
+                prefs.getString("service_start_callback_observed_at", ""));
+        appendReportSection(report, "عمل فراخوانی سرویس",
+                prefs.getString("service_start_callback_action", ""));
+        appendReportSection(report, "شناسه درخواست در فراخوانی سرویس",
+                prefs.getString("service_start_callback_request_id", ""));
+        appendReportSection(report, "زمان اجرای بررسی بازیابی سرویس",
+                prefs.getString("service_recovery_handler_ran_at", ""));
+        appendReportSection(report, "شناسه درخواست ذخیره‌شده برای بازیابی",
+                prefs.getString("service_recovery_pending_request_id", ""));
+        appendReportSection(report, "شناسه درخواست قبلاً دریافت‌شده",
+                prefs.getString("service_recovery_claimed_request_id", ""));
+        appendReportSection(report, "وجود فهرست پروفایل ذخیره‌شده",
+                prefs.getString("service_recovery_profiles_present", ""));
+        appendReportSection(report, "تعداد پروفایل‌های بازیابی‌شده",
+                prefs.contains("service_recovery_profile_count")
+                        ? String.valueOf(prefs.getInt("service_recovery_profile_count", 0)) : "");
+        appendReportSection(report, "نتیجه مسیر بازیابی",
+                prefs.getString("service_start_recovery", ""));
+        appendReportSection(report, "خطای مسیر بازیابی",
+                prefs.getString("service_start_recovery_error", ""));
+        appendReportSection(report, "مسیر ارسال درخواست از صفحه اصلی",
+                prefs.getString("service_start_dispatch", ""));
+        appendReportSection(report, "شناسه درخواست ثبت‌شده در صفحه اصلی",
+                prefs.getString("service_launch_request_id", ""));
         appendReportSection(report, "زمان خروج سرویس از چرخه حیات",
                 prefs.getString("service_on_destroy_at", ""));
         appendReportSection(report, "زمان دریافت درخواست شروع اتصال",
