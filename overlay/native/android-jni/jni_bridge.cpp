@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <vector>
 
 #include "ovpncli.hpp"
@@ -744,6 +745,7 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession(
 extern "C" JNIEXPORT void JNICALL
 Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStopSession(
         JNIEnv *, jclass) {
+    const auto stop_started = std::chrono::steady_clock::now();
     std::shared_ptr<NativeSession> session;
     {
         std::lock_guard<std::mutex> lock(g_session_mutex);
@@ -756,11 +758,57 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStopSession(
         g_session_stopping = true;
         session = g_session;
     }
+
+    // Emit phase markers before potentially blocking OpenVPN shutdown calls.
+    // These let the Android diagnostic report distinguish stop() stalls from
+    // worker-join stalls without detaching or freeing a live worker.
+    session->client->reportDiagnostic("NATIVE_STOP_BEGIN",
+            "Native stop requested; worker_finished="
+                    + std::string(session->finished.load(std::memory_order_acquire)
+                            ? "true" : "false")
+                    + "; worker_joinable="
+                    + std::string(session->worker.joinable() ? "true" : "false"),
+            false, false);
+
+    const auto client_stop_started = std::chrono::steady_clock::now();
     session->client->stop();
+    const auto client_stop_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - client_stop_started).count();
+    session->client->reportDiagnostic("NATIVE_STOP_CLIENT_RETURNED",
+            "OpenVPN client stop() returned after "
+                    + std::to_string(client_stop_ms) + " ms.",
+            false, false);
+
     if (session->worker.joinable() &&
         session->worker.get_id() != std::this_thread::get_id()) {
+        session->client->reportDiagnostic("NATIVE_STOP_JOIN_BEGIN",
+                "Waiting for the OpenVPN connect worker to finish; worker_finished="
+                        + std::string(session->finished.load(std::memory_order_acquire)
+                                ? "true" : "false"),
+                false, false);
+        const auto join_started = std::chrono::steady_clock::now();
         session->worker.join();
+        const auto join_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - join_started).count();
+        session->client->reportDiagnostic("NATIVE_STOP_JOIN_RETURNED",
+                "OpenVPN worker join returned after "
+                        + std::to_string(join_ms) + " ms.",
+                false, false);
     }
+
+    const bool worker_finished =
+            session->finished.load(std::memory_order_acquire);
+    const auto total_stop_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - stop_started).count();
+    session->client->reportDiagnostic("NATIVE_STOP_COMPLETE",
+            "Native stop completed after " + std::to_string(total_stop_ms)
+                    + " ms; worker_finished="
+                    + std::string(worker_finished ? "true" : "false"),
+            false, false);
+
     {
         std::lock_guard<std::mutex> lock(g_session_mutex);
         if (g_session == session) g_session.reset();
