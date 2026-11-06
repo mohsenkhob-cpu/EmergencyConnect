@@ -166,7 +166,18 @@ public class MainActivity extends Activity {
         report.append("نسخه اندروید: ").append(Build.VERSION.RELEASE)
                 .append(" (API ").append(Build.VERSION.SDK_INT).append(")\n");
         report.append("مدل دستگاه: ").append(Build.MANUFACTURER).append(' ')
-                .append(Build.MODEL).append("\n\n");
+                .append(Build.MODEL).append('\n');
+        try {
+            android.content.pm.PackageInfo appInfo = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0);
+            long installedVersionCode = Build.VERSION.SDK_INT >= 28
+                    ? appInfo.getLongVersionCode() : appInfo.versionCode;
+            report.append("نسخه راه‌یاب: ").append(appInfo.versionName)
+                    .append(" (").append(installedVersionCode).append(")\\n");
+        } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
+            report.append("نسخه راه‌یاب: نامشخص\\n");
+        }
+        report.append('\\n');
 
         appendReportSection(report, "رویدادهای برنامه",
                 prefs.getString("app_event_history", ""));
