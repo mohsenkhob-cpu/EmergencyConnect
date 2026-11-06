@@ -51,6 +51,7 @@ public class MainActivity extends Activity {
     private Button singBoxConnectButton;
     private Button discoveryButton;
     private TextView status;
+    private TextView connectionOrb;
     private Button connectButton;
     private Button disconnectButton;
     private boolean singBoxReceiverRegistered = false;
@@ -372,13 +373,13 @@ public class MainActivity extends Activity {
         statusParams.topMargin = dp(30);
         page.addView(status, statusParams);
 
-        TextView orb = label("⏻", 54, Color.WHITE, true);
-        orb.setBackground(shape(Color.rgb(27, 112, 108), 100));
+        connectionOrb = label("⏻\nآماده اتصال", 22, Color.WHITE, true);
+        connectionOrb.setBackground(shape(Color.rgb(76, 91, 111), 100));
         LinearLayout.LayoutParams orbParams = new LinearLayout.LayoutParams(dp(154), dp(154));
         orbParams.gravity = Gravity.CENTER_HORIZONTAL;
         orbParams.topMargin = dp(32);
         orbParams.bottomMargin = dp(12);
-        page.addView(orb, orbParams);
+        page.addView(connectionOrb, orbParams);
 
         TextView helper = label("یافتن خودکار سرورهای عمومی رایگان؛ کیفیت و حریم خصوصی آن‌ها تضمین‌شده نیست", 14,
                 Color.rgb(164, 181, 205), false);
@@ -1178,9 +1179,44 @@ public class MainActivity extends Activity {
             lastRenderedServiceStatus = visibleStatus;
             setStatus(visibleStatus);
         }
+        renderConnectionOrb(lamp, visibleStatus);
         boolean active = connected || searching;
         if (disconnectButton != null) disconnectButton.setEnabled(active);
         if (discoveryButton != null) discoveryButton.setEnabled(!searching);
+    }
+
+    /**
+     * Render the central indicator from the service's verified lamp state.
+     * A native CONNECTED callback alone never turns this indicator green.
+     */
+    private void renderConnectionOrb(String lamp, String serviceMessage) {
+        if (connectionOrb == null) return;
+
+        if ("connected".equals(lamp)) {
+            StringBuilder text = new StringBuilder("●\nمتصل");
+            java.util.regex.Matcher latency = java.util.regex.Pattern
+                    .compile("تأخیر\\s+(\\d+)\\s*ms").matcher(serviceMessage);
+            java.util.regex.Matcher speed = java.util.regex.Pattern
+                    .compile("دریافت\\s+(\\d+)\\s*kbps").matcher(serviceMessage);
+            if (latency.find()) text.append("\n").append(latency.group(1)).append(" ms");
+            if (speed.find()) text.append("\n").append(speed.group(1)).append(" kbps");
+            connectionOrb.setText(text.toString());
+            connectionOrb.setTextSize(19);
+            connectionOrb.setBackground(shape(Color.rgb(24, 139, 91), 100));
+        } else if ("searching".equals(lamp)) {
+            connectionOrb.setText("◌\nدر حال جست‌وجو\nو اتصال");
+            connectionOrb.setTextSize(19);
+            connectionOrb.setBackground(shape(Color.rgb(190, 137, 35), 100));
+        } else {
+            boolean hasFailure = serviceMessage != null
+                    && (serviceMessage.contains("خطا")
+                    || serviceMessage.contains("ناموفق"));
+            connectionOrb.setText(hasFailure ? "×\nاتصال ناموفق" : "⏻\nآماده اتصال");
+            connectionOrb.setTextSize(20);
+            connectionOrb.setBackground(shape(
+                    hasFailure ? Color.rgb(166, 61, 61) : Color.rgb(76, 91, 111), 100));
+        }
+        connectionOrb.setTextColor(Color.WHITE);
     }
 
     @Override protected void onResume() {
