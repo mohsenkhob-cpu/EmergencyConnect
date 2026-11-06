@@ -985,6 +985,7 @@ public class MainActivity extends Activity {
                     for (String profile : launchProfiles) pendingJson.put(profile);
                     getSharedPreferences("rah_yab_pending_start", MODE_PRIVATE).edit()
                             .putString("request_id", requestId)
+                            .putLong("created_at_ms", System.currentTimeMillis())
                             .putString("profiles_json", pendingJson.toString())
                             .commit();
                     diagnostics.edit()
@@ -997,6 +998,7 @@ public class MainActivity extends Activity {
                             .remove("service_start_recovery")
                             .remove("service_start_recovery_error")
                             .remove("service_start_duplicate_ignored")
+                            .remove("service_start_cancelled_request_id")
                             .remove("service_start_command_entered")
                             .remove("service_start_received")
                             .remove("native_bind_result")
@@ -1049,6 +1051,9 @@ public class MainActivity extends Activity {
     }
 
     private void disconnectAllEngines() {
+        // A manual stop must invalidate any not-yet-consumed start request.
+        getSharedPreferences("rah_yab_pending_start", MODE_PRIVATE).edit()
+                .clear().commit();
         setStatus("در حال قطع همه موتورهای VPN…");
         SingBoxVpnService.stop(getApplicationContext());
         Intent stop = new Intent(this, RahYabVpnService.class);
