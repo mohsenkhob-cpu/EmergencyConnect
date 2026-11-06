@@ -1053,7 +1053,8 @@ public class MainActivity extends Activity {
             getSharedPreferences("rahyab_singbox_status", MODE_PRIVATE).edit()
                     .putString("verification_stage", "START_REQUESTED").apply();
             setStatus("درخواست راه‌اندازی موتور sing-box ارسال شد…");
-            SingBoxVpnService.start(getApplicationContext(), pendingSingBoxJson);
+            SingBoxVpnService.start(getApplicationContext(),
+                    SingBoxProfile.prepareForLaunch(pendingSingBoxJson));
         } catch (Exception e) {
             setStatus("شروع sing-box ناموفق بود: " + safeMessage(e));
         }

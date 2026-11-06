@@ -217,18 +217,7 @@ public final class SingBoxProfile {
             server.put("transport", transport);
         }
 
-        JSONArray outbounds = new JSONArray();
-        outbounds.put(server);
-        outbounds.put(new JSONObject().put("type", "direct").put("tag", "direct"));
-        JSONObject tun = new JSONObject().put("type", "tun").put("tag", "tun-in")
-                .put("address", new JSONArray().put("172.19.0.1/30"))
-                .put("mtu", 1400).put("auto_route", true).put("strict_route", true);
-        JSONObject root = new JSONObject();
-        root.put("log", new JSONObject().put("level", "info"));
-        root.put("inbounds", new JSONArray().put(tun));
-        root.put("outbounds", outbounds);
-        root.put("route", new JSONObject().put("final", name));
-        return root.toString();
+        return buildSingleServerProfile(server, name);
     }
 
 
@@ -327,9 +316,66 @@ public final class SingBoxProfile {
         JSONObject tun = new JSONObject().put("type", "tun").put("tag", "tun-in")
                 .put("address", new JSONArray().put("172.19.0.1/30"))
                 .put("mtu", 1400).put("auto_route", true).put("strict_route", true);
-        return new JSONObject().put("log", new JSONObject().put("level", "info"))
+        JSONObject root = new JSONObject().put("log", new JSONObject().put("level", "info"))
                 .put("inbounds", new JSONArray().put(tun)).put("outbounds", outbounds)
-                .put("route", new JSONObject().put("final", name)).toString();
+                .put("route", new JSONObject().put("final", name));
+        addGeneratedProfileDns(root, server, name);
+        return root.toString();
+    }
+
+    /** Upgrade previously saved link-generated profiles without touching custom DNS/routes. */
+    static String prepareForLaunch(String json) throws JSONException {
+        JSONObject root = new JSONObject(json);
+        if (root.length() != 4 || root.has("dns")) return json;
+        JSONObject route = root.optJSONObject("route");
+        JSONObject log = root.optJSONObject("log");
+        JSONArray inbounds = root.optJSONArray("inbounds");
+        JSONArray outbounds = root.optJSONArray("outbounds");
+        if (route == null || route.length() != 1 || !route.has("final")
+                || log == null || log.length() != 1 || !"info".equals(log.optString("level"))
+                || inbounds == null || inbounds.length() != 1
+                || outbounds == null || outbounds.length() != 2) return json;
+
+        JSONObject tun = inbounds.optJSONObject(0);
+        JSONArray addresses = tun == null ? null : tun.optJSONArray("address");
+        JSONObject server = outbounds.optJSONObject(0);
+        JSONObject direct = outbounds.optJSONObject(1);
+        String name = route.optString("final", "");
+        if (tun == null || tun.length() != 6 || !"tun".equals(tun.optString("type"))
+                || !"tun-in".equals(tun.optString("tag"))
+                || !tun.optBoolean("auto_route") || !tun.optBoolean("strict_route")
+                || tun.optInt("mtu") != 1400
+                || addresses == null || addresses.length() != 1
+                || !"172.19.0.1/30".equals(addresses.optString(0))
+                || server == null || name.isEmpty() || !name.equals(server.optString("tag"))
+                || server.has("domain_resolver")
+                || direct == null || direct.length() != 2
+                || !"direct".equals(direct.optString("type"))
+                || !"direct".equals(direct.optString("tag"))) return json;
+
+        String protocol = server.optString("type", "");
+        if (!"vless".equals(protocol) && !"vmess".equals(protocol)
+                && !"trojan".equals(protocol)) return json;
+        addGeneratedProfileDns(root, server, name);
+        return root.toString();
+    }
+
+    private static void addGeneratedProfileDns(JSONObject root, JSONObject server, String name)
+            throws JSONException {
+        // Application DNS uses HTTPS through the selected server, without UDP support.
+        JSONObject remote = new JSONObject().put("type", "https").put("tag", "rah-yab-dns")
+                .put("server", "1.1.1.1").put("path", "/dns-query")
+                .put("tls", new JSONObject().put("enabled", true)
+                        .put("server_name", "cloudflare-dns.com"))
+                .put("detour", name);
+        // Resolve a hostname-based proxy independently to avoid recursive DNS.
+        JSONObject bootstrap = new JSONObject().put("type", "https")
+                .put("tag", "rah-yab-bootstrap").put("server", "1.1.1.1")
+                .put("path", "/dns-query").put("tls", new JSONObject().put("enabled", true)
+                        .put("server_name", "cloudflare-dns.com"));
+        server.put("domain_resolver", "rah-yab-bootstrap");
+        root.put("dns", new JSONObject().put("servers", new JSONArray().put(remote).put(bootstrap))
+                .put("final", "rah-yab-dns"));
     }
 
     public String getRawJson() { return rawJson; }
