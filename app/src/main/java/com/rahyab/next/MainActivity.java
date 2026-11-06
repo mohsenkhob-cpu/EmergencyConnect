@@ -1083,14 +1083,29 @@ public class MainActivity extends Activity {
         long updatedAt = diagnostics.getLong("service_status_updated_at", 0L);
         String savedStatus = diagnostics.getString("service_status_message", null);
         String lamp = diagnostics.getString("connection_lamp_state", "disconnected");
-        boolean recent = updatedAt > 0L
-                && System.currentTimeMillis() - updatedAt < 24L * 60L * 60L * 1000L;
-        if (recent && savedStatus != null && !savedStatus.trim().isEmpty()) {
-            setStatus(savedStatus);
-            boolean active = "connected".equals(lamp) || "searching".equals(lamp);
-            if (disconnectButton != null) disconnectButton.setEnabled(active);
-            if (discoveryButton != null) discoveryButton.setEnabled(!"searching".equals(lamp));
+        long statusAge = updatedAt > 0L
+                ? System.currentTimeMillis() - updatedAt : Long.MAX_VALUE;
+        // A disconnected lamp must never resurrect an old "testing" message.
+        // A searching state is restored only while its heartbeat is reasonably fresh.
+        boolean connected = "connected".equals(lamp);
+        boolean searching = "searching".equals(lamp) && statusAge >= 0L
+                && statusAge <= 90_000L;
+        if ("searching".equals(lamp) && !searching) {
+            diagnostics.edit().putString("connection_lamp_state", "disconnected")
+                    .putString("service_status_message",
+                            "جست‌وجوی قبلی متوقف یا منقضی شده است؛ برای شروع دوباره اتصال هوشمند را بزنید.")
+                    .putLong("service_status_updated_at", System.currentTimeMillis())
+                    .apply();
+            lamp = "disconnected";
         }
+        if (connected || searching) {
+            if (savedStatus != null && !savedStatus.trim().isEmpty()) setStatus(savedStatus);
+        } else {
+            setStatus("اتصال برقرار نیست؛ برای شروع، دکمه اتصال هوشمند را بزنید.");
+        }
+        boolean active = connected || searching;
+        if (disconnectButton != null) disconnectButton.setEnabled(active);
+        if (discoveryButton != null) discoveryButton.setEnabled(!searching);
     }
 
     @Override protected void onDestroy() {
