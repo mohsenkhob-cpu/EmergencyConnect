@@ -173,11 +173,11 @@ public class MainActivity extends Activity {
             long installedVersionCode = Build.VERSION.SDK_INT >= 28
                     ? appInfo.getLongVersionCode() : appInfo.versionCode;
             report.append("نسخه راه‌یاب: ").append(appInfo.versionName)
-                    .append(" (").append(installedVersionCode).append(")\\n");
+                    .append(" (").append(installedVersionCode).append(")\n");
         } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
-            report.append("نسخه راه‌یاب: نامشخص\\n");
+            report.append("نسخه راه‌یاب: نامشخص\n");
         }
-        report.append('\\n');
+        report.append('\n');
 
         appendReportSection(report, "رویدادهای برنامه",
                 prefs.getString("app_event_history", ""));
