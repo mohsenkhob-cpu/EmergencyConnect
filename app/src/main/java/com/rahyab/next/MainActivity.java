@@ -54,6 +54,10 @@ public class MainActivity extends Activity {
     private Button connectButton;
     private Button disconnectButton;
     private boolean singBoxReceiverRegistered = false;
+    private android.content.SharedPreferences statusPreferences;
+    private android.content.SharedPreferences.OnSharedPreferenceChangeListener statusPreferenceListener;
+    private String lastRenderedServiceStatus = "";
+
     private static final String PREFS_SERVERS = "rahyab_saved_servers";
     private static final String KEY_SERVERS = "profiles";
 
@@ -1075,18 +1079,18 @@ public class MainActivity extends Activity {
         return message == null || message.trim().isEmpty() ? e.getClass().getSimpleName() : message;
     }
 
-    @Override protected void onResume() {
-        super.onResume();
+    private void refreshServiceStatusFromPreferences() {
         if (status == null) return;
-        android.content.SharedPreferences diagnostics =
-                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        android.content.SharedPreferences diagnostics = statusPreferences != null
+                ? statusPreferences
+                : getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         long updatedAt = diagnostics.getLong("service_status_updated_at", 0L);
         String savedStatus = diagnostics.getString("service_status_message", null);
         String lamp = diagnostics.getString("connection_lamp_state", "disconnected");
         long statusAge = updatedAt > 0L
                 ? System.currentTimeMillis() - updatedAt : Long.MAX_VALUE;
-        // A disconnected lamp must never resurrect an old "testing" message.
-        // A searching state is restored only while its heartbeat is reasonably fresh.
+
+        // Do not resurrect an abandoned search after the service heartbeat expires.
         boolean connected = "connected".equals(lamp);
         boolean searching = "searching".equals(lamp) && statusAge >= 0L
                 && statusAge <= 90_000L;
@@ -1098,17 +1102,50 @@ public class MainActivity extends Activity {
                     .apply();
             lamp = "disconnected";
         }
-        if (connected || searching) {
-            if (savedStatus != null && !savedStatus.trim().isEmpty()) setStatus(savedStatus);
-        } else {
-            setStatus("اتصال برقرار نیست؛ برای شروع، دکمه اتصال هوشمند را بزنید.");
+
+        String visibleStatus = (connected || searching)
+                && savedStatus != null && !savedStatus.trim().isEmpty()
+                ? savedStatus
+                : "اتصال برقرار نیست؛ برای شروع، دکمه اتصال هوشمند را بزنید.";
+        if (!visibleStatus.equals(lastRenderedServiceStatus)) {
+            lastRenderedServiceStatus = visibleStatus;
+            setStatus(visibleStatus);
         }
         boolean active = connected || searching;
         if (disconnectButton != null) disconnectButton.setEnabled(active);
         if (discoveryButton != null) discoveryButton.setEnabled(!searching);
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        statusPreferences = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        if (statusPreferenceListener == null) {
+            statusPreferenceListener = (sharedPreferences, key) -> {
+                if ("service_status_message".equals(key)
+                        || "service_status_updated_at".equals(key)
+                        || "connection_lamp_state".equals(key)) {
+                    refreshServiceStatusFromPreferences();
+                }
+            };
+        }
+        // Service and Activity share this process. SharedPreferences notifies this
+        // listener when the foreground VPN service publishes a new status, so the
+        // screen refreshes immediately without leaving/reopening the app.
+        statusPreferences.registerOnSharedPreferenceChangeListener(statusPreferenceListener);
+        refreshServiceStatusFromPreferences();
+    }
+
+    @Override protected void onPause() {
+        if (statusPreferences != null && statusPreferenceListener != null) {
+            statusPreferences.unregisterOnSharedPreferenceChangeListener(statusPreferenceListener);
+        }
+        super.onPause();
+    }
+
     @Override protected void onDestroy() {
+        if (statusPreferences != null && statusPreferenceListener != null) {
+            statusPreferences.unregisterOnSharedPreferenceChangeListener(statusPreferenceListener);
+        }
         worker.shutdown();
         super.onDestroy();
     }
