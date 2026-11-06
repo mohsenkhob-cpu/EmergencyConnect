@@ -22,8 +22,6 @@ import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import java.net.Inet6Address
 import java.net.InetSocketAddress
-import java.net.Socket
-import java.net.SocketTimeoutException
 import java.net.NetworkInterface as JavaNetworkInterface
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -110,7 +108,6 @@ class SingBoxVpnService : VpnService() {
                     appVersion = "2"
                     appMarketingVersion = "0.2.0"
                 }
-                val transportCheck = checkVlessServerTcp(requestedProfile)
                 Libbox.setup(setup)
                 val active = server
                 if (active != null) {
@@ -126,7 +123,7 @@ class SingBoxVpnService : VpnService() {
                 }
                 Log.i(TAG, "libbox accepted the profile and started/reloaded its service")
                 updateNotification("موتور VPN راه‌اندازی شد؛ وضعیت مسیر اینترنت در حال بررسی است")
-                sendEvent(EVENT_ENGINE_STARTED, transportCheck)
+                sendEvent(EVENT_ENGINE_STARTED)
             } catch (e: Exception) {
                 Log.e(TAG, "sing-box startup failed", e)
                 runCatching { created?.closeService() }
@@ -138,43 +135,6 @@ class SingBoxVpnService : VpnService() {
             }
         }
         return START_NOT_STICKY
-    }
-
-    /**
-     * A generated single-server VLESS profile can be checked before creating a VPN.
-     * Custom routes, named hosts and transports with different dialers go to libbox unchanged.
-     */
-    private fun checkVlessServerTcp(json: String): String? {
-        val root = JSONObject(json)
-        val dns = root.optJSONObject("dns") ?: return null
-        if (dns.optString("final") != "rah-yab-dns") return null
-        val route = root.optJSONObject("route") ?: return null
-        val outbounds = root.optJSONArray("outbounds") ?: return null
-        if (outbounds.length() != 2) return null
-        val outbound = outbounds.optJSONObject(0) ?: return null
-        if (outbound.optString("type") != "vless" ||
-            outbound.optString("tag") != route.optString("final") ||
-            outbound.has("detour")) return null
-        val transport = outbound.optJSONObject("transport")?.optString("type").orEmpty()
-        if (transport !in setOf("", "ws", "grpc")) return null
-        val address = outbound.optString("server")
-        if (!address.matches(Regex("[0-9]{1,3}(\\.[0-9]{1,3}){3}"))) return null
-        val port = outbound.optInt("server_port")
-        if (port !in 1..65535) return null
-
-        val startedAt = android.os.SystemClock.elapsedRealtime()
-        Socket().use { socket ->
-            check(protect(socket)) { "آزمون TCP انجام نشد: اندروید سوکت آزمایشی را از VPN جدا نکرد" }
-            try {
-                socket.connect(InetSocketAddress(address, port), 5000)
-            } catch (_: SocketTimeoutException) {
-                error("سرور VLESS در آزمون TCP پیش از ساخت تونل تا ۵ ثانیه پاسخ نداد")
-            } catch (e: java.io.IOException) {
-                error("آزمون TCP سرور VLESS پیش از ساخت تونل ناموفق بود (${e.javaClass.simpleName})")
-            }
-        }
-        val elapsed = android.os.SystemClock.elapsedRealtime() - startedAt
-        return "TCP_SERVER_REACHABLE | ${elapsed} ms | TLS و عبور اینترنت جداگانه بررسی می‌شوند"
     }
 
     private inner class PlatformHandler : InvocationHandler {
