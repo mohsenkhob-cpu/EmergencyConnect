@@ -424,6 +424,23 @@ public final class RahYabVpnService extends VpnService {
         updateStatus(safeResult);
     }
 
+    private static final class MeasuredRelay {
+        final String profile;
+        final String endpoint;
+        final long latencyMs;
+        final long throughputKbps;
+        final double score;
+
+        MeasuredRelay(String profile, String endpoint, long latencyMs, long throughputKbps,
+                      double score) {
+            this.profile = profile;
+            this.endpoint = endpoint;
+            this.latencyMs = latencyMs;
+            this.throughputKbps = throughputKbps;
+            this.score = score;
+        }
+    }
+
     private void runAutoSearch(ArrayList<String> profiles, int startIndex, int startId) {
         if (profiles == null || profiles.isEmpty() || serviceDestroyed) return;
         autoSearchEnabled = true;
@@ -452,12 +469,7 @@ public final class RahYabVpnService extends VpnService {
                 baselineExitIp == null ? "IP پیش از تونل قابل تشخیص نبود؛ تأیید نهایی IP ممکن نیست"
                         : "IP خروجی پیش از تونل ثبت شد");
 
-        String bestProfile = null;
-        String bestEndpoint = "";
-        long bestLatencyMs = Long.MAX_VALUE;
-        long bestThroughputKbps = -1L;
-        double bestQualityScore = Double.MAX_VALUE;
-        int measured = 0;
+        ArrayList<MeasuredRelay> measuredRelays = new ArrayList<>();
 
         for (int offset = 0; offset < candidatesToMeasure; offset++) {
             int i = (begin + offset) % count;
@@ -570,7 +582,6 @@ public final class RahYabVpnService extends VpnService {
                     if (stableProbes >= 4) {
                         long latency = measureTunnelLatencyMs();
                         if (latency >= 0) {
-                            measured++;
                             long throughputKbps = measureTunnelDownloadKbps();
                             // Stability is a gate first, then a small penalty for
                             // one missed probe; throughput remains an approximate signal.
@@ -586,13 +597,8 @@ public final class RahYabVpnService extends VpnService {
                                             ? throughputKbps + " kbps" : "نامشخص")
                                             + "؛ امتیاز مقایسه: "
                                             + String.format(java.util.Locale.US, "%.1f", qualityScore));
-                            if (qualityScore < bestQualityScore) {
-                                bestQualityScore = qualityScore;
-                                bestLatencyMs = latency;
-                                bestThroughputKbps = throughputKbps;
-                                bestProfile = profile;
-                                bestEndpoint = endpoint;
-                            }
+                            measuredRelays.add(new MeasuredRelay(
+                                    profile, endpoint, latency, throughputKbps, qualityScore));
                         } else {
                             appendAutoHistory("AUTO_QUALITY_FAILED",
                                     "سرور " + endpoint + " آزمون تأخیر را کامل نکرد");
@@ -613,80 +619,60 @@ public final class RahYabVpnService extends VpnService {
             synchronized (nativeSessionLock) {
                 stopNativeSession();
             }
-            if (bestProfile != null) {
-                updateStatus("مقایسه سرورها: بهترین نتیجه فعلی "
-                        + bestLatencyMs + " میلی‌ثانیه؛ ادامه بررسی…");
-            }
         }
 
-        if (!autoSearchEnabled || serviceDestroyed) return;
-
-        // Reconnect to the measured winner; never leave the last test candidate active.
-        if (bestProfile != null) {
-            updateStatus("بهترین سرور آزمایش شد؛ در حال برقراری اتصال نهایی…");
-            CountDownLatch finalSignal = new CountDownLatch(1);
-            attemptConnected = false;
-            attemptSignal = finalSignal;
-            String startResult;
-            synchronized (nativeSessionLock) {
-                if (!autoSearchEnabled || serviceDestroyed) {
-                    attemptSignal = null;
-                    return;
-                }
-                stopNativeSession();
-                startResult = OpenVpn3Bridge.startSession(bestProfile);
-            }
-            boolean started = startResult != null
-                    && startResult.startsWith("درخواست اتصال به هسته OpenVPN 3 تحویل شد");
-            boolean connected = false;
-            if (started) {
-                try {
-                    connected = finalSignal.await(AUTO_ATTEMPT_TIMEOUT_SECONDS,
-                            TimeUnit.SECONDS) && attemptConnected;
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            attemptSignal = null;
-            if (!autoSearchEnabled || serviceDestroyed) {
+        // A measured public relay can disappear before the final handshake.
+        // Give the next measured relay a chance before fetching another batch.
+        measuredRelays.sort(java.util.Comparator.comparingDouble(relay -> relay.score));
+        int finalists = Math.min(2, measuredRelays.size());
+        for (int rank = 0; rank < finalists; rank++) {
+            if (isSessionCancelled() || Thread.currentThread().isInterrupted()) return;
+            MeasuredRelay relay = measuredRelays.get(rank);
+            updateStatus("در حال اتصال نهایی به گزینه " + (rank + 1) + " از "
+                    + finalists + " — " + relay.endpoint);
+            boolean verified = connectMeasuredProfile(relay.profile)
+                    && verifyTunnelTraffic(baselineExitIp);
+            if (isSessionCancelled()) return;
+            if (Thread.currentThread().isInterrupted()) {
                 synchronized (nativeSessionLock) {
                     stopNativeSession();
                 }
                 return;
             }
-            if (connected && verifyTunnelTraffic(baselineExitIp)) {
+            if (verified) {
                 autoConnected = true;
-                activeAutoProfile = bestProfile;
-                activeTunnelLatencyMs = bestLatencyMs;
-                activeTunnelThroughputKbps = bestThroughputKbps;
+                activeAutoProfile = relay.profile;
+                activeTunnelLatencyMs = relay.latencyMs;
+                activeTunnelThroughputKbps = relay.throughputKbps;
                 nextAutoIndex = (begin + candidatesToMeasure) % count;
-                setServerTestStatus(bestEndpoint, "connected");
+                setServerTestStatus(relay.endpoint, "connected");
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                         .putString("session_start_result",
-                                "بهترین سرور از میان " + candidatesToMeasure
-                                        + " گزینه با تأخیر " + bestLatencyMs
-                                        + " میلی‌ثانیه انتخاب شد؛ عبور اینترنت دوباره تأیید شد.")
+                                "اتصال نهایی به گزینه رتبه " + (rank + 1)
+                                        + " برقرار شد؛ عبور اینترنت دوباره تأیید شد.")
                         .apply();
                 appendAutoHistory("AUTO_BEST_SELECTED",
-                        "از میان " + candidatesToMeasure + " گزینه، "
-                                + bestEndpoint + " با میانگین " + bestLatencyMs
-                                + " میلی‌ثانیه انتخاب و اتصال نهایی تأیید شد");
+                        "اتصال به گزینه رتبه " + (rank + 1) + " — " + relay.endpoint
+                                + "؛ تأخیر " + relay.latencyMs + " میلی‌ثانیه");
                 setLampState("connected");
                 updateStatus("اتصال هوشمند برقرار است — "
-                        + bestEndpoint + "؛ تأخیر " + bestLatencyMs + " ms"
-                        + (bestThroughputKbps > 0
-                        ? "؛ دریافت " + bestThroughputKbps + " kbps" : ""));
+                        + relay.endpoint + "؛ تأخیر " + relay.latencyMs + " ms"
+                        + (relay.throughputKbps > 0
+                        ? "؛ دریافت " + relay.throughputKbps + " kbps" : ""));
                 startQualityMonitor();
                 return;
             }
+            setServerTestStatus(relay.endpoint, "failed");
             appendAutoHistory("AUTO_BEST_RECONNECT_FAILED",
-                    "اتصال مجدد به بهترین گزینه تأیید نشد؛ اتصال امن متوقف و جست‌وجو ادامه می‌یابد");
+                    "اتصال نهایی به گزینه رتبه " + (rank + 1)
+                            + " تأیید نشد — " + relay.endpoint);
             synchronized (nativeSessionLock) {
                 stopNativeSession();
             }
+            setLampState("searching");
         }
 
-        if (!autoSearchEnabled || serviceDestroyed) return;
+        if (isSessionCancelled()) return;
         if (autoCandidatesTried >= AUTO_MAX_CANDIDATES_PER_REQUEST) {
             autoSearchEnabled = false;
             autoConnected = false;
@@ -1196,18 +1182,15 @@ public final class RahYabVpnService extends VpnService {
         }
     }
 
-    private boolean connectProfileForFailover(String profile) {
+    private boolean connectMeasuredProfile(String profile) {
         if (profile == null || profile.trim().isEmpty() || isSessionCancelled()) return false;
         CountDownLatch signal = new CountDownLatch(1);
-        attemptConnected = false;
-        attemptSignal = signal;
         String result;
         synchronized (nativeSessionLock) {
-            if (isSessionCancelled()) {
-                attemptSignal = null;
-                return false;
-            }
+            if (isSessionCancelled()) return false;
             stopNativeSession();
+            attemptConnected = false;
+            attemptSignal = signal;
             result = OpenVpn3Bridge.startSession(profile);
         }
         boolean accepted = result != null
@@ -1310,7 +1293,7 @@ public final class RahYabVpnService extends VpnService {
             appendAutoHistory("AUTO_FAILOVER_CANDIDATE",
                     "آزمون جایگزین " + tested + " از " + AUTO_FAILOVER_CANDIDATES
                             + "؛ " + endpoint);
-            if (!connectProfileForFailover(candidate)) {
+            if (!connectMeasuredProfile(candidate)) {
                 appendAutoHistory("AUTO_FAILOVER_CANDIDATE_FAILED",
                         endpoint + "؛ رویداد اتصال در مهلت مقرر تأیید نشد");
                 continue;
@@ -1344,7 +1327,7 @@ public final class RahYabVpnService extends VpnService {
         }
 
         if (isSessionCancelled()) return;
-        if (bestProfile != null && connectProfileForFailover(bestProfile)
+        if (bestProfile != null && connectMeasuredProfile(bestProfile)
                 && verifyTunnelTrafficForFailover(previousExitIp, true)
                 && measureTunnelStability() >= 4) {
             autoConnected = true;
@@ -1370,7 +1353,7 @@ public final class RahYabVpnService extends VpnService {
         if (isSessionCancelled()) return;
         appendAutoHistory("AUTO_FAILOVER_ROLLBACK",
                 "جایگزین مناسبی پیدا نشد؛ تلاش برای بازیابی سرور قبلی " + previousEndpoint);
-        if (connectProfileForFailover(previousProfile)
+        if (connectMeasuredProfile(previousProfile)
                 && verifyTunnelTrafficForFailover(null, false)) {
             autoConnected = true;
             activeAutoProfile = previousProfile;
