@@ -119,6 +119,11 @@ jobs:
           gradle-version: '8.9'
       - name: Verify experimental OpenVPN JNI and TUN safety contracts
         run: bash overlay/native/android-jni/check_session_gate.sh
+      - name: Report effective Android signing configuration
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:signingReport | tee signing-report.txt
+          echo "Signing report saved for diagnosis."
       - name: Build debug APK
         run: gradle --no-daemon -PciVersionCode="$GITHUB_RUN_NUMBER" testDebugUnitTest assembleDebug
       - name: Verify APK signature, package, ABI, alignment and checksum
@@ -129,6 +134,14 @@ jobs:
           test -s "$APK"
           unzip -tq "$APK"
           "$TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          ACTUAL_SIGNER="$( "$TOOLS/apksigner" verify --print-certs "$APK" | awk -F": " '/Signer #1 certificate SHA-256 digest:/ {print tolower($2)}' )"
+          EXPECTED_SIGNER="916c245f795349236986a843b3ba5226c936047f499058e2aa3f4ad7e633d28e"
+          echo "Expected signer: $EXPECTED_SIGNER"
+          echo "Actual signer:   $ACTUAL_SIGNER"
+          if [ "$ACTUAL_SIGNER" != "$EXPECTED_SIGNER" ]; then
+            echo "ERROR: APK signing identity differs from installed RahYab 353. Refusing to publish."
+            exit 1
+          fi
           "$TOOLS/zipalign" -c -v 4 "$APK"
           "$TOOLS/aapt" dump badging "$APK" | grep -F "package: name='com.rahyab.next'"
           "$TOOLS/aapt" dump badging "$APK" | grep -F "native-code: 'arm64-v8a'"
