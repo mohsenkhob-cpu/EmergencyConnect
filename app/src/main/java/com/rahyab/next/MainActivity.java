@@ -307,12 +307,39 @@ public class MainActivity extends Activity {
                 singBox.getString("verification_stage", ""));
         appendReportSection(report, "آخرین خروج فرایند راه‌یاب به ثبت اندروید",
                 latestProcessExit());
+        appendReportSection(report, "ردپای خرابی بومی راه‌یاب",
+                latestNativeCrashTrace());
         appendReportSection(report, "خطای شروع سرویس",
                 prefs.getString("service_start_error", ""));
         appendReportSection(report, "وضعیت چراغ اتصال",
                 prefs.getString("connection_lamp_state", "نامشخص"));
         report.append("\nپروفایل‌ها و کلیدهای اتصال عمداً در این گزارش درج نمی‌شوند.\n");
         return report.toString();
+    }
+
+    private String latestNativeCrashTrace() {
+        if (Build.VERSION.SDK_INT < 31) return "";
+        android.app.ActivityManager manager = getSystemService(android.app.ActivityManager.class);
+        if (manager == null) return "";
+        try {
+            for (android.app.ApplicationExitInfo exit :
+                    manager.getHistoricalProcessExitReasons(getPackageName(), 0, 12)) {
+                if (exit.getReason() != android.app.ApplicationExitInfo.REASON_CRASH_NATIVE) continue;
+                String time = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
+                        java.util.Locale.US).format(new java.util.Date(exit.getTimestamp()));
+                String header = time + " | " + exit.getProcessName() + "\n";
+                try (java.io.InputStream trace = exit.getTraceInputStream()) {
+                    String summary = trace == null ? "" : NativeCrashTrace.summarize(trace);
+                    return header + (summary.isEmpty()
+                            ? "اندروید فهرست تابع‌های خرابی را در دسترس قرار نداد" : summary);
+                } catch (java.io.IOException | RuntimeException ignored) {
+                    return header + "خواندن ردپای خرابی ممکن نبود";
+                }
+            }
+        } catch (RuntimeException ignored) {
+            return "تاریخچهٔ خرابی اندروید در دسترس نیست";
+        }
+        return "";
     }
 
     private String latestProcessExit() {
