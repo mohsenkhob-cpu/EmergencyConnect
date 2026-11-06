@@ -89,21 +89,21 @@ jobs:
           done
           readelf -Ws app/src/main/jniLibs/arm64-v8a/libopenvpn3_jni.so | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession"
           readelf -Ws app/src/main/jniLibs/arm64-v8a/libopenvpn3_jni.so | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService"
-      - name: Prepare persistent debug signing cache
-        run: mkdir -p "$HOME/.android"
-      - name: Reuse debug signing key across CI builds
+      - name: Prepare Gradle's actual Android signing directory
+        run: mkdir -p "$HOME/.config/.android"
+      - name: Reuse Gradle debug signing key across CI builds
         uses: actions/cache@v4
         with:
-          path: ~/.android/debug.keystore
-          key: rahyab-debug-keystore-v2
-      - name: Ensure persistent debug signing key exists
+          path: ~/.config/.android/debug.keystore
+          key: rahyab-gradle-debug-keystore-v3
+      - name: Ensure Gradle's effective debug signing key exists
         run: |
-          KEYSTORE="$HOME/.android/debug.keystore"
+          KEYSTORE="$HOME/.config/.android/debug.keystore"
           if [ ! -s "$KEYSTORE" ]; then
             keytool -genkeypair -v \
               -keystore "$KEYSTORE" \
               -storepass android \
-              -alias androiddebugkey \
+              -alias AndroidDebugKey \
               -keypass android \
               -keyalg RSA \
               -keysize 2048 \
@@ -112,7 +112,7 @@ jobs:
           fi
           test -s "$KEYSTORE"
           chmod 600 "$KEYSTORE"
-          keytool -list -keystore "$KEYSTORE" -storepass android -alias androiddebugkey
+          keytool -list -keystore "$KEYSTORE" -storepass android -alias AndroidDebugKey
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
