@@ -127,6 +127,8 @@ public final class RahYabVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+        android.util.Log.i("RahYabVpnService", "onStartCommand entered; startId="
+                + startId + ", action=" + String.valueOf(action));
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("service_start_command_entered",
                         new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
@@ -826,6 +828,40 @@ public final class RahYabVpnService extends VpnService {
             appendAutoHistory("AUTO_FAILOVER_QUEUE_CLOSED",
                     "صف سرویس بسته شده بود؛ جست‌وجوی جایگزین آغاز نشد");
         }
+    }
+
+    private void recordLifecycleEvent(String key, Intent intent) {
+        String action = intent == null ? "null" : String.valueOf(intent.getAction());
+        String stamp = new java.text.SimpleDateFormat(
+                "yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+                .format(new java.util.Date());
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString(key, stamp + " (action=" + action + ")")
+                .commit();
+    }
+
+    @Override
+    public android.os.IBinder onBind(Intent intent) {
+        recordLifecycleEvent("service_on_bind_entered_at", intent);
+        android.util.Log.i("RahYabVpnService", "onBind entered; action="
+                + (intent == null ? "null" : intent.getAction()));
+        return super.onBind(intent);
+    }
+
+    @Override
+    public boolean onUnbind(Intent intent) {
+        recordLifecycleEvent("service_on_unbind_entered_at", intent);
+        android.util.Log.i("RahYabVpnService", "onUnbind entered; action="
+                + (intent == null ? "null" : intent.getAction()));
+        return super.onUnbind(intent);
+    }
+
+    @Override
+    public void onRebind(Intent intent) {
+        recordLifecycleEvent("service_on_rebind_entered_at", intent);
+        android.util.Log.i("RahYabVpnService", "onRebind entered; action="
+                + (intent == null ? "null" : intent.getAction()));
+        super.onRebind(intent);
     }
 
     @Override
