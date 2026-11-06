@@ -196,6 +196,10 @@ public class MainActivity extends Activity {
 
         appendReportSection(report, "رویدادهای برنامه",
                 prefs.getString("app_event_history", ""));
+        appendReportSection(report, "زمان آغاز آخرین جست‌وجوی هوشمند",
+                prefs.getString("discovery_attempt_started_at", ""));
+        appendReportSection(report, "نتیجه آخرین جست‌وجوی هوشمند",
+                prefs.getString("discovery_attempt_result", ""));
         appendReportSection(report, "رویدادهای موتور OpenVPN",
                 prefs.getString("native_event_history", ""));
         appendReportSection(report, "آخرین وضعیت سرویس",
@@ -930,10 +934,62 @@ public class MainActivity extends Activity {
         });
     }
 
+    /**
+     * Publish discovery state to the same shared status channel used by the
+     * foreground service. The Activity's live refresh must not overwrite a
+     * locally displayed discovery message with an old "disconnected" value.
+     */
+    private void publishDiscoveryStatus(String message, String lampState) {
+        setStatus(message);
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("service_status_message", message)
+                .putLong("service_status_updated_at", System.currentTimeMillis())
+                .putString("connection_lamp_state", lampState)
+                .putString("discovery_attempt_result", message)
+                .commit();
+    }
+
+    private void beginFreshDiscoveryDiagnostics() {
+        android.content.SharedPreferences diagnostics =
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        diagnostics.edit()
+                .putString("discovery_attempt_started_at",
+                        new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
+                                java.util.Locale.US).format(new java.util.Date()))
+                .putString("discovery_attempt_result", "جست‌وجو آغاز شد")
+                .remove("native_last_event")
+                .remove("native_event_history")
+                .remove("native_last_event_at")
+                .remove("native_last_event_name")
+                .remove("native_last_event_detail")
+                .remove("native_last_failure_class")
+                .remove("native_last_failure_at")
+                .remove("native_last_failure_event")
+                .remove("native_last_failure_detail")
+                .remove("native_connected_event_at")
+                .remove("native_disconnected_event_at")
+                .remove("native_disconnected_event_detail")
+                .remove("auto_last_attempt_endpoint")
+                .remove("auto_last_attempt_protocol")
+                .remove("auto_last_attempt_started_at")
+                .remove("auto_last_attempt_finished_at")
+                .remove("auto_last_attempt_outcome")
+                .remove("auto_last_attempt_connected_event")
+                .remove("auto_last_attempt_callback_received")
+                .remove("auto_current_endpoint")
+                .remove("auto_current_protocol")
+                .remove("auto_current_started_at")
+                .remove("auto_current_wait_state")
+                .remove("service_start_error")
+                .remove("session_start_result")
+                .commit();
+    }
+
     private void startSmartOpenVpnSearch() {
         if (discoveryButton == null || !discoveryButton.isEnabled()) return;
         discoveryButton.setEnabled(false);
-        setStatus("در حال جستجوی سرورهای رایگان و آماده‌سازی آزمون اتصال…");
+        beginFreshDiscoveryDiagnostics();
+        publishDiscoveryStatus("در حال جستجوی سرورهای رایگان و آماده‌سازی آزمون اتصال…", "searching");
         worker.execute(() -> {
             try {
                 VpnGateProvider.Result result = VpnGateProvider.fetch();
@@ -950,7 +1006,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     discoveryButton.setEnabled(true);
                     pendingOpenVpnProfiles = profiles;
-                    setStatus(profiles.size() + " پروفایل دریافت شد؛ برای اجازه VPN آماده‌اید");
+                    publishDiscoveryStatus(profiles.size() + " پروفایل دریافت شد؛ برای اجازه VPN آماده‌اید", "searching");
                     Intent permission = VpnService.prepare(this);
                     if (permission != null) {
                         startActivityForResult(permission, REQUEST_OPENVPN_VPN_PERMISSION);
@@ -962,7 +1018,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     discoveryButton.setEnabled(true);
                     if (!isFinishing() && !isDestroyed())
-                        setStatus("جستجوی هوشمند ناموفق بود: " + safeMessage(error));
+                        publishDiscoveryStatus("جستجوی هوشمند ناموفق بود: " + safeMessage(error), "disconnected");
                 });
             }
         });
