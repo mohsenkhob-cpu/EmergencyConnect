@@ -51,7 +51,7 @@ jobs:
           set -euo pipefail
           echo "Checking native source changes for commit $GITHUB_SHA"
           CHANGED_FILES="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '[.files[].filename] | .[]')"
-          if printf '%s\\n' "$CHANGED_FILES" | grep -Eq '^(overlay/native/|.github/workflows/openvpn-native-ci.yml$)'; then
+          if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(overlay/native/|.github/workflows/openvpn-native-ci.yml$)'; then
             REQUIRE_EXACT_SHA=true
           else
             REQUIRE_EXACT_SHA=false
