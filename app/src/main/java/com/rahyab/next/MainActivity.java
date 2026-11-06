@@ -176,6 +176,12 @@ public class MainActivity extends Activity {
                 prefs.getString("service_status_message", ""));
         appendReportSection(report, "ورود سرویس به onCreate (چرخه ایجاد)",
                 prefs.getString("service_on_create_entered_at", ""));
+        appendReportSection(report, "ورود اتصال سیستمی به onBind",
+                prefs.getString("service_on_bind_entered_at", ""));
+        appendReportSection(report, "خروج اتصال سیستمی از onUnbind",
+                prefs.getString("service_on_unbind_entered_at", ""));
+        appendReportSection(report, "اتصال مجدد سیستمی به onRebind",
+                prefs.getString("service_on_rebind_entered_at", ""));
         appendReportSection(report, "نتیجه ایجاد و پیش‌زمینه‌سازی سرویس",
                 prefs.getString("service_on_create_result", ""));
         appendReportSection(report, "ورود دستور به onStartCommand",
