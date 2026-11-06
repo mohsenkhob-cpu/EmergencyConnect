@@ -44,7 +44,11 @@ def main(apk, authorize_emulator):
     adb("install", str(apk))
     if authorize_emulator:
         adb("shell", "cmd", "appops", "set", PACKAGE, "ACTIVATE_VPN", "allow")
-    adb("shell", "am", "start", "-W", "-n", f"{PACKAGE}/.MainActivity")
+    launch = adb("shell", "am", "start", "-W", "-n", f"{PACKAGE}/.MainActivity")
+    print(launch, flush=True)
+    if "Status: ok" not in launch:
+        print(adb("logcat", "-d", "-b", "crash", "-t", "80"), flush=True)
+        raise SystemExit("Android did not report a successful activity launch.")
     for attempt in range(8):
         adb("shell", "uiautomator", "dump", "/data/local/tmp/rahyab-ui.xml")
         ui = ET.fromstring(adb("shell", "cat", "/data/local/tmp/rahyab-ui.xml"))
@@ -63,6 +67,7 @@ def main(apk, authorize_emulator):
         time.sleep(1)
     else:
         packages = sorted({node.get("package", "") for node in ui.iter("node")})
+        print(adb("logcat", "-d", "-b", "crash", "-t", "80"), flush=True)
         raise SystemExit(f"Expected one enabled Smart Connect button. Visible packages: {packages}")
     left, top, right, bottom = map(int, re.findall(r"\d+", buttons[0].attrib["bounds"]))
     adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
