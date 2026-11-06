@@ -356,7 +356,7 @@ public final class SingBoxProfile {
         String protocol = server.optString("type", "");
         if (!"vless".equals(protocol) && !"vmess".equals(protocol)
                 && !"trojan".equals(protocol)) return json;
-        addGeneratedProfileDns(root, server, name);
+        addGeneratedProfileDns(root, name);
         return root.toString();
     }
 
