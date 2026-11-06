@@ -319,7 +319,7 @@ public final class SingBoxProfile {
         JSONObject root = new JSONObject().put("log", new JSONObject().put("level", "info"))
                 .put("inbounds", new JSONArray().put(tun)).put("outbounds", outbounds)
                 .put("route", new JSONObject().put("final", name));
-        addGeneratedProfileDns(root, server, name);
+        addGeneratedProfileDns(root, name);
         return root.toString();
     }
 
@@ -360,7 +360,7 @@ public final class SingBoxProfile {
         return root.toString();
     }
 
-    private static void addGeneratedProfileDns(JSONObject root, JSONObject server, String name)
+    private static void addGeneratedProfileDns(JSONObject root, String name)
             throws JSONException {
         // Application DNS uses HTTPS through the selected server, without UDP support.
         JSONObject remote = new JSONObject().put("type", "https").put("tag", "rah-yab-dns")
@@ -373,7 +373,7 @@ public final class SingBoxProfile {
                 .put("tag", "rah-yab-bootstrap").put("server", "1.1.1.1")
                 .put("path", "/dns-query").put("tls", new JSONObject().put("enabled", true)
                         .put("server_name", "cloudflare-dns.com"));
-        server.put("domain_resolver", "rah-yab-bootstrap");
+        root.getJSONObject("route").put("default_domain_resolver", "rah-yab-bootstrap");
         root.put("dns", new JSONObject().put("servers", new JSONArray().put(remote).put(bootstrap))
                 .put("final", "rah-yab-dns"));
     }
