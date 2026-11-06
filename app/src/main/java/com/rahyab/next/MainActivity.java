@@ -302,12 +302,48 @@ public class MainActivity extends Activity {
         appendReportSection(report, "آخرین رویداد sing-box",
                 singBox.getString("last_event", "") + " | "
                         + singBox.getString("last_detail", ""));
+        appendReportSection(report, "مرحلهٔ آزمون اینترنت sing-box",
+                singBox.getString("verification_stage", ""));
+        appendReportSection(report, "آخرین خروج فرایند راه‌یاب به ثبت اندروید",
+                latestProcessExit());
         appendReportSection(report, "خطای شروع سرویس",
                 prefs.getString("service_start_error", ""));
         appendReportSection(report, "وضعیت چراغ اتصال",
                 prefs.getString("connection_lamp_state", "نامشخص"));
         report.append("\nپروفایل‌ها و کلیدهای اتصال عمداً در این گزارش درج نمی‌شوند.\n");
         return report.toString();
+    }
+
+    private String latestProcessExit() {
+        if (Build.VERSION.SDK_INT < 30) return "";
+        android.app.ActivityManager manager = getSystemService(android.app.ActivityManager.class);
+        if (manager == null) return "";
+        try {
+            java.util.List<android.app.ApplicationExitInfo> exits =
+                    manager.getHistoricalProcessExitReasons(getPackageName(), 0, 1);
+            if (exits.isEmpty()) return "";
+            android.app.ApplicationExitInfo exit = exits.get(0);
+            int reason = exit.getReason();
+            String label;
+            switch (reason) {
+                case android.app.ApplicationExitInfo.REASON_CRASH:
+                    label = "JAVA_CRASH";
+                    break;
+                case android.app.ApplicationExitInfo.REASON_CRASH_NATIVE:
+                    label = "NATIVE_CRASH";
+                    break;
+                case android.app.ApplicationExitInfo.REASON_ANR:
+                    label = "ANR";
+                    break;
+                default:
+                    label = "PROCESS_EXIT";
+            }
+            String time = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
+                    java.util.Locale.US).format(new java.util.Date(exit.getTimestamp()));
+            return time + " | " + label + " | reason=" + reason + " | status=" + exit.getStatus();
+        } catch (RuntimeException ignored) {
+            return "اندروید گزارش خروج فرایند را در دسترس قرار نداد";
+        }
     }
 
     private void appendReportSection(StringBuilder report, String title, String value) {
@@ -574,7 +610,16 @@ public class MainActivity extends Activity {
         setStatus("تونل " + engineName + " آماده شد؛ در حال بررسی عبور واقعی اینترنت…");
         try {
             worker.execute(() -> {
+                android.content.SharedPreferences singBoxStatus = "sing-box".equals(engineName)
+                        ? getSharedPreferences("rahyab_singbox_status", MODE_PRIVATE) : null;
+                if (singBoxStatus != null) {
+                    singBoxStatus.edit().putString("verification_stage", "PROBE_STARTED").commit();
+                }
                 TunnelVerifier.Result result = TunnelVerifier.verify(this);
+                if (singBoxStatus != null) {
+                    singBoxStatus.edit().putString("verification_stage",
+                            result.verified ? "PROBE_VERIFIED" : "PROBE_FAILED").commit();
+                }
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
                     if (result.verified) {
@@ -890,6 +935,8 @@ public class MainActivity extends Activity {
     private void startSingBox() {
         if (pendingSingBoxJson == null) return;
         try {
+            getSharedPreferences("rahyab_singbox_status", MODE_PRIVATE).edit()
+                    .putString("verification_stage", "START_REQUESTED").apply();
             setStatus("درخواست راه‌اندازی موتور sing-box ارسال شد…");
             SingBoxVpnService.start(getApplicationContext(), pendingSingBoxJson);
         } catch (Exception e) {
