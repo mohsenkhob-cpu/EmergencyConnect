@@ -68,6 +68,10 @@ public final class RahYabVpnService extends VpnService {
     private volatile CountDownLatch attemptSignal;
     private volatile ArrayList<String> autoProfiles;
     private volatile int nextAutoIndex;
+    // One explicit user tap may test at most two bounded batches. A fresh
+    // list must not turn a single tap into an endless background search.
+    private static final int AUTO_MAX_CANDIDATES_PER_REQUEST = 12;
+    private volatile int autoCandidatesTried;
     private volatile int autoStartId;
     private final AtomicBoolean failoverQueued = new AtomicBoolean(false);
     private final java.util.Set<String> triedServerEndpoints = new java.util.HashSet<>();
@@ -205,7 +209,12 @@ public final class RahYabVpnService extends VpnService {
                     .commit();
             return START_NOT_STICKY;
         }
-        if (ACTION_START.equals(action)) stopRequested.set(false);
+        if (ACTION_START.equals(action)) {
+            stopRequested.set(false);
+            autoCandidatesTried = 0;
+            autoConnected = false;
+            autoSearchEnabled = false;
+        }
         android.util.Log.i("RahYabVpnService", "onStartCommand entered; startId="
                 + startId + ", action=" + String.valueOf(action));
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
@@ -387,7 +396,16 @@ public final class RahYabVpnService extends VpnService {
         // Measure a broader but still bounded sample. Six candidates improve
         // the chance of finding a live relay without making each user-initiated
         // attempt unreasonably long on unstable public VPN Gate servers.
-        final int candidatesToMeasure = Math.min(6, count);
+        final int remainingCandidates = Math.max(0,
+                AUTO_MAX_CANDIDATES_PER_REQUEST - autoCandidatesTried);
+        final int candidatesToMeasure = Math.min(6, Math.min(count, remainingCandidates));
+        if (candidatesToMeasure <= 0) {
+            autoSearchEnabled = false;
+            autoConnected = false;
+            setLampState("disconnected");
+            updateStatus("این نوبت جست‌وجو به سقف ۱۲ سرور رسید و اتصال تأیید نشد؛ برای تلاش تازه، اتصال هوشمند را دوباره بزنید.");
+            return;
+        }
         String baselineExitIp = fetchPublicIp();
         appendAutoHistory("AUTO_BASELINE_IP",
                 baselineExitIp == null ? "IP پیش از تونل قابل تشخیص نبود؛ تأیید نهایی IP ممکن نیست"
@@ -427,6 +445,11 @@ public final class RahYabVpnService extends VpnService {
                     .remove("native_observed_transport_detail")
                     .commit();
             final String result;
+            autoCandidatesTried++;
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putInt("auto_candidates_tried", autoCandidatesTried)
+                    .putInt("auto_candidates_limit", AUTO_MAX_CANDIDATES_PER_REQUEST)
+                    .commit();
             synchronized (nativeSessionLock) {
                 if (!autoSearchEnabled || serviceDestroyed) {
                     attemptSignal = null;
@@ -619,6 +642,23 @@ public final class RahYabVpnService extends VpnService {
         }
 
         if (!autoSearchEnabled || serviceDestroyed) return;
+        if (autoCandidatesTried >= AUTO_MAX_CANDIDATES_PER_REQUEST) {
+            autoSearchEnabled = false;
+            autoConnected = false;
+            setLampState("disconnected");
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("session_start_result",
+                            "۱۲ سرور در این نوبت بررسی شدند؛ اتصال واقعی تأیید نشد.")
+                    .putInt("auto_candidates_tried", autoCandidatesTried)
+                    .putInt("auto_candidates_limit", AUTO_MAX_CANDIDATES_PER_REQUEST)
+                    .remove("auto_current_endpoint")
+                    .remove("auto_current_started_at")
+                    .commit();
+            appendAutoHistory("AUTO_SEARCH_LIMIT_REACHED",
+                    "سقف ۱۲ سرور برای این درخواست کاربر تکمیل شد؛ جست‌وجوی خودکار متوقف شد");
+            updateStatus("۱۲ سرور بررسی شدند اما اتصال پایدار تأیید نشد؛ برای شروع یک نوبت تازه، اتصال هوشمند را بزنید.");
+            return;
+        }
         appendAutoHistory("AUTO_REFRESH",
                 "هیچ‌یک از " + candidatesToMeasure
                         + " گزینه اتصال نهایی قابل‌تأیید نداشتند؛ دریافت سرورهای تازه آغاز می‌شود");
