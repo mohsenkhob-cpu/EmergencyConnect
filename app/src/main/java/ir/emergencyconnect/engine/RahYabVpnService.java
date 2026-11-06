@@ -40,6 +40,10 @@ public final class RahYabVpnService extends VpnService {
     private static final String PENDING_START_PREFS = "rah_yab_pending_start";
     private static final String PENDING_START_ID = "request_id";
     private static final String PENDING_START_PROFILES = "profiles_json";
+    private static final String PENDING_START_CREATED_AT = "created_at_ms";
+    // Pending start requests exist only to bridge Android's one-shot service
+    // delivery/recovery window; they are not persistent auto-connect settings.
+    private static final long PENDING_START_MAX_AGE_MS = 90_000L;
     private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 30;
     private static final String CHANNEL_ID = "rah_yab_vpn_status";
     private static final int NOTIFICATION_ID = 7301;
@@ -129,16 +133,45 @@ public final class RahYabVpnService extends VpnService {
     }
 
     private synchronized boolean claimStartRequest(String requestId) {
+        if (requestId == null || requestId.trim().isEmpty()) return false;
+        android.content.SharedPreferences pending =
+                getSharedPreferences(PENDING_START_PREFS, MODE_PRIVATE);
         android.content.SharedPreferences diagnostics =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        String pendingId = pending.getString(PENDING_START_ID, null);
+        long createdAt = pending.getLong(PENDING_START_CREATED_AT, 0L);
+        long age = System.currentTimeMillis() - createdAt;
+        String cancelledId = diagnostics.getString(
+                "service_start_cancelled_request_id", null);
         String claimed = diagnostics.getString("service_claimed_request_id", null);
-        if (requestId.equals(claimed)) return false;
-        return diagnostics.edit()
+        if (!requestId.equals(pendingId) || createdAt <= 0L
+                || age < 0L || age > PENDING_START_MAX_AGE_MS
+                || requestId.equals(cancelledId) || requestId.equals(claimed)) {
+            diagnostics.edit()
+                    .putString("service_start_rejected_request_id", requestId)
+                    .putString("service_start_rejected_reason",
+                            !requestId.equals(pendingId) ? "not_pending"
+                                    : createdAt <= 0L ? "missing_timestamp"
+                                    : age < 0L ? "clock_moved_backwards"
+                                    : age > PENDING_START_MAX_AGE_MS ? "expired"
+                                    : requestId.equals(cancelledId) ? "cancelled"
+                                    : "already_claimed")
+                    .commit();
+            if (requestId.equals(pendingId) && age > PENDING_START_MAX_AGE_MS) {
+                pending.edit().clear().commit();
+            }
+            return false;
+        }
+        boolean claimedNow = diagnostics.edit()
                 .putString("service_claimed_request_id", requestId)
                 .putString("service_start_claimed_at",
                         new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
                                 java.util.Locale.US).format(new java.util.Date()))
                 .commit();
+        if (claimedNow && requestId.equals(pending.getString(PENDING_START_ID, null))) {
+            pending.edit().clear().commit();
+        }
+        return claimedNow;
     }
 
     @Override
@@ -156,9 +189,10 @@ public final class RahYabVpnService extends VpnService {
                 .commit();
         android.util.Log.i("RahYabVpnService", "onStartCommand callback observed; action="
                 + String.valueOf(action) + ", requestId=" + String.valueOf(requestId));
-        if (ACTION_START.equals(action) && requestId != null && !claimStartRequest(requestId)) {
+        if (ACTION_START.equals(action)
+                && (requestId == null || !claimStartRequest(requestId))) {
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                    .putString("service_start_duplicate_ignored", requestId)
+                    .putString("service_start_duplicate_ignored", String.valueOf(requestId))
                     .commit();
             return START_NOT_STICKY;
         }
@@ -190,6 +224,16 @@ public final class RahYabVpnService extends VpnService {
         }
 
         if (ACTION_STOP.equals(action)) {
+            android.content.SharedPreferences pending =
+                    getSharedPreferences(PENDING_START_PREFS, MODE_PRIVATE);
+            String cancelledRequestId = pending.getString(PENDING_START_ID, null);
+            if (cancelledRequestId != null) {
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("service_start_cancelled_request_id",
+                                cancelledRequestId)
+                        .commit();
+            }
+            pending.edit().clear().commit();
             autoSearchEnabled = false;
             autoConnected = false;
             autoProfiles = null;
@@ -968,7 +1012,11 @@ public final class RahYabVpnService extends VpnService {
                     getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
             String requestId = pending.getString(PENDING_START_ID, null);
             String profilesJson = pending.getString(PENDING_START_PROFILES, null);
+            long createdAt = pending.getLong(PENDING_START_CREATED_AT, 0L);
+            long requestAge = System.currentTimeMillis() - createdAt;
             String claimedId = diagnosticsNow.getString("service_claimed_request_id", null);
+            String cancelledId = diagnosticsNow.getString(
+                    "service_start_cancelled_request_id", null);
             diagnosticsNow.edit()
                     .putString("service_recovery_handler_ran_at",
                             new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
@@ -977,6 +1025,7 @@ public final class RahYabVpnService extends VpnService {
                     .putString("service_recovery_claimed_request_id", String.valueOf(claimedId))
                     .putString("service_recovery_profiles_present",
                             String.valueOf(profilesJson != null && !profilesJson.trim().isEmpty()))
+                    .putLong("service_recovery_request_age_ms", requestAge)
                     .commit();
             if (requestId == null || requestId.trim().isEmpty()
                     || profilesJson == null || profilesJson.trim().isEmpty()) {
@@ -984,7 +1033,21 @@ public final class RahYabVpnService extends VpnService {
                         "skipped: no pending request/profiles").commit();
                 return;
             }
+            if (createdAt <= 0L || requestAge < 0L
+                    || requestAge > PENDING_START_MAX_AGE_MS) {
+                pending.edit().clear().commit();
+                diagnosticsNow.edit().putString("service_start_recovery",
+                        "skipped: pending request expired or invalid").commit();
+                return;
+            }
+            if (requestId.equals(cancelledId)) {
+                pending.edit().clear().commit();
+                diagnosticsNow.edit().putString("service_start_recovery",
+                        "skipped: pending request was cancelled").commit();
+                return;
+            }
             if (requestId.equals(claimedId)) {
+                pending.edit().clear().commit();
                 diagnosticsNow.edit().putString("service_start_recovery",
                         "skipped: request already claimed").commit();
                 return;
@@ -1008,7 +1071,7 @@ public final class RahYabVpnService extends VpnService {
                 replay.putExtra(EXTRA_REQUEST_ID, requestId);
                 replay.putStringArrayListExtra(EXTRA_PROFILES, profiles);
                 diagnosticsNow.edit()
-                        .putString("service_start_recovery", "onCreate delayed replay")
+                        .putString("service_start_recovery", "onCreate delayed replay; explicit request still valid")
                         .putString("service_start_recovery_request_id", requestId)
                         .commit();
                 onStartCommand(replay, 0, 1);
