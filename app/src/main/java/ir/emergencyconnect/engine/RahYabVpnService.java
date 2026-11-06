@@ -702,47 +702,73 @@ public final class RahYabVpnService extends VpnService {
             updateStatus("۱۲ سرور بررسی شدند اما اتصال پایدار تأیید نشد؛ برای شروع یک نوبت تازه، اتصال هوشمند را بزنید.");
             return;
         }
-        appendAutoHistory("AUTO_REFRESH",
-                "هیچ‌یک از " + candidatesToMeasure
-                        + " گزینه اتصال نهایی قابل‌تأیید نداشتند؛ دریافت سرورهای تازه آغاز می‌شود");
-        updateStatus("این گروه سرور نتیجه قابل‌قبول نداشت؛ دریافت فهرست تازه…");
-        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                .putString("session_start_result",
-                        "تعداد گزینه‌های دارای آزمون کیفیت: " + measured
-                                + "؛ در حال دریافت فهرست تازه…")
-                .apply();
-        ArrayList<String> freshProfiles = fetchFreshProfiles(40);
+        // Prefer the untested profiles already downloaded for this explicit
+        // user request. A temporary VPN Gate/CDN outage must not discard the
+        // remaining candidates in the current 30-profile snapshot.
+        ArrayList<String> remainingProfiles = new ArrayList<>();
+        synchronized (triedServerEndpoints) {
+            for (String candidate : autoProfiles) {
+                String candidateEndpoint = profileEndpoint(candidate);
+                if (candidateEndpoint.isEmpty()
+                        || !triedServerEndpoints.contains(candidateEndpoint)) {
+                    remainingProfiles.add(candidate);
+                }
+            }
+        }
+        ArrayList<String> nextProfiles = remainingProfiles;
+        boolean usingCachedBatch = !remainingProfiles.isEmpty();
+        if (!usingCachedBatch) {
+            appendAutoHistory("AUTO_REFRESH",
+                    "همه پروفایل‌های فعلی بررسی شدند؛ دریافت فهرست تازه آغاز می‌شود");
+            updateStatus("فهرست فعلی تمام شد؛ در حال دریافت سرورهای تازه…");
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("session_start_result",
+                            "تعداد گزینه‌های دارای آزمون کیفیت: " + measured
+                                    + "؛ دریافت فهرست تازه…")
+                    .apply();
+            nextProfiles = fetchFreshProfiles(40);
+        } else {
+            appendAutoHistory("AUTO_REUSE_REMAINING",
+                    remainingProfiles.size()
+                            + " پروفایل آزمایش‌نشده از فهرست قبلی؛ بدون وابستگی به دریافت اینترنتی دوباره");
+            updateStatus("در حال بررسی سرورهای باقی‌مانده از فهرست دریافت‌شده…");
+        }
         if (!autoSearchEnabled || serviceDestroyed) return;
-        if (freshProfiles.isEmpty()) {
+        if (nextProfiles.isEmpty()) {
             autoSearchEnabled = false;
             autoConnected = false;
             setLampState("disconnected");
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("session_start_result",
-                            "سرور تازه‌ای از منبع دریافت نشد؛ بعداً دوباره تلاش کنید.")
+                            "سرور آزمایش‌نشده یا تازه‌ای در دسترس نیست؛ بعداً دوباره تلاش کنید.")
                     .apply();
-            updateStatus("سرور تازه‌ای دریافت نشد؛ منبع فعلاً پاسخ‌گو نیست یا سرور جدیدی باقی نمانده است.");
+            updateStatus("فهرست فعلی تمام شده و منبع دریافت سرور تازه پاسخ‌گو نیست؛ بعداً دوباره تلاش کنید.");
+            appendAutoHistory("AUTO_REFRESH_EMPTY",
+                    "هیچ پروفایل آزمایش‌نشده یا تازه‌ای برای ادامه وجود ندارد");
             return;
         }
-        autoProfiles = new ArrayList<>(freshProfiles);
-        appendAutoHistory("AUTO_REFRESH_READY",
-                freshProfiles.size() + " سرور تازه دریافت شد؛ نوبت بعدی در صف سرویس قرار گرفت");
+        autoProfiles = new ArrayList<>(nextProfiles);
+        appendAutoHistory(usingCachedBatch ? "AUTO_REUSE_READY" : "AUTO_REFRESH_READY",
+                nextProfiles.size() + (usingCachedBatch
+                        ? " سرور باقی‌مانده از فهرست قبلی آماده آزمایش است"
+                        : " سرور تازه دریافت شد؛ نوبت بعدی در صف سرویس قرار گرفت"));
 
         // Do not recurse from runAutoSearch(). This method already runs on the
         // single-thread session executor; direct recursion would grow the Java
         // stack forever when every batch fails. Queue the next batch so this
         // invocation can return and the executor can process stop requests.
+        final ArrayList<String> queuedProfiles = new ArrayList<>(nextProfiles);
         try {
             sessionExecutor.execute(() -> {
                 if (!autoSearchEnabled || serviceDestroyed) return;
-                runAutoSearch(freshProfiles, 0, startId);
+                runAutoSearch(queuedProfiles, 0, startId);
             });
         } catch (java.util.concurrent.RejectedExecutionException rejected) {
             autoSearchEnabled = false;
             autoConnected = false;
             setLampState("disconnected");
             appendAutoHistory("AUTO_REFRESH_QUEUE_FAILED",
-                    "صف اجرای جست‌وجوی بعدی در دسترس نیست؛ جست‌وجو متوقف شد");
+                    "صف اجرای جست‌وجوی بعدی در دسترس نبود؛ جست‌وجو متوقف شد");
             updateStatus("ادامه جست‌وجوی خودکار ممکن نشد؛ دوباره اتصال هوشمند را بزنید.");
         }
     }
