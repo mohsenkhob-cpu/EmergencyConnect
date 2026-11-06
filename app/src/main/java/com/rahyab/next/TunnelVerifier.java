@@ -20,6 +20,8 @@ import java.nio.charset.StandardCharsets;
  */
 public final class TunnelVerifier {
     private static final String IP_CHECK_URL = "https://api.ipify.org?format=json";
+    private static final String DNS_INDEPENDENT_PROBE_URL = "https://1.1.1.1/cdn-cgi/trace";
+    private static final int DNS_INDEPENDENT_TIMEOUT_MS = 5000;
     private static final int CONNECT_TIMEOUT_MS = 7000;
     private static final int READ_TIMEOUT_MS = 7000;
     private static final int MAX_RESPONSE_BYTES = 4096;
@@ -80,11 +82,39 @@ public final class TunnelVerifier {
                 return Result.failure("مسیر فعال شبکه هنگام بررسی تغییر کرد");
             }
             return Result.success(ip);
+        } catch (java.net.UnknownHostException e) {
+            return Result.failure("DNS برای api.ipify.org پاسخ نداد؛ "
+                    + probeWithoutDns(manager, vpn));
         } catch (Exception e) {
             String message = e.getMessage();
             return Result.failure("آزمون عبور HTTPS ناموفق بود: "
                     + (message == null || message.trim().isEmpty()
                     ? e.getClass().getSimpleName() : message));
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    /** Distinguish a DNS lookup failure from a failed HTTPS path without changing VPN status. */
+    private static String probeWithoutDns(ConnectivityManager manager, Network vpn) {
+        if (!vpn.equals(manager.getActiveNetwork())) {
+            return "شبکه پیش از آزمون مستقیم IP تغییر کرد";
+        }
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) vpn.openConnection(
+                    new URL(DNS_INDEPENDENT_PROBE_URL), java.net.Proxy.NO_PROXY);
+            connection.setConnectTimeout(DNS_INDEPENDENT_TIMEOUT_MS);
+            connection.setReadTimeout(DNS_INDEPENDENT_TIMEOUT_MS);
+            connection.setUseCaches(false);
+            connection.setInstanceFollowRedirects(false);
+            int code = connection.getResponseCode();
+            if (!vpn.equals(manager.getActiveNetwork())) {
+                return "شبکه هنگام آزمون مستقیم IP تغییر کرد";
+            }
+            return "آزمون HTTPS بدون DNS از مسیر VPN پاسخ HTTP " + code + " گرفت";
+        } catch (Exception error) {
+            return "آزمون HTTPS بدون DNS هم ناموفق بود (" + error.getClass().getSimpleName() + ")";
         } finally {
             if (connection != null) connection.disconnect();
         }
