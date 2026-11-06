@@ -45,13 +45,25 @@ def main(apk, authorize_emulator):
     if authorize_emulator:
         adb("shell", "cmd", "appops", "set", PACKAGE, "ACTIVATE_VPN", "allow")
     adb("shell", "am", "start", "-W", "-n", f"{PACKAGE}/.MainActivity")
-    adb("shell", "uiautomator", "dump", "/data/local/tmp/rahyab-ui.xml")
-    ui = ET.fromstring(adb("shell", "cat", "/data/local/tmp/rahyab-ui.xml"))
-    buttons = [node for node in ui.iter("node")
-               if node.get("text") == "اتصال هوشمند" and node.get("enabled") == "true"
-               and node.get("package") == PACKAGE]
-    if len(buttons) != 1:
-        raise SystemExit("Expected one enabled Smart Connect button.")
+    for attempt in range(8):
+        adb("shell", "uiautomator", "dump", "/data/local/tmp/rahyab-ui.xml")
+        ui = ET.fromstring(adb("shell", "cat", "/data/local/tmp/rahyab-ui.xml"))
+        buttons = [node for node in ui.iter("node")
+                   if node.get("text") == "اتصال هوشمند" and node.get("enabled") == "true"
+                   and node.get("package") == PACKAGE]
+        if len(buttons) == 1:
+            break
+        scroll = next((node for node in ui.iter("node")
+                       if node.get("package") == PACKAGE and node.get("scrollable") == "true"), None)
+        if scroll is not None:
+            left, top, right, bottom = map(int, re.findall(r"\d+", scroll.attrib["bounds"]))
+            x = str((left + right) // 2)
+            adb("shell", "input", "swipe", x, str(top + (bottom - top) * 4 // 5),
+                x, str(top + (bottom - top) // 5), "350")
+        time.sleep(1)
+    else:
+        packages = sorted({node.get("package", "") for node in ui.iter("node")})
+        raise SystemExit(f"Expected one enabled Smart Connect button. Visible packages: {packages}")
     left, top, right, bottom = map(int, re.findall(r"\d+", buttons[0].attrib["bounds"]))
     adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
     print("Tapped Smart Connect once. Accept the Android VPN prompt if shown.", flush=True)
