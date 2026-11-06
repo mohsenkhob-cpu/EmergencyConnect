@@ -349,7 +349,11 @@ class SingBoxVpnService : VpnService() {
 
         @JvmStatic
         fun stop(context: Context) {
-            context.startService(Intent(context, SingBoxVpnService::class.java).setAction(ACTION_STOP))
+            // Do not start an idle service just to stop it: that creates a
+            // spurious STOPPED broadcast which can overwrite another engine's
+            // startup status. stopService() still invokes onDestroy() for an
+            // active started service, where stopEngine() performs cleanup.
+            context.stopService(Intent(context, SingBoxVpnService::class.java))
         }
     }
 }
