@@ -7,9 +7,15 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.AtomicFile
 import org.json.JSONObject
 import java.io.File
@@ -152,7 +158,14 @@ class SingBoxVpnService : VpnService() {
                 "findConnectionOwner" -> findConnectionOwner(
                     a[0] as Int, a[1] as String, a[2] as Int, a[3] as String, a[4] as Int
                 )
-                "startDefaultInterfaceMonitor", "closeDefaultInterfaceMonitor",
+                "startDefaultInterfaceMonitor" -> {
+                    startDefaultInterfaceMonitor(a[0] as InterfaceUpdateListener)
+                    null
+                }
+                "closeDefaultInterfaceMonitor" -> {
+                    stopDefaultInterfaceMonitor()
+                    null
+                }
                 "clearDNSCache", "startNeighborMonitor", "closeNeighborMonitor",
                 "registerMyInterface" -> null
                 "underNetworkExtension", "includeAllNetworks",
@@ -321,10 +334,57 @@ class SingBoxVpnService : VpnService() {
         else -> null
     }
 
+    @Volatile
+    private var defaultInterfaceCallback: ConnectivityManager.NetworkCallback? = null
+
+    private fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
+        if (Build.VERSION.SDK_INT < 31) return
+        stopDefaultInterfaceMonitor()
+        val connectivity = getSystemService(ConnectivityManager::class.java)
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .build()
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            private var currentNetwork: Network? = null
+
+            override fun onAvailable(network: Network) {
+                currentNetwork = network
+            }
+
+            override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
+                if (defaultInterfaceCallback !== this || currentNetwork != network) return
+                val name = properties.interfaceName ?: return
+                val index = runCatching { JavaNetworkInterface.getByName(name)?.index }.getOrNull() ?: return
+                if (index > 0) listener.updateDefaultInterface(name, index, false, false)
+            }
+
+            override fun onLost(network: Network) {
+                if (defaultInterfaceCallback !== this || currentNetwork != network) return
+                currentNetwork = null
+                listener.updateDefaultInterface("", -1, false, false)
+            }
+        }
+        defaultInterfaceCallback = callback
+        try {
+            connectivity.registerBestMatchingNetworkCallback(request, callback, Handler(Looper.getMainLooper()))
+        } catch (e: Exception) {
+            defaultInterfaceCallback = null
+            throw e
+        }
+    }
+
+    private fun stopDefaultInterfaceMonitor() {
+        val callback = defaultInterfaceCallback ?: return
+        defaultInterfaceCallback = null
+        getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback)
+    }
+
     private fun stopEngine() {
         runCatching { server?.closeService() }.onFailure { Log.w(TAG, "closeService", it) }
         runCatching { server?.close() }.onFailure { Log.w(TAG, "close", it) }
         server = null
+        runCatching { stopDefaultInterfaceMonitor() }.onFailure { Log.w(TAG, "close network monitor", it) }
         synchronized(this) {
             runCatching { tunnel?.close() }
             tunnel = null
