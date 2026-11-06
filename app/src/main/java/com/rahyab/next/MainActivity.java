@@ -57,6 +57,17 @@ public class MainActivity extends Activity {
     private android.content.SharedPreferences statusPreferences;
     private android.content.SharedPreferences.OnSharedPreferenceChangeListener statusPreferenceListener;
     private String lastRenderedServiceStatus = "";
+    // A periodic foreground-only refresh is a fallback if a preference callback
+    // is delayed or missed by the Android process/UI lifecycle.
+    private final android.os.Handler statusRefreshHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable statusRefreshRunnable = new Runnable() {
+        @Override public void run() {
+            if (status == null || isFinishing() || isDestroyed()) return;
+            refreshServiceStatusFromPreferences();
+            statusRefreshHandler.postDelayed(this, 1000L);
+        }
+    };
 
     private static final String PREFS_SERVERS = "rahyab_saved_servers";
     private static final String KEY_SERVERS = "profiles";
@@ -1133,9 +1144,14 @@ public class MainActivity extends Activity {
         // screen refreshes immediately without leaving/reopening the app.
         statusPreferences.registerOnSharedPreferenceChangeListener(statusPreferenceListener);
         refreshServiceStatusFromPreferences();
+        // Keep the visible status card and action buttons synchronized with the
+        // foreground service even if SharedPreferences notifications are missed.
+        statusRefreshHandler.removeCallbacks(statusRefreshRunnable);
+        statusRefreshHandler.postDelayed(statusRefreshRunnable, 1000L);
     }
 
     @Override protected void onPause() {
+        statusRefreshHandler.removeCallbacks(statusRefreshRunnable);
         if (statusPreferences != null && statusPreferenceListener != null) {
             statusPreferences.unregisterOnSharedPreferenceChangeListener(statusPreferenceListener);
         }
@@ -1143,6 +1159,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        statusRefreshHandler.removeCallbacks(statusRefreshRunnable);
         if (statusPreferences != null && statusPreferenceListener != null) {
             statusPreferences.unregisterOnSharedPreferenceChangeListener(statusPreferenceListener);
         }
