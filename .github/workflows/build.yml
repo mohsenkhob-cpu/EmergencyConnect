@@ -253,10 +253,13 @@ jobs:
           sudo chown "$(id -u)" /dev/kvm
           "$SDKMANAGER" "platform-tools" "emulator" "$IMAGE"
           export PATH="$SDK/platform-tools:$PATH"
-          printf 'no\n' | "$(dirname "$SDKMANAGER")/avdmanager" create avd -n rahyab-test -k "$IMAGE" --force
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/rahyab-avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          printf 'no\n' | "$(dirname "$SDKMANAGER")/avdmanager" create avd -n rahyab-test -k "$IMAGE" -p "$ANDROID_AVD_HOME/rahyab-test.avd" --force
+          "$SDK/emulator/emulator" -list-avds | grep -Fx rahyab-test
           "$SDK/emulator/emulator" -avd rahyab-test -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > emulator.log 2>&1 &
           export ANDROID_SERIAL=emulator-5554
-          timeout 240 adb wait-for-device
+          timeout 240 adb wait-for-device || { cat emulator.log; exit 1; }
           timeout 240 bash -c 'until [[ "$(adb shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 3; done'
           adb shell input keyevent 82
           adb shell getprop ro.product.cpu.abilist | tee device-test-result.txt
