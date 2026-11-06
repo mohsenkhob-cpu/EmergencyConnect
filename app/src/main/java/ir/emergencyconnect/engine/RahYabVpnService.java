@@ -391,6 +391,7 @@ public final class RahYabVpnService extends VpnService {
                     .putString("auto_last_attempt_outcome", attemptOutcome)
                     .putString("auto_last_attempt_connected_event", String.valueOf(attemptConnected))
                     .putString("auto_last_attempt_callback_received", String.valueOf(callbackReceived))
+                    .putString("auto_current_wait_state", attemptOutcome)
                     .commit();
             appendAutoHistory("AUTO_ATTEMPT_RESULT",
                     "سرور " + endpoint + "؛ پروتکل " + profileProtocol(profile)
