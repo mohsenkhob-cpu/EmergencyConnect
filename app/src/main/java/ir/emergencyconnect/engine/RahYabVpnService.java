@@ -1,6 +1,9 @@
 package ir.emergencyconnect.engine;
 
 import android.net.VpnService;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -87,7 +90,7 @@ public final class RahYabVpnService extends VpnService {
     private volatile int nextAutoIndex;
     // One explicit user tap may test at most two bounded batches. A fresh
     // list must not turn a single tap into an endless background search.
-    private static final int AUTO_MAX_CANDIDATES_PER_REQUEST = 12;
+    private static final int AUTO_MAX_CANDIDATES_PER_REQUEST = 20;
     private volatile int autoCandidatesTried;
     private volatile String activeAutoProfile;
     private volatile String activeTunnelExitIp;
@@ -461,10 +464,10 @@ public final class RahYabVpnService extends VpnService {
             autoSearchEnabled = false;
             autoConnected = false;
             setLampState("disconnected");
-            updateStatus("این نوبت جست‌وجو به سقف ۱۲ سرور رسید و اتصال تأیید نشد؛ برای تلاش تازه، اتصال هوشمند را دوباره بزنید.");
+            updateStatus("این نوبت جست‌وجو به سقف ۲۰ سرور رسید و اتصال تأیید نشد؛ برای تلاش تازه، اتصال هوشمند را دوباره بزنید.");
             return;
         }
-        String baselineExitIp = fetchPublicIp();
+        String baselineExitIp = fetchPublicIp(null);
         appendAutoHistory("AUTO_BASELINE_IP",
                 baselineExitIp == null ? "IP پیش از تونل قابل تشخیص نبود؛ تأیید نهایی IP ممکن نیست"
                         : "IP خروجی پیش از تونل ثبت شد");
@@ -679,15 +682,15 @@ public final class RahYabVpnService extends VpnService {
             setLampState("disconnected");
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("session_start_result",
-                            "۱۲ سرور در این نوبت بررسی شدند؛ اتصال واقعی تأیید نشد.")
+                            "۲۰ سرور در این نوبت بررسی شدند؛ اتصال واقعی تأیید نشد.")
                     .putInt("auto_candidates_tried", autoCandidatesTried)
                     .putInt("auto_candidates_limit", AUTO_MAX_CANDIDATES_PER_REQUEST)
                     .remove("auto_current_endpoint")
                     .remove("auto_current_started_at")
                     .commit();
             appendAutoHistory("AUTO_SEARCH_LIMIT_REACHED",
-                    "سقف ۱۲ سرور برای این درخواست کاربر تکمیل شد؛ جست‌وجوی خودکار متوقف شد");
-            updateStatus("۱۲ سرور بررسی شدند اما اتصال پایدار تأیید نشد؛ برای شروع یک نوبت تازه، اتصال هوشمند را بزنید.");
+                    "سقف ۲۰ سرور برای این درخواست کاربر تکمیل شد؛ جست‌وجوی خودکار متوقف شد");
+            updateStatus("۲۰ سرور بررسی شدند اما اتصال پایدار تأیید نشد؛ برای شروع یک نوبت تازه، اتصال هوشمند را بزنید.");
             return;
         }
         // Prefer the untested profiles already downloaded for this explicit
@@ -886,6 +889,8 @@ public final class RahYabVpnService extends VpnService {
                     "IP پیش از اتصال ثبت نشده؛ برای جلوگیری از تأیید اشتباه، این سرور پذیرفته نشد");
             return false;
         }
+        Network vpn = activeVpnNetwork();
+        if (vpn == null) return false;
         String[] probes = new String[] {
                 "https://connectivitycheck.gstatic.com/generate_204",
                 "https://cp.cloudflare.com/generate_204"
@@ -894,7 +899,7 @@ public final class RahYabVpnService extends VpnService {
         for (String probe : probes) {
             HttpURLConnection connection = null;
             try {
-                connection = (HttpURLConnection) new URL(probe).openConnection();
+                connection = (HttpURLConnection) vpn.openConnection(new URL(probe), java.net.Proxy.NO_PROXY);
                 connection.setInstanceFollowRedirects(false);
                 connection.setConnectTimeout(5000);
                 connection.setReadTimeout(5000);
@@ -918,7 +923,8 @@ public final class RahYabVpnService extends VpnService {
         }
         if (!httpsTrafficOk) return false;
 
-        String tunnelExitIp = fetchPublicIp();
+        String tunnelExitIp = fetchPublicIp(vpn);
+        if (!vpn.equals(activeVpnNetwork())) return false;
         if (tunnelExitIp == null || tunnelExitIp.isEmpty()) {
             appendAutoHistory("AUTO_EXIT_IP_UNVERIFIED",
                     "IP خروجی در زمان تونل قابل دریافت نبود؛ اتصال تأیید نشد");
@@ -935,8 +941,18 @@ public final class RahYabVpnService extends VpnService {
         return true;
     }
 
-    /** Fetch a literal public IP over ordinary, unprotected HTTPS traffic. */
-    private String fetchPublicIp() {
+    private Network activeVpnNetwork() {
+        ConnectivityManager manager = getSystemService(ConnectivityManager.class);
+        if (manager == null) return null;
+        Network network = manager.getActiveNetwork();
+        NetworkCapabilities capabilities =
+                network == null ? null : manager.getNetworkCapabilities(network);
+        return capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                ? network : null;
+    }
+
+    /** Fetch a literal public IP, binding the request to the VPN when verifying a tunnel. */
+    private String fetchPublicIp(Network vpn) {
         String[] endpoints = new String[] {
                 "https://api.ipify.org",
                 "https://icanhazip.com"
@@ -944,7 +960,11 @@ public final class RahYabVpnService extends VpnService {
         for (String endpoint : endpoints) {
             HttpURLConnection connection = null;
             try {
-                connection = (HttpURLConnection) new URL(endpoint).openConnection();
+                URL url = new URL(endpoint);
+                connection = (HttpURLConnection) (vpn == null
+                        ? url.openConnection()
+                        : vpn.openConnection(url, java.net.Proxy.NO_PROXY));
+                connection.setInstanceFollowRedirects(false);
                 connection.setConnectTimeout(4500);
                 connection.setReadTimeout(4500);
                 connection.setUseCaches(false);
@@ -1211,6 +1231,8 @@ public final class RahYabVpnService extends VpnService {
     private boolean verifyTunnelTrafficForFailover(String previousExitIp,
                                                     boolean requireDifferentExitIp) {
         if (isSessionCancelled()) return false;
+        Network vpn = activeVpnNetwork();
+        if (vpn == null) return false;
         String[] probes = new String[] {
                 "https://connectivitycheck.gstatic.com/generate_204",
                 "https://cp.cloudflare.com/generate_204"
@@ -1219,7 +1241,7 @@ public final class RahYabVpnService extends VpnService {
         for (String probe : probes) {
             HttpURLConnection connection = null;
             try {
-                connection = (HttpURLConnection) new URL(probe).openConnection();
+                connection = (HttpURLConnection) vpn.openConnection(new URL(probe), java.net.Proxy.NO_PROXY);
                 connection.setInstanceFollowRedirects(false);
                 connection.setConnectTimeout(5000);
                 connection.setReadTimeout(5000);
@@ -1236,7 +1258,8 @@ public final class RahYabVpnService extends VpnService {
             }
         }
         if (!trafficOk) return false;
-        String exitIp = fetchPublicIp();
+        String exitIp = fetchPublicIp(vpn);
+        if (!vpn.equals(activeVpnNetwork())) return false;
         if (exitIp == null || exitIp.isEmpty()) return false;
         if (requireDifferentExitIp && previousExitIp != null
                 && previousExitIp.equals(exitIp)) return false;
