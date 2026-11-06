@@ -986,6 +986,51 @@ public class MainActivity extends Activity {
                 .commit();
     }
 
+    private static final int SMART_PROFILE_LIMIT = 30;
+    private static final long SMART_PROFILE_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000L;
+
+    private void cacheSmartProfiles(ArrayList<String> profiles) {
+        JSONArray snapshot = new JSONArray();
+        for (String profile : profiles) snapshot.put(profile);
+        getSharedPreferences("rah_yab_discovery_cache", MODE_PRIVATE).edit()
+                .putLong("saved_at_ms", System.currentTimeMillis())
+                .putString("profiles_json", snapshot.toString())
+                .apply();
+    }
+
+    private ArrayList<String> loadRecentSmartProfiles() {
+        android.content.SharedPreferences cache =
+                getSharedPreferences("rah_yab_discovery_cache", MODE_PRIVATE);
+        ArrayList<String> profiles = new ArrayList<>();
+        long age = System.currentTimeMillis() - cache.getLong("saved_at_ms", 0L);
+        if (age < 0 || age >= SMART_PROFILE_CACHE_MAX_AGE_MS) return profiles;
+        try {
+            JSONArray snapshot = new JSONArray(cache.getString("profiles_json", "[]"));
+            for (int i = 0; i < snapshot.length() && profiles.size() < SMART_PROFILE_LIMIT; i++) {
+                String profile = snapshot.optString(i, "");
+                if (!profile.isEmpty()) profiles.add(profile);
+            }
+        } catch (org.json.JSONException ignored) {
+            // An unreadable snapshot cannot be used for discovery.
+        }
+        return profiles;
+    }
+
+    private void prepareSmartProfiles(ArrayList<String> profiles, String status) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            discoveryButton.setEnabled(true);
+            pendingOpenVpnProfiles = profiles;
+            publishDiscoveryStatus(status, "searching");
+            Intent permission = VpnService.prepare(this);
+            if (permission != null) {
+                startActivityForResult(permission, REQUEST_OPENVPN_VPN_PERMISSION);
+            } else {
+                startOpenVpnService();
+            }
+        });
+    }
+
     private void startSmartOpenVpnSearch() {
         if (discoveryButton == null || !discoveryButton.isEnabled()) return;
         discoveryButton.setEnabled(false);
@@ -997,25 +1042,25 @@ public class MainActivity extends Activity {
                 ArrayList<String> profiles = new ArrayList<>();
                 java.util.HashSet<String> seen = new java.util.HashSet<>();
                 for (VpnGateProvider.Server server : result.servers) {
-                    if (profiles.size() >= 30) break;
+                    if (profiles.size() >= SMART_PROFILE_LIMIT) break;
                     if (server.openVpnProfile != null && !server.openVpnProfile.isEmpty()
                             && seen.add(server.endpointKey())) {
                         profiles.add(server.openVpnProfile);
                     }
                 }
                 if (profiles.isEmpty()) throw new IllegalStateException("پروفایل قابل استفاده‌ای پیدا نشد");
-                runOnUiThread(() -> {
-                    discoveryButton.setEnabled(true);
-                    pendingOpenVpnProfiles = profiles;
-                    publishDiscoveryStatus(profiles.size() + " پروفایل دریافت شد؛ برای اجازه VPN آماده‌اید", "searching");
-                    Intent permission = VpnService.prepare(this);
-                    if (permission != null) {
-                        startActivityForResult(permission, REQUEST_OPENVPN_VPN_PERMISSION);
-                    } else {
-                        startOpenVpnService();
-                    }
-                });
+                cacheSmartProfiles(profiles);
+                prepareSmartProfiles(profiles,
+                        profiles.size() + " پروفایل دریافت شد؛ برای اجازه VPN آماده‌اید");
             } catch (Exception error) {
+                ArrayList<String> cachedProfiles = loadRecentSmartProfiles();
+                if (!cachedProfiles.isEmpty()) {
+                    prepareSmartProfiles(cachedProfiles,
+                            "دریافت فهرست تازه ناموفق بود؛ آزمون "
+                                    + cachedProfiles.size() + " پروفایل ذخیره‌شده؛ "
+                                    + safeMessage(error));
+                    return;
+                }
                 runOnUiThread(() -> {
                     discoveryButton.setEnabled(true);
                     if (!isFinishing() && !isDestroyed())
