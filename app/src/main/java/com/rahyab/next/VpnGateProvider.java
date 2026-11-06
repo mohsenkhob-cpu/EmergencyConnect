@@ -140,7 +140,10 @@ public final class VpnGateProvider {
 
     /** Must be called from a worker thread, never from Android's main thread. */
     public static Result fetch() throws IOException {
-        return firstAvailable(VpnGateProvider::fetchOfficial, VpnGateProvider::fetchMirror, 25_000);
+        return firstAvailable(VpnGateProvider::fetchOfficial,
+                () -> fetchMirror(MIRROR_INDEX_RAW, MIRROR_RAW_BASE),
+                () -> fetchMirror(MIRROR_INDEX_CDN, MIRROR_CDN_BASE),
+                25_000);
     }
 
     private static Result fetchOfficial() throws IOException {
@@ -153,16 +156,18 @@ public final class VpnGateProvider {
         return new Result(parsed, body.length, OFFICIAL_API);
     }
 
-    static Result firstAvailable(Callable<Result> official, Callable<Result> mirror, long timeoutMs)
+    static Result firstAvailable(Callable<Result> official, Callable<Result> rawMirror,
+                                 Callable<Result> cdnMirror, long timeoutMs)
             throws IOException {
-        ExecutorService workers = Executors.newFixedThreadPool(2);
+        ExecutorService workers = Executors.newFixedThreadPool(3);
         ExecutorCompletionService<Result> sources = new ExecutorCompletionService<>(workers);
         Future<Result> officialRequest = sources.submit(official);
-        Future<Result> mirrorRequest = sources.submit(mirror);
+        Future<Result> rawRequest = sources.submit(rawMirror);
+        Future<Result> cdnRequest = sources.submit(cdnMirror);
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
         List<String> failures = new ArrayList<>();
         try {
-            for (int remaining = 2; remaining > 0; remaining--) {
+            for (int remaining = 3; remaining > 0; remaining--) {
                 long timeLeft = deadline - System.nanoTime();
                 Future<Result> ready = sources.poll(Math.max(0L, timeLeft), TimeUnit.NANOSECONDS);
                 if (ready == null) {
@@ -172,7 +177,8 @@ public final class VpnGateProvider {
                 try {
                     return ready.get();
                 } catch (ExecutionException e) {
-                    String source = ready == officialRequest ? "VPN Gate رسمی" : "آینه HTTPS";
+                    String source = ready == officialRequest ? "VPN Gate رسمی"
+                            : ready == rawRequest ? "آینه GitHub" : "آینه jsDelivr";
                     failures.add(source + ": " + safeMessage(e.getCause()));
                 }
             }
@@ -182,51 +188,20 @@ public final class VpnGateProvider {
             throw new IOException("دریافت فهرست VPN Gate متوقف شد", e);
         } finally {
             officialRequest.cancel(true);
-            mirrorRequest.cancel(true);
+            rawRequest.cancel(true);
+            cdnRequest.cancel(true);
             workers.shutdownNow();
         }
     }
 
-    private static Result fetchMirror() throws IOException {
-        byte[] indexBytes;
-        try {
-            indexBytes = fetchBytes(MIRROR_INDEX_RAW, MAX_INDEX_BYTES,
-                    CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, false);
-        } catch (IOException rawError) {
-            try {
-                indexBytes = fetchBytes(MIRROR_INDEX_CDN, MAX_INDEX_BYTES,
-                        CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, false);
-            } catch (IOException cdnError) {
-                IOException combined = new IOException("شاخص آینه VPN Gate در دسترس نیست: "
-                        + safeMessage(rawError) + "؛ " + safeMessage(cdnError));
-                combined.addSuppressed(rawError);
-                combined.addSuppressed(cdnError);
-                throw combined;
-            }
-        }
-
-        MirrorManifest manifest = parseMirrorManifest(
-                new String(indexBytes, StandardCharsets.UTF_8));
-        String cdnUrl = MIRROR_CDN_BASE + manifest.commit + "/data/vpngate.csv";
-        String rawUrl = MIRROR_RAW_BASE + manifest.commit + "/data/vpngate.csv";
-        byte[] csvBytes;
-        try {
-            csvBytes = fetchBytes(cdnUrl, manifest.bytes, CONNECT_TIMEOUT_MS,
-                    READ_TIMEOUT_MS, false);
-            verifyMirrorBytes(csvBytes, manifest);
-        } catch (IOException cdnError) {
-            try {
-                csvBytes = fetchBytes(rawUrl, manifest.bytes, CONNECT_TIMEOUT_MS,
-                        READ_TIMEOUT_MS, false);
-                verifyMirrorBytes(csvBytes, manifest);
-            } catch (IOException rawError) {
-                IOException combined = new IOException("دریافت یا بررسی فایل آینه ناموفق بود: "
-                        + safeMessage(cdnError) + "؛ " + safeMessage(rawError));
-                combined.addSuppressed(cdnError);
-                combined.addSuppressed(rawError);
-                throw combined;
-            }
-        }
+    private static Result fetchMirror(String indexUrl, String csvBase)
+            throws IOException {
+        byte[] indexBytes = fetchBytes(indexUrl, MAX_INDEX_BYTES,
+                CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, false);
+        MirrorManifest manifest = parseMirrorManifest(new String(indexBytes, StandardCharsets.UTF_8));
+        byte[] csvBytes = fetchBytes(csvBase + manifest.commit + "/data/vpngate.csv", manifest.bytes,
+                CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, false);
+        verifyMirrorBytes(csvBytes, manifest);
 
         List<Server> parsed = parse(new String(csvBytes, StandardCharsets.UTF_8), MIRROR_LABEL);
         if (parsed.isEmpty() || parsed.size() > manifest.serverCount) {
