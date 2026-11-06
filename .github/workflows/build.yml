@@ -2,6 +2,11 @@ name: Validate RahYab APK
 
 on:
   workflow_dispatch:
+    inputs:
+      verify_on_device:
+        description: Run on the dedicated ARM64 Android test device
+        type: boolean
+        default: false
   push:
     branches:
       - rahyab-validation
@@ -202,3 +207,27 @@ jobs:
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/APK-INTEGRITY.txt
           if-no-files-found: error
+
+  verify-on-device:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/rahyab-validation' && inputs.verify_on_device
+    needs: build
+    runs-on: [self-hosted, rahyab-android-device]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: RahYab-Next-debug
+          path: device-test
+      - name: Verify one-tap connection and HTTPS egress
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-smart-connect.py device-test/app-debug.apk | tee device-test-result.txt
+      - name: Upload device test result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RahYab-device-test-result
+          path: device-test-result.txt
+          if-no-files-found: ignore
