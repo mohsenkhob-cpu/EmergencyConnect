@@ -8,6 +8,10 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
+import android.os.Bundle
+import android.util.AtomicFile
+import org.json.JSONObject
+import java.io.File
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -26,6 +30,24 @@ import java.util.concurrent.RejectedExecutionException
  * Optional root/shell/bridge integrations are intentionally not enabled.
  */
 class SingBoxVpnService : VpnService() {
+    @Synchronized
+    private fun persistEvent(event: String, detail: String?) {
+        lastEvent = event
+        val file = statusFile(this)
+        val output = file.startWrite()
+        try {
+            val value = JSONObject().put(KEY_LAST_EVENT, event)
+                .put(KEY_LAST_DETAIL, detail.orEmpty())
+                .put(KEY_LAST_EVENT_TIME, System.currentTimeMillis())
+            output.write(value.toString().toByteArray(Charsets.UTF_8))
+            file.finishWrite(output)
+        } catch (e: Exception) {
+            file.failWrite(output)
+            throw e
+        }
+    }
+
+    @Volatile private var lastEvent: String? = null
     private var server: CommandServer? = null
     private var tunnel: ParcelFileDescriptor? = null
     @Volatile private var profile: String? = null
@@ -277,14 +299,9 @@ class SingBoxVpnService : VpnService() {
     }
 
     private fun sendEvent(event: String, detail: String? = null) {
-        // Persist the latest engine state before broadcasting. MainActivity may be
-        // backgrounded while Android starts the VPN foreground service, so a
-        // broadcast alone is not reliable for keeping the UI in sync.
-        getSharedPreferences(PREFS_STATUS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_LAST_EVENT, event)
-            .putString(KEY_LAST_DETAIL, detail ?: "")
-            .putLong(KEY_LAST_EVENT_TIME, System.currentTimeMillis())
-            .apply()
+        // SharedPreferences do not provide coherent reads across processes.
+        runCatching { persistEvent(event, detail) }
+            .onFailure { Log.w(TAG, "Could not persist sing-box status", it) }
         val intent = Intent(ACTION_EVENT).setPackage(packageName)
             .putExtra(EXTRA_EVENT, event)
         if (detail != null) intent.putExtra(EXTRA_DETAIL, detail)
@@ -319,17 +336,37 @@ class SingBoxVpnService : VpnService() {
         super.onRevoke()
     }
     override fun onDestroy() {
-        enqueueLifecycle { stopEngine() }
+        enqueueLifecycle {
+            stopEngine()
+            if (lastEvent != EVENT_ERROR && lastEvent != EVENT_STOPPED) sendEvent(EVENT_STOPPED)
+        }
         lifecycle.shutdown()
         super.onDestroy()
     }
 
     companion object {
         private const val TAG = "RahYabSingBox"
-        private const val PREFS_STATUS = "rahyab_singbox_status"
         private const val KEY_LAST_EVENT = "last_event"
         private const val KEY_LAST_DETAIL = "last_detail"
         private const val KEY_LAST_EVENT_TIME = "last_event_time"
+
+        private fun statusPath(context: Context) = File(context.filesDir, "singbox-status.json")
+
+        private fun statusFile(context: Context) = AtomicFile(statusPath(context))
+
+        @JvmStatic
+        fun readStatus(context: Context): Bundle {
+            val status = Bundle()
+            runCatching {
+                // Read only the published file. AtomicFile.openRead may remove a writer's
+                // temporary file when the reader runs in a different process.
+                val value = JSONObject(statusPath(context).readText(Charsets.UTF_8))
+                status.putString(KEY_LAST_EVENT, value.optString(KEY_LAST_EVENT))
+                status.putString(KEY_LAST_DETAIL, value.optString(KEY_LAST_DETAIL))
+                status.putLong(KEY_LAST_EVENT_TIME, value.optLong(KEY_LAST_EVENT_TIME))
+            }
+            return status
+        }
         private const val EXTRA_PROFILE = "rahyab.profile"
         private const val ACTION_STOP = "com.rahyab.next.STOP_SINGBOX"
         const val ACTION_EVENT = "com.rahyab.next.SINGBOX_EVENT"

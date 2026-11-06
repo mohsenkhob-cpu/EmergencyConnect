@@ -299,9 +299,10 @@ public class MainActivity extends Activity {
                         + " | " + prefs.getString("native_observed_transport_at", ""));
         appendReportSection(report, "وضعیت انتظار موتور",
                 prefs.getString("auto_current_wait_state", ""));
+        Bundle singBoxEvent = SingBoxVpnService.readStatus(this);
         appendReportSection(report, "آخرین رویداد sing-box",
-                singBox.getString("last_event", "") + " | "
-                        + singBox.getString("last_detail", ""));
+                singBoxEvent.getString("last_event", "") + " | "
+                        + singBoxEvent.getString("last_detail", ""));
         appendReportSection(report, "مرحلهٔ آزمون اینترنت sing-box",
                 singBox.getString("verification_stage", ""));
         appendReportSection(report, "آخرین خروج فرایند راه‌یاب به ثبت اندروید",
@@ -340,7 +341,8 @@ public class MainActivity extends Activity {
             }
             String time = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
                     java.util.Locale.US).format(new java.util.Date(exit.getTimestamp()));
-            return time + " | " + label + " | reason=" + reason + " | status=" + exit.getStatus();
+            return time + " | " + label + " | " + exit.getProcessName()
+                    + " | reason=" + reason + " | status=" + exit.getStatus();
         } catch (RuntimeException ignored) {
             return "اندروید گزارش خروج فرایند را در دسترس قرار نداد";
         }
@@ -563,13 +565,37 @@ public class MainActivity extends Activity {
         restoreSingBoxStatus();
     }
 
+    private boolean singBoxProcessExitedAfter(long eventTime) {
+        if (Build.VERSION.SDK_INT < 30 || eventTime <= 0L) return false;
+        android.app.ActivityManager manager = getSystemService(android.app.ActivityManager.class);
+        if (manager == null) return false;
+        try {
+            for (android.app.ApplicationExitInfo exit :
+                    manager.getHistoricalProcessExitReasons(getPackageName(), 0, 5)) {
+                if (exit.getTimestamp() >= eventTime
+                        && (getPackageName() + ":singbox").equals(exit.getProcessName())) {
+                    return true;
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // The absence of exit history does not prove a process is alive.
+        }
+        return false;
+    }
+
     private void restoreSingBoxStatus() {
-        android.content.SharedPreferences prefs =
-                getSharedPreferences("rahyab_singbox_status", MODE_PRIVATE);
+        Bundle prefs = SingBoxVpnService.readStatus(this);
         long eventTime = prefs.getLong("last_event_time", 0L);
         if (eventTime == 0L || System.currentTimeMillis() - eventTime > 10 * 60 * 1000L) return;
         String event = prefs.getString("last_event", "");
         String detail = prefs.getString("last_detail", "");
+        if (!"STOPPED".equals(event) && !"ERROR".equals(event)
+                && singBoxProcessExitedAfter(eventTime)) {
+            setStatus("فرایند sing-box متوقف شد؛ گزارش عیب‌یابی را بررسی کنید");
+            singBoxConnectButton.setEnabled(true);
+            disconnectButton.setEnabled(false);
+            return;
+        }
         if ("STARTING".equals(event)) {
             setStatus("در حال راه‌اندازی موتور sing-box…");
             singBoxConnectButton.setEnabled(false);
@@ -607,6 +633,8 @@ public class MainActivity extends Activity {
      */
     private void verifyTunnel(String engineName) {
         if (worker.isShutdown()) return;
+        long eventTime = "sing-box".equals(engineName)
+                ? SingBoxVpnService.readStatus(this).getLong("last_event_time", 0L) : 0L;
         setStatus("تونل " + engineName + " آماده شد؛ در حال بررسی عبور واقعی اینترنت…");
         try {
             worker.execute(() -> {
@@ -616,13 +644,18 @@ public class MainActivity extends Activity {
                     singBoxStatus.edit().putString("verification_stage", "PROBE_STARTED").commit();
                 }
                 TunnelVerifier.Result result = TunnelVerifier.verify(this);
+                boolean engineExited = singBoxProcessExitedAfter(eventTime);
                 if (singBoxStatus != null) {
                     singBoxStatus.edit().putString("verification_stage",
-                            result.verified ? "PROBE_VERIFIED" : "PROBE_FAILED").commit();
+                            engineExited ? "ENGINE_PROCESS_EXITED"
+                                    : result.verified ? "PROBE_VERIFIED" : "PROBE_FAILED").commit();
                 }
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
-                    if (result.verified) {
+                    if (engineExited) {
+                        setStatus("فرایند sing-box متوقف شد؛ گزارش عیب‌یابی را بررسی کنید");
+                        disconnectButton.setEnabled(false);
+                    } else if (result.verified) {
                         setStatus("اتصال " + engineName + " تأیید شد • IP خروجی: " + result.exitIp);
                     } else {
                         setStatus("اتصال " + engineName + " هنوز تأیید نشده: " + result.message);

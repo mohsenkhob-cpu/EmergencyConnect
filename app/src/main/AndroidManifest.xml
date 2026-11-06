@@ -22,6 +22,7 @@
         </activity>
         <service
             android:name=".SingBoxVpnService"
+            android:process=":singbox"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false"
             android:foregroundServiceType="systemExempted">
