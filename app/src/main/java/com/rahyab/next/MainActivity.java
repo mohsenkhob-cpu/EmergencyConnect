@@ -904,17 +904,31 @@ public class MainActivity extends Activity {
                 if (isFinishing() || isDestroyed()) return;
                 Intent service = new Intent(this, RahYabVpnService.class);
                 service.setAction(RahYabVpnService.ACTION_START);
-                service.putStringArrayListExtra(RahYabVpnService.EXTRA_PROFILES,
-                        new ArrayList<>(pendingOpenVpnProfiles));
+                ArrayList<String> launchProfiles = new ArrayList<>(pendingOpenVpnProfiles);
+                String requestId = "rah-" + System.currentTimeMillis();
+                service.putStringArrayListExtra(RahYabVpnService.EXTRA_PROFILES, launchProfiles);
+                service.putExtra(RahYabVpnService.EXTRA_REQUEST_ID, requestId);
                 try {
                     // Start a fresh diagnostic attempt so old service/JNI events
                     // cannot be mistaken for the current launch.
                     android.content.SharedPreferences diagnostics =
                             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+                    JSONArray pendingJson = new JSONArray();
+                    for (String profile : launchProfiles) pendingJson.put(profile);
+                    getSharedPreferences("rah_yab_pending_start", MODE_PRIVATE).edit()
+                            .putString("request_id", requestId)
+                            .putString("profiles_json", pendingJson.toString())
+                            .commit();
                     diagnostics.edit()
                             .putString("service_launch_requested_at",
                                     new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
                                             java.util.Locale.US).format(new java.util.Date()))
+                            .putString("service_launch_request_id", requestId)
+                            .remove("service_claimed_request_id")
+                            .remove("service_start_claimed_at")
+                            .remove("service_start_recovery")
+                            .remove("service_start_recovery_error")
+                            .remove("service_start_duplicate_ignored")
                             .remove("service_start_command_entered")
                             .remove("service_start_received")
                             .remove("native_bind_result")
