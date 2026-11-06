@@ -249,7 +249,7 @@ jobs:
           set -euo pipefail
           SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager | head -n 1)"
-          IMAGE='system-images;android-30;google_apis;x86_64'
+          IMAGE='system-images;android-35;google_apis;x86_64'
           sudo chown "$(id -u)" /dev/kvm
           "$SDKMANAGER" "platform-tools" "emulator" "$IMAGE"
           export PATH="$SDK/platform-tools:$PATH"
