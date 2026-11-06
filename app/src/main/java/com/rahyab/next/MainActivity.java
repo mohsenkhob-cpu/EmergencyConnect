@@ -173,7 +173,7 @@ public class MainActivity extends Activity {
         android.content.SharedPreferences prefs =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         android.content.SharedPreferences singBox =
-                getSharedPreferences("rah_yab_singbox_status", MODE_PRIVATE);
+                getSharedPreferences("rahyab_singbox_status", MODE_PRIVATE);
         StringBuilder report = new StringBuilder();
         report.append("گزارش عیب‌یابی راه‌یاب\n");
         report.append("زمان تهیه: ").append(new java.text.SimpleDateFormat(

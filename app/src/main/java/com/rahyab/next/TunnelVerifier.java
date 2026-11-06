@@ -47,15 +47,14 @@ public final class TunnelVerifier {
                 (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
         if (manager == null) return Result.failure("مدیر اتصال اندروید در دسترس نیست");
 
-        Network active = manager.getActiveNetwork();
-        NetworkCapabilities capabilities = active == null ? null : manager.getNetworkCapabilities(active);
-        if (capabilities == null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-            return Result.failure("اندروید مسیر فعال VPN را برای این برنامه تأیید نکرد");
+        Network vpn = awaitActiveVpn(manager);
+        if (vpn == null) {
+            return Result.failure("مسیر VPN تا پایان مهلت ۸ ثانیه‌ای در اندروید فعال نشد");
         }
 
         HttpURLConnection connection = null;
         try {
-            connection = (HttpURLConnection) new URL(IP_CHECK_URL).openConnection();
+            connection = (HttpURLConnection) vpn.openConnection(new URL(IP_CHECK_URL));
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
             connection.setReadTimeout(READ_TIMEOUT_MS);
@@ -77,6 +76,9 @@ public final class TunnelVerifier {
             if (!isPublicAddressLiteral(ip)) {
                 return Result.failure("سرویس بررسی، نشانی IP معتبر و عمومی برنگرداند");
             }
+            if (!vpn.equals(manager.getActiveNetwork())) {
+                return Result.failure("مسیر فعال شبکه هنگام بررسی تغییر کرد");
+            }
             return Result.success(ip);
         } catch (Exception e) {
             String message = e.getMessage();
@@ -86,6 +88,28 @@ public final class TunnelVerifier {
         } finally {
             if (connection != null) connection.disconnect();
         }
+    }
+
+    private static Network awaitActiveVpn(ConnectivityManager manager) {
+        // The VPN interface can exist before Android publishes it as the app's active network.
+        long deadline = android.os.SystemClock.elapsedRealtime() + 8_000L;
+        while (!Thread.currentThread().isInterrupted()) {
+            Network active = manager.getActiveNetwork();
+            NetworkCapabilities capabilities =
+                    active == null ? null : manager.getNetworkCapabilities(active);
+            if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                return active;
+            }
+            long remaining = deadline - android.os.SystemClock.elapsedRealtime();
+            if (remaining <= 0) break;
+            try {
+                Thread.sleep(Math.min(remaining, 200L));
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return null;
     }
 
     static boolean isPublicAddressLiteral(String value) {
