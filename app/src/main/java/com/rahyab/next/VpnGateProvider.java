@@ -18,6 +18,13 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -133,30 +140,50 @@ public final class VpnGateProvider {
 
     /** Must be called from a worker thread, never from Android's main thread. */
     public static Result fetch() throws IOException {
-        IOException officialFailure;
-        try {
-            byte[] body = fetchBytes(OFFICIAL_API, MAX_RESPONSE_BYTES, CONNECT_TIMEOUT_MS,
-                    READ_TIMEOUT_MS, true);
-            List<Server> parsed = parse(new String(body, StandardCharsets.UTF_8),
-                    "VPN Gate رسمی");
-            if (parsed.isEmpty()) {
-                throw new IOException("منبع رسمی پاسخ داد، اما پروفایل OpenVPN معتبری پیدا نشد");
-            }
-            return new Result(parsed, body.length, OFFICIAL_API);
-        } catch (IOException error) {
-            officialFailure = error;
-        }
+        return firstAvailable(VpnGateProvider::fetchOfficial, VpnGateProvider::fetchMirror, 25_000);
+    }
 
+    private static Result fetchOfficial() throws IOException {
+        byte[] body = fetchBytes(OFFICIAL_API, MAX_RESPONSE_BYTES, CONNECT_TIMEOUT_MS,
+                READ_TIMEOUT_MS, true);
+        List<Server> parsed = parse(new String(body, StandardCharsets.UTF_8), "VPN Gate رسمی");
+        if (parsed.isEmpty()) {
+            throw new IOException("منبع رسمی پاسخ داد، اما پروفایل OpenVPN معتبری پیدا نشد");
+        }
+        return new Result(parsed, body.length, OFFICIAL_API);
+    }
+
+    static Result firstAvailable(Callable<Result> official, Callable<Result> mirror, long timeoutMs)
+            throws IOException {
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        ExecutorCompletionService<Result> sources = new ExecutorCompletionService<>(workers);
+        Future<Result> officialRequest = sources.submit(official);
+        Future<Result> mirrorRequest = sources.submit(mirror);
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        List<String> failures = new ArrayList<>();
         try {
-            return fetchMirror();
-        } catch (IOException mirrorFailure) {
-            IOException combined = new IOException(
-                    "دریافت فهرست از VPN Gate رسمی و آینه HTTPS جایگزین ناموفق بود؛ "
-                    + "خطای منبع رسمی: " + safeMessage(officialFailure)
-                    + "؛ خطای آینه: " + safeMessage(mirrorFailure));
-            combined.addSuppressed(officialFailure);
-            combined.addSuppressed(mirrorFailure);
-            throw combined;
+            for (int remaining = 2; remaining > 0; remaining--) {
+                long timeLeft = deadline - System.nanoTime();
+                Future<Result> ready = sources.poll(Math.max(0L, timeLeft), TimeUnit.NANOSECONDS);
+                if (ready == null) {
+                    failures.add("مهلت دریافت فهرست VPN Gate تمام شد");
+                    break;
+                }
+                try {
+                    return ready.get();
+                } catch (ExecutionException e) {
+                    String source = ready == officialRequest ? "VPN Gate رسمی" : "آینه HTTPS";
+                    failures.add(source + ": " + safeMessage(e.getCause()));
+                }
+            }
+            throw new IOException(String.join("؛ ", failures));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("دریافت فهرست VPN Gate متوقف شد", e);
+        } finally {
+            officialRequest.cancel(true);
+            mirrorRequest.cancel(true);
+            workers.shutdownNow();
         }
     }
 
@@ -300,7 +327,7 @@ public final class VpnGateProvider {
         }
     }
 
-    private static String safeMessage(IOException error) {
+    private static String safeMessage(Throwable error) {
         String message = error.getMessage();
         return message == null || message.trim().isEmpty()
                 ? error.getClass().getSimpleName() : message;
