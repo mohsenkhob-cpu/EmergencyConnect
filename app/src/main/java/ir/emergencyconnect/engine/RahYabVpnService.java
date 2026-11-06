@@ -36,6 +36,10 @@ public final class RahYabVpnService extends VpnService {
     public static final String ACTION_STOP = "ir.emergencyconnect.engine.STOP_VPN";
     public static final String EXTRA_PROFILE = "ir.emergencyconnect.engine.PROFILE";
     public static final String EXTRA_PROFILES = "ir.emergencyconnect.engine.PROFILES";
+    public static final String EXTRA_REQUEST_ID = "ir.emergencyconnect.engine.REQUEST_ID";
+    private static final String PENDING_START_PREFS = "rah_yab_pending_start";
+    private static final String PENDING_START_ID = "request_id";
+    private static final String PENDING_START_PROFILES = "profiles_json";
     private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 30;
     private static final String CHANNEL_ID = "rah_yab_vpn_status";
     private static final int NOTIFICATION_ID = 7301;
@@ -124,9 +128,29 @@ public final class RahYabVpnService extends VpnService {
         foregroundStarted = true;
     }
 
+    private synchronized boolean claimStartRequest(String requestId) {
+        android.content.SharedPreferences diagnostics =
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        String claimed = diagnostics.getString("service_claimed_request_id", null);
+        if (requestId.equals(claimed)) return false;
+        return diagnostics.edit()
+                .putString("service_claimed_request_id", requestId)
+                .putString("service_start_claimed_at",
+                        new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
+                                java.util.Locale.US).format(new java.util.Date()))
+                .commit();
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+        String requestId = intent == null ? null : intent.getStringExtra(EXTRA_REQUEST_ID);
+        if (ACTION_START.equals(action) && requestId != null && !claimStartRequest(requestId)) {
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("service_start_duplicate_ignored", requestId)
+                    .commit();
+            return START_NOT_STICKY;
+        }
         android.util.Log.i("RahYabVpnService", "onStartCommand entered; startId="
                 + startId + ", action=" + String.valueOf(action));
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
@@ -134,6 +158,7 @@ public final class RahYabVpnService extends VpnService {
                         new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
                                 java.util.Locale.US).format(new java.util.Date())
                                 + " (action=" + String.valueOf(action) + ")")
+                .putString("service_start_request_id", String.valueOf(requestId))
                 .commit();
 
         // Android requires a foreground service to promote itself immediately
@@ -888,7 +913,46 @@ public final class RahYabVpnService extends VpnService {
                     .putString("service_start_error", detail)
                     .commit();
             stopSelf();
+            return;
         }
+
+        // Recovery path: MainActivity persists the exact request before startService().
+        // If service creation is observed but the start callback is not, replay once.
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            android.content.SharedPreferences pending =
+                    getSharedPreferences(PENDING_START_PREFS, MODE_PRIVATE);
+            String requestId = pending.getString(PENDING_START_ID, null);
+            String profilesJson = pending.getString(PENDING_START_PROFILES, null);
+            if (requestId == null || requestId.trim().isEmpty()
+                    || profilesJson == null || profilesJson.trim().isEmpty()) return;
+            android.content.SharedPreferences diagnosticsNow =
+                    getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+            if (requestId.equals(diagnosticsNow.getString("service_claimed_request_id", null))) return;
+            try {
+                org.json.JSONArray json = new org.json.JSONArray(profilesJson);
+                ArrayList<String> profiles = new ArrayList<>();
+                for (int i = 0; i < json.length(); i++) {
+                    String item = json.optString(i, "");
+                    if (!item.trim().isEmpty()) profiles.add(item);
+                }
+                if (profiles.isEmpty()) return;
+                Intent replay = new Intent(this, RahYabVpnService.class);
+                replay.setAction(ACTION_START);
+                replay.putExtra(EXTRA_REQUEST_ID, requestId);
+                replay.putStringArrayListExtra(EXTRA_PROFILES, profiles);
+                diagnosticsNow.edit()
+                        .putString("service_start_recovery", "onCreate delayed replay")
+                        .putString("service_start_recovery_request_id", requestId)
+                        .commit();
+                onStartCommand(replay, 0, 1);
+            } catch (Exception error) {
+                diagnosticsNow.edit()
+                        .putString("service_start_recovery_error",
+                                error.getClass().getSimpleName() + ": "
+                                        + String.valueOf(error.getMessage()))
+                        .commit();
+            }
+        }, 1200L);
     }
 
     /**
