@@ -236,6 +236,46 @@ public class MainActivity extends Activity {
                 prefs.getString("foreground_service_type", ""));
         appendReportSection(report, "آخرین رویداد داخلی موتور",
                 prefs.getString("native_last_event", ""));
+        appendReportSection(report, "زمان آخرین رویداد موتور",
+                prefs.getString("native_last_event_at", ""));
+        appendReportSection(report, "نام آخرین رویداد موتور",
+                prefs.getString("native_last_event_name", ""));
+        appendReportSection(report, "جزئیات آخرین رویداد موتور",
+                prefs.getString("native_last_event_detail", ""));
+        appendReportSection(report, "طبقه‌بندی آخرین خطای موتور",
+                prefs.getString("native_last_failure_class", ""));
+        appendReportSection(report, "زمان آخرین خطای موتور",
+                prefs.getString("native_last_failure_at", ""));
+        appendReportSection(report, "رویداد ایجادکننده آخرین خطا",
+                prefs.getString("native_last_failure_event", ""));
+        appendReportSection(report, "جزئیات آخرین خطای موتور",
+                prefs.getString("native_last_failure_detail", ""));
+        appendReportSection(report, "زمان رویداد CONNECTED",
+                prefs.getString("native_connected_event_at", ""));
+        appendReportSection(report, "زمان رویداد DISCONNECTED",
+                prefs.getString("native_disconnected_event_at", ""));
+        appendReportSection(report, "جزئیات رویداد DISCONNECTED",
+                prefs.getString("native_disconnected_event_detail", ""));
+        appendReportSection(report, "سرور آخرین تلاش خودکار",
+                prefs.getString("auto_last_attempt_endpoint", ""));
+        appendReportSection(report, "پروتکل آخرین تلاش خودکار",
+                prefs.getString("auto_last_attempt_protocol", ""));
+        appendReportSection(report, "شروع آخرین تلاش خودکار",
+                prefs.getString("auto_last_attempt_started_at", ""));
+        appendReportSection(report, "پایان آخرین تلاش خودکار",
+                prefs.getString("auto_last_attempt_finished_at", ""));
+        appendReportSection(report, "نتیجه دقیق آخرین تلاش خودکار",
+                prefs.getString("auto_last_attempt_outcome", ""));
+        appendReportSection(report, "دریافت رویداد اتصال در آخرین تلاش",
+                prefs.getString("auto_last_attempt_connected_event", ""));
+        appendReportSection(report, "دریافت callback در آخرین تلاش",
+                prefs.getString("auto_last_attempt_callback_received", ""));
+        appendReportSection(report, "سرور در حال آزمایش",
+                prefs.getString("auto_current_endpoint", ""));
+        appendReportSection(report, "پروتکل در حال آزمایش",
+                prefs.getString("auto_current_protocol", ""));
+        appendReportSection(report, "وضعیت انتظار موتور",
+                prefs.getString("auto_current_wait_state", ""));
         appendReportSection(report, "آخرین رویداد sing-box",
                 singBox.getString("last_event", "") + " | "
                         + singBox.getString("last_detail", ""));
