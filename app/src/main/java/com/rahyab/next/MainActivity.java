@@ -309,12 +309,67 @@ public class MainActivity extends Activity {
                 latestProcessExit());
         appendReportSection(report, "ردپای خرابی بومی راه‌یاب",
                 latestNativeCrashTrace());
+        appendReportSection(report, "علت و تابع‌های خرابی داخلی sing-box",
+                latestSingBoxCrashLog());
         appendReportSection(report, "خطای شروع سرویس",
                 prefs.getString("service_start_error", ""));
         appendReportSection(report, "وضعیت چراغ اتصال",
                 prefs.getString("connection_lamp_state", "نامشخص"));
         report.append("\nپروفایل‌ها و کلیدهای اتصال عمداً در این گزارش درج نمی‌شوند.\n");
         return report.toString();
+    }
+
+    private String latestSingBoxCrashLog() {
+        // libbox redirects Go crash output to this file when CrashReportSource is empty.
+        java.io.File directory = getExternalFilesDir(null);
+        if (directory == null) directory = getFilesDir();
+        java.io.File file = new java.io.File(directory, "CrashReport-.log");
+        if (!file.isFile()) return "";
+        try (java.io.RandomAccessFile input = new java.io.RandomAccessFile(file, "r")) {
+            int length = (int) Math.min(input.length(), 128 * 1024L);
+            if (length == 0) return "";
+            byte[] bytes = new byte[length];
+            input.readFully(bytes);
+            String[] lines = new String(bytes, StandardCharsets.UTF_8).split("\n");
+            StringBuilder result = new StringBuilder();
+            boolean crashHeaderSeen = false;
+            int frames = 0;
+            java.util.regex.Pattern function = java.util.regex.Pattern.compile(
+                    "^((?:github\\.com/|golang\\.org/|runtime\\.|runtime/|main\\.|net\\.|syscall\\.)"
+                            + "[A-Za-z0-9_./*()\\[\\]-]{1,220})\\((?:0x|\\?\\?|\\)|\\{)");
+            for (String line : lines) {
+                if (!crashHeaderSeen) {
+                    if (line.startsWith("panic: ") || line.startsWith("fatal error: ")
+                            || line.startsWith("runtime/cgo: ")) {
+                        crashHeaderSeen = true;
+                        String category = line.startsWith("panic: ") ? "GO_PANIC"
+                                : line.startsWith("fatal error: ") ? "GO_FATAL" : "GO_CGO_FATAL";
+                        result.append(category);
+                        // Preserve only fixed runtime error phrases, never raw values.
+                        for (String phrase : new String[] {
+                                "invalid memory address or nil pointer dereference",
+                                "index out of range", "interface conversion",
+                                "stack overflow", "unexpected signal", "unknown ref",
+                                "invalid memory address", "failed to get default interface",
+                                "stack split at bad time", "concurrent map writes"}) {
+                            if (line.contains(phrase)) {
+                                result.append(" | ").append(phrase);
+                                break;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                java.util.regex.Matcher match = function.matcher(line);
+                if (match.find()) {
+                    result.append('\n').append(match.group(1));
+                    if (++frames >= 16) break;
+                }
+            }
+            return result.toString();
+        } catch (java.io.IOException | RuntimeException ignored) {
+            return "خواندن گزارش داخلی موتور ممکن نبود";
+        }
     }
 
     private String latestNativeCrashTrace() {
