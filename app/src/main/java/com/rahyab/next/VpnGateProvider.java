@@ -49,6 +49,11 @@ public final class VpnGateProvider {
     private static final Pattern REMOTE_LINE =
             Pattern.compile("(?m)^\\s*remote\\s+(\\S+)\\s+(\\d{1,5})(?:\\s|$)");
 
+    private static final Pattern PROTO_LINE = Pattern.compile(
+            "(?im)^[ \t]*proto[ \t]+(\\S+)");
+    private static final Pattern REMOTE_PROTO_LINE = Pattern.compile(
+            "(?im)^[ \t]*remote[ \t]+\\S+[ \t]+\\d+[ \t]+([^#;\\s]+)");
+
     private VpnGateProvider() { }
 
     public static final class Server {
@@ -84,10 +89,46 @@ public final class VpnGateProvider {
         public final int responseBytes;
 
         private Result(List<Server> servers, int responseBytes, String source) {
-            this.servers = Collections.unmodifiableList(servers);
+            this.servers = Collections.unmodifiableList(diversifyAttemptOrder(servers));
             this.source = source;
             this.responseBytes = responseBytes;
         }
+    }
+
+    /**
+     * Spread the first tunnel attempts across transport and port groups.
+     * Within each group, retain the speed/ping order from the feed parser.
+     */
+    static List<Server> diversifyAttemptOrder(List<Server> servers) {
+        List<Server> tcp443 = new ArrayList<>();
+        List<Server> udp = new ArrayList<>();
+        List<Server> tcp995 = new ArrayList<>();
+        List<Server> other = new ArrayList<>();
+        for (Server server : servers) {
+            Matcher remoteProto = REMOTE_PROTO_LINE.matcher(server.openVpnProfile);
+            Matcher proto = PROTO_LINE.matcher(server.openVpnProfile);
+            String transport = remoteProto.find() ? remoteProto.group(1)
+                    : proto.find() ? proto.group(1) : "udp";
+            transport = transport.toLowerCase(java.util.Locale.ROOT);
+            if (transport.startsWith("tcp") && server.port == 443) {
+                tcp443.add(server);
+            } else if (transport.startsWith("udp")) {
+                udp.add(server);
+            } else if (transport.startsWith("tcp") && server.port == 995) {
+                tcp995.add(server);
+            } else {
+                other.add(server);
+            }
+        }
+
+        List<List<Server>> groups = java.util.Arrays.asList(tcp443, udp, tcp995, other);
+        List<Server> ordered = new ArrayList<>(servers.size());
+        for (int i = 0; ordered.size() < servers.size(); i++) {
+            for (List<Server> group : groups) {
+                if (i < group.size()) ordered.add(group.get(i));
+            }
+        }
+        return ordered;
     }
 
     /** Must be called from a worker thread, never from Android's main thread. */
