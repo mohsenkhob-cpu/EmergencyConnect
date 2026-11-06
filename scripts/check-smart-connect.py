@@ -3,11 +3,11 @@
 Requires adb, an unlocked device on the home screen, and a fresh app install.
 Accept Android's VPN permission prompt if shown. The script taps Connect once.
 """
+import argparse
 import hashlib
 import pathlib
 import re
 import subprocess
-import sys
 import time
 import xml.etree.ElementTree as ET
 
@@ -33,13 +33,17 @@ def verified_events(xml):
     return None
 
 
-def main(apk):
+def main(apk, authorize_emulator):
     if adb("shell", "pm", "list", "packages", PACKAGE) == f"package:{PACKAGE}":
         raise SystemExit("Use a dedicated Android device without RahYab installed.")
     print("APK SHA-256:", hashlib.sha256(apk.read_bytes()).hexdigest(), flush=True)
     print("Device:", adb("shell", "getprop", "ro.product.model"),
           "Android", adb("shell", "getprop", "ro.build.version.release"), flush=True)
+    if authorize_emulator and not adb("get-serialno").startswith("emulator-"):
+        raise SystemExit("Automatic VPN consent is limited to the local test emulator.")
     adb("install", str(apk))
+    if authorize_emulator:
+        adb("shell", "cmd", "appops", "set", PACKAGE, "ACTIVATE_VPN", "allow")
     adb("shell", "am", "start", "-W", "-n", f"{PACKAGE}/.MainActivity")
     adb("shell", "uiautomator", "dump", "/data/local/tmp/rahyab-ui.xml")
     ui = ET.fromstring(adb("shell", "cat", "/data/local/tmp/rahyab-ui.xml"))
@@ -66,4 +70,8 @@ def main(apk):
 
 
 if __name__ == "__main__":
-    main(pathlib.Path(sys.argv[1]))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("apk", type=pathlib.Path)
+    parser.add_argument("--authorize-emulator", action="store_true")
+    args = parser.parse_args()
+    main(args.apk, args.authorize_emulator)
