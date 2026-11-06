@@ -23,12 +23,13 @@ def verified_events(xml):
     entries = {node.attrib.get("name"): node.text for node in ET.fromstring(xml)}
     if entries.get("connection_lamp_state") != "connected":
         return None
-    probe = None
-    for event in (entries.get("native_event_history") or "").splitlines():
-        if " | AUTO_TUNNEL_PROBE_OK — " in event:
-            probe = event
-        if probe and " | AUTO_EXIT_IP_CHANGED — " in event:
-            return probe, event
+    events = (entries.get("native_event_history") or "").splitlines()
+    expected = ("AUTO_TUNNEL_PROBE_OK", "AUTO_EXIT_IP_CHANGED", "AUTO_BEST_SELECTED")
+    for index in range(len(events) - len(expected), -1, -1):
+        candidate = events[index:index + len(expected)]
+        names = [event.partition(" | ")[2].partition(" — ")[0] for event in candidate]
+        if tuple(names) == expected:
+            return candidate
     return None
 
 
