@@ -381,7 +381,10 @@ public final class RahYabVpnService extends VpnService {
         int begin = Math.max(0, Math.min(startIndex, count - 1));
         // Test a small bounded group: measure actual tunnel traffic rather than
         // trusting VPN Gate's advertised ping/speed or accepting first success.
-        final int candidatesToMeasure = Math.min(4, count);
+        // Measure a broader but still bounded sample. Six candidates improve
+        // the chance of finding a live relay without making each user-initiated
+        // attempt unreasonably long on unstable public VPN Gate servers.
+        final int candidatesToMeasure = Math.min(6, count);
         String baselineExitIp = fetchPublicIp();
         appendAutoHistory("AUTO_BASELINE_IP",
                 baselineExitIp == null ? "IP پیش از تونل قابل تشخیص نبود؛ تأیید نهایی IP ممکن نیست"
@@ -404,7 +407,7 @@ public final class RahYabVpnService extends VpnService {
             }
             CountDownLatch signal = new CountDownLatch(1);
             attemptConnected = false;
-            String progress = "در حال آزمایش سرور " + (i + 1) + " از "
+            String progress = "در حال آزمایش سرور " + (offset + 1) + " از "
                     + candidatesToMeasure + (endpoint.isEmpty() ? "" : " — " + endpoint)
                     + "؛ بررسی اتصال و کیفیت";
             updateStatus(progress);
