@@ -44,14 +44,26 @@ jobs:
           "$SDKMANAGER" "build-tools;35.0.0"
           "$SDKMANAGER" "ndk;27.2.12479018"
       - name: Wait for matching native build from this commit
+        id: native-wait
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          echo "Waiting for OpenVPN native compile for commit $GITHUB_SHA"
+          echo "Checking native source changes for commit $GITHUB_SHA"
+          CHANGED_FILES="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '[.files[].filename] | .[]')"
+          if printf '%s\\n' "$CHANGED_FILES" | grep -Eq '^(overlay/native/|.github/workflows/openvpn-native-ci.yml$)'; then
+            REQUIRE_EXACT_SHA=true
+          else
+            REQUIRE_EXACT_SHA=false
+          fi
+          echo "Require exact native commit: $REQUIRE_EXACT_SHA"
           for attempt in $(seq 1 120); do
             RUN_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/openvpn-native-ci.yml/runs?branch=rahyab-next&per_page=30")"
-            MATCH="$(printf '%s' "$RUN_JSON" | jq -r --arg sha "$GITHUB_SHA" '[.workflow_runs[] | select(.head_sha == $sha)] | sort_by(.created_at) | last // empty')"
+            if [ "$REQUIRE_EXACT_SHA" = true ]; then
+              MATCH="$(printf '%s' "$RUN_JSON" | jq -r --arg sha "$GITHUB_SHA" '[.workflow_runs[] | select(.head_sha == $sha)] | sort_by(.created_at) | last // empty')"
+            else
+              MATCH="$(printf '%s' "$RUN_JSON" | jq -r '[.workflow_runs[]] | sort_by(.created_at) | last // empty')"
+            fi
             if [ -n "$MATCH" ]; then
               STATUS="$(printf '%s' "$MATCH" | jq -r '.status')"
               CONCLUSION="$(printf '%s' "$MATCH" | jq -r '.conclusion // empty')"
@@ -77,9 +89,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RUN_ID="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/openvpn-native-ci.yml/runs?branch=rahyab-next&per_page=30" --jq --arg sha "$GITHUB_SHA" '[.workflow_runs[] | select(.head_sha == $sha and .conclusion == "success")] | sort_by(.created_at) | last | .id')"
+          RUN_ID="${{ steps.native-wait.outputs.native_run_id }}"
           if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "No successful OpenVPN 3 native build exists for this exact commit."
+            echo "No successful OpenVPN 3 native build was confirmed."
             exit 1
           fi
           ARTIFACT_COUNT="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --jq '[.artifacts[] | select(.name == "RahYab-OpenVPN3-native-arm64-compile-check" and .expired == false)] | length')"
