@@ -92,6 +92,7 @@ public final class RahYabVpnService extends VpnService {
     private volatile long activeTunnelLatencyMs = -1L;
     private volatile long activeTunnelThroughputKbps = -1L;
     private volatile int monitorBadSamples;
+    private volatile int monitorLowSpeedSamples;
     private volatile int monitorSampleCount;
     private volatile int autoFailoversThisSession;
     private volatile long lastAutoFailoverAtMs;
@@ -243,6 +244,7 @@ public final class RahYabVpnService extends VpnService {
             activeTunnelLatencyMs = -1L;
             activeTunnelThroughputKbps = -1L;
             monitorBadSamples = 0;
+            monitorLowSpeedSamples = 0;
             monitorSampleCount = 0;
             autoFailoversThisSession = 0;
             lastAutoFailoverAtMs = 0L;
@@ -1073,8 +1075,12 @@ public final class RahYabVpnService extends VpnService {
         if (!autoSearchEnabled || !autoConnected || stopRequested.get()
                 || serviceDestroyed) return;
 
-        activeAutoLatencyMs = latency;
-        if (speed > 0) activeAutoThroughputKbps = speed;
+        activeTunnelLatencyMs = latency;
+        if (speed > 0) {
+            activeTunnelThroughputKbps = speed;
+            if (speed < AUTO_MONITOR_SPEED_LIMIT_KBPS) monitorLowSpeedSamples++;
+            else monitorLowSpeedSamples = 0;
+        }
         String sample = "نمونه " + sampleNumber + "؛ تأخیر=" + latency
                 + "ms؛ پایداری=" + stable + "/5؛ دریافت="
                 + (speed > 0 ? speed + "kbps" : "اندازه‌گیری نشد");
@@ -1089,8 +1095,8 @@ public final class RahYabVpnService extends VpnService {
 
         boolean poorLatency = latency < 0L || latency > AUTO_MONITOR_LATENCY_LIMIT_MS;
         boolean poorStability = stable < 4;
-        boolean poorSpeed = speed > 0L && speed < AUTO_MONITOR_SPEED_LIMIT_KBPS;
-        boolean degraded = poorLatency || poorStability || poorSpeed;
+        boolean poorSpeed = monitorLowSpeedSamples >= 2;
+        boolean degraded = poorLatency || poorStability;
         if (degraded) {
             monitorBadSamples++;
             appendAutoHistory("AUTO_QUALITY_DEGRADED",
@@ -1102,7 +1108,7 @@ public final class RahYabVpnService extends VpnService {
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putInt("auto_monitor_bad_samples", monitorBadSamples).apply();
 
-        if (monitorBadSamples >= AUTO_MONITOR_BAD_SAMPLES_TO_SWITCH) {
+        if (monitorBadSamples >= AUTO_MONITOR_BAD_SAMPLES_TO_SWITCH || poorSpeed) {
             String reason = "افت کیفیت در دو نمونه متوالی؛ تأخیر " + latency
                     + "ms، پایداری " + stable + "/5، سرعت "
                     + (speed > 0 ? speed + "kbps" : "نمونه‌گیری نشده");
@@ -1119,20 +1125,29 @@ public final class RahYabVpnService extends VpnService {
         if (!autoSearchEnabled || !autoConnected || stopRequested.get()
                 || serviceDestroyed || !failoverQueued.compareAndSet(false, true)) return;
         long now = System.currentTimeMillis();
+        boolean urgentDisconnect = reason != null && reason.startsWith("قطع غیرمنتظره");
         if (autoFailoversThisSession >= AUTO_MAX_FAILOVERS_PER_SESSION) {
             failoverQueued.set(false);
             cancelQualityMonitor();
             appendAutoHistory("AUTO_FAILOVER_SESSION_LIMIT",
-                    "سقف دو تعویض خودکار این نشست تکمیل شد؛ اتصال فعلی حفظ می‌شود");
-            updateStatus("کیفیت اتصال پایین است؛ سقف تعویض خودکار این نشست تکمیل شد. برای جست‌وجوی تازه، خودتان اتصال هوشمند را بزنید.");
+                    "سقف دو تعویض خودکار این نشست تکمیل شد");
+            if (urgentDisconnect) {
+                autoConnected = false;
+                autoSearchEnabled = false;
+                setLampState("disconnected");
+                updateStatus("اتصال VPN قطع شد و سقف تعویض خودکار این نشست تکمیل شده است؛ برای تلاش تازه، اتصال هوشمند را بزنید.");
+            } else {
+                updateStatus("کیفیت اتصال پایین است؛ سقف تعویض خودکار این نشست تکمیل شد و اتصال فعلی حفظ می‌شود.");
+            }
             return;
         }
-        if (lastAutoFailoverAtMs > 0L
+        if (!urgentDisconnect && lastAutoFailoverAtMs > 0L
                 && now - lastAutoFailoverAtMs < AUTO_FAILOVER_COOLDOWN_MS) {
             failoverQueued.set(false);
             appendAutoHistory("AUTO_FAILOVER_COOLDOWN",
                     "برای جلوگیری از جابه‌جایی پیاپی، تعویض خودکار در دوره مکث نادیده گرفته شد");
             monitorBadSamples = 0;
+            monitorLowSpeedSamples = 0;
             startQualityMonitor();
             return;
         }
@@ -1220,15 +1235,18 @@ public final class RahYabVpnService extends VpnService {
 
     private void runAutoFailover(String reason) {
         if (!autoSearchEnabled || serviceDestroyed || stopRequested.get()) return;
+        autoConnected = false;
         final String previousProfile = activeAutoProfile;
         final String previousEndpoint = profileEndpoint(previousProfile);
         final String previousExitIp = activeTunnelExitIp;
         if (previousProfile == null || previousProfile.trim().isEmpty()) {
+            autoSearchEnabled = false;
+            setLampState("disconnected");
             appendAutoHistory("AUTO_FAILOVER_NO_ROLLBACK",
                     "پروفایل اتصال قبلی برای بازیابی در دسترس نیست؛ تعویض خودکار انجام نشد");
+            updateStatus("پروفایل قبلی برای بازیابی در دسترس نیست؛ برای اتصال دوباره، اتصال هوشمند را بزنید.");
             return;
         }
-        autoConnected = false;
         autoFailoversThisSession++;
         lastAutoFailoverAtMs = System.currentTimeMillis();
         setLampState("searching");
@@ -1303,8 +1321,8 @@ public final class RahYabVpnService extends VpnService {
                 && measureTunnelStability() >= 4) {
             autoConnected = true;
             activeAutoProfile = bestProfile;
-            activeAutoLatencyMs = bestLatency;
-            activeAutoThroughputKbps = bestSpeed;
+            activeTunnelLatencyMs = bestLatency;
+            activeTunnelThroughputKbps = bestSpeed;
             nextAutoIndex = count == 0 ? 0
                     : (profiles.indexOf(bestProfile) + 1) % count;
             setServerTestStatus(bestEndpoint, "connected");
