@@ -831,20 +831,26 @@ public final class RahYabVpnService extends VpnService {
     @Override
     public void onCreate() {
         super.onCreate();
-        // Promote the service in onCreate(), the earliest service lifecycle
-        // callback. Do not wait for onStartCommand() or perform JNI work first.
+        android.content.SharedPreferences diagnostics =
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        String enteredAt = new java.text.SimpleDateFormat(
+                "yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+                .format(new java.util.Date());
+        // Record callback entry before foreground promotion so even a failure
+        // inside startForeground() remains distinguishable from no service creation.
+        diagnostics.edit().putString("service_on_create_entered_at", enteredAt).commit();
         try {
             enterForeground();
-            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                    .putString("service_on_create", new java.text.SimpleDateFormat(
-                            "yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
-                            .format(new java.util.Date()))
+            diagnostics.edit()
+                    .putString("service_on_create_result", "موفق؛ سرویس به مرحله ایجاد رسید و پیش‌زمینه شد")
                     .commit();
         } catch (RuntimeException error) {
             String detail = error.getClass().getSimpleName() + ": "
                     + (error.getMessage() == null ? "بدون توضیح" : error.getMessage());
-            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                    .putString("service_start_error", detail).commit();
+            diagnostics.edit()
+                    .putString("service_on_create_result", "ناموفق در پیش‌زمینه‌سازی")
+                    .putString("service_start_error", detail)
+                    .commit();
             stopSelf();
         }
     }
@@ -1203,6 +1209,11 @@ public final class RahYabVpnService extends VpnService {
 
     @Override
     public void onDestroy() {
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("service_on_destroy_at", new java.text.SimpleDateFormat(
+                        "yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+                        .format(new java.util.Date()))
+                .commit();
         // Mark the service unavailable before scheduling native teardown. JNI
         // callbacks may still arrive while stopSession() joins the worker.
         serviceDestroyed = true;
