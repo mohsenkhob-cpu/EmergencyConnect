@@ -653,8 +653,8 @@ public final class RahYabVpnService extends VpnService {
             if (connected && verifyTunnelTraffic(baselineExitIp)) {
                 autoConnected = true;
                 activeAutoProfile = bestProfile;
-                activeAutoLatencyMs = bestLatencyMs;
-                activeAutoThroughputKbps = bestThroughputKbps;
+                activeTunnelLatencyMs = bestLatencyMs;
+                activeTunnelThroughputKbps = bestThroughputKbps;
                 nextAutoIndex = (begin + candidatesToMeasure) % count;
                 setServerTestStatus(bestEndpoint, "connected");
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
