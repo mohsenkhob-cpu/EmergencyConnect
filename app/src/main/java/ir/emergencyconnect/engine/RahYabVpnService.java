@@ -55,8 +55,6 @@ public final class RahYabVpnService extends VpnService {
     private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 22;
     // Connected-session quality supervision. A single bad sample never triggers a switch.
     private static final long AUTO_MONITOR_INTERVAL_SECONDS = 45L;
-    private static final long AUTO_MONITOR_LATENCY_LIMIT_MS = 1500L;
-    private static final long AUTO_MONITOR_SPEED_LIMIT_KBPS = 250L;
     private static final int AUTO_MONITOR_BAD_SAMPLES_TO_SWITCH = 2;
     private static final int AUTO_FAILOVER_CANDIDATES = 3;
     private static final int AUTO_MAX_FAILOVERS_PER_SESSION = 2;
@@ -99,7 +97,6 @@ public final class RahYabVpnService extends VpnService {
     private volatile long activeTunnelLatencyMs = -1L;
     private volatile long activeTunnelThroughputKbps = -1L;
     private volatile int monitorBadSamples;
-    private volatile int monitorLowSpeedSamples;
     private volatile int monitorSampleCount;
     private volatile int autoFailoversThisSession;
     private volatile long lastAutoFailoverAtMs;
@@ -273,7 +270,6 @@ public final class RahYabVpnService extends VpnService {
             activeTunnelLatencyMs = -1L;
             activeTunnelThroughputKbps = -1L;
             monitorBadSamples = 0;
-            monitorLowSpeedSamples = 0;
             monitorSampleCount = 0;
             autoFailoversThisSession = 0;
             lastAutoFailoverAtMs = 0L;
@@ -1122,8 +1118,6 @@ public final class RahYabVpnService extends VpnService {
         activeTunnelLatencyMs = latency;
         if (speed > 0) {
             activeTunnelThroughputKbps = speed;
-            if (speed < AUTO_MONITOR_SPEED_LIMIT_KBPS) monitorLowSpeedSamples++;
-            else monitorLowSpeedSamples = 0;
         }
         String sample = "نمونه " + sampleNumber + "؛ تأخیر=" + latency
                 + "ms؛ پایداری=" + stable + "/5؛ دریافت="
@@ -1137,11 +1131,11 @@ public final class RahYabVpnService extends VpnService {
                 .putInt("auto_monitor_bad_samples", monitorBadSamples)
                 .commit();
 
-        boolean poorLatency = latency < 0L || latency > AUTO_MONITOR_LATENCY_LIMIT_MS;
+        // Slow public relays can still carry user traffic. Tearing down a
+        // working tunnel to compare alternatives interrupts every app.
+        // Fail over only after repeated failures of actual HTTPS probes.
         boolean poorStability = stable < 4;
-        boolean poorSpeed = monitorLowSpeedSamples >= 2;
-        boolean degraded = poorLatency || poorStability;
-        if (degraded) {
+        if (poorStability) {
             monitorBadSamples++;
             appendAutoHistory("AUTO_QUALITY_DEGRADED",
                     "افت کیفیت در نمونه " + sampleNumber + "؛ شمار نمونه‌های نامطلوب متوالی="
@@ -1152,8 +1146,8 @@ public final class RahYabVpnService extends VpnService {
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putInt("auto_monitor_bad_samples", monitorBadSamples).apply();
 
-        if (monitorBadSamples >= AUTO_MONITOR_BAD_SAMPLES_TO_SWITCH || poorSpeed) {
-            String reason = "افت کیفیت در دو نمونه متوالی؛ تأخیر " + latency
+        if (monitorBadSamples >= AUTO_MONITOR_BAD_SAMPLES_TO_SWITCH) {
+            String reason = "عبور HTTPS در دو نمونه متوالی نامطمئن بود؛ تأخیر " + latency
                     + "ms، پایداری " + stable + "/5، سرعت "
                     + (speed > 0 ? speed + "kbps" : "نمونه‌گیری نشده");
             requestAutoFailover(reason);
@@ -1172,16 +1166,16 @@ public final class RahYabVpnService extends VpnService {
         boolean urgentDisconnect = reason != null && reason.startsWith("قطع غیرمنتظره");
         if (autoFailoversThisSession >= AUTO_MAX_FAILOVERS_PER_SESSION) {
             failoverQueued.set(false);
-            cancelQualityMonitor();
             appendAutoHistory("AUTO_FAILOVER_SESSION_LIMIT",
                     "سقف دو تعویض خودکار این نشست تکمیل شد");
             if (urgentDisconnect) {
+                cancelQualityMonitor();
                 autoConnected = false;
                 autoSearchEnabled = false;
                 setLampState("disconnected");
                 updateStatus("اتصال VPN قطع شد و سقف تعویض خودکار این نشست تکمیل شده است؛ برای تلاش تازه، اتصال هوشمند را بزنید.");
             } else {
-                updateStatus("کیفیت اتصال پایین است؛ سقف تعویض خودکار این نشست تکمیل شد و اتصال فعلی حفظ می‌شود.");
+                updateStatus("کیفیت اتصال پایین است؛ سقف تعویض خودکار تکمیل شد؛ پایش اتصال فعلی ادامه دارد.");
             }
             return;
         }
@@ -1191,7 +1185,6 @@ public final class RahYabVpnService extends VpnService {
             appendAutoHistory("AUTO_FAILOVER_COOLDOWN",
                     "برای جلوگیری از جابه‌جایی پیاپی، تعویض خودکار در دوره مکث نادیده گرفته شد");
             monitorBadSamples = 0;
-            monitorLowSpeedSamples = 0;
             startQualityMonitor();
             return;
         }
