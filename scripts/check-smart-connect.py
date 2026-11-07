@@ -82,12 +82,21 @@ def main(apk, authorize_emulator):
         # Regression: a discovery response arriving after Disconnect must not
         # start the VPN. Exercise the normal visible buttons on the emulator.
         adb("shell", "input", "tap", connect_x, connect_y)
-        adb("shell", "uiautomator", "dump", "/data/local/tmp/rahyab-ui.xml")
-        cancel_ui = ET.fromstring(adb("shell", "cat", "/data/local/tmp/rahyab-ui.xml"))
-        stop_buttons = [node for node in cancel_ui.iter("node")
-                        if node.get("text") == "قطع اتصال" and node.get("enabled") == "true"
-                        and node.get("package") == PACKAGE]
+        # UI input is asynchronous. Wait briefly for the one tap to be
+        # rendered; never re-tap Connect or skip the cancellation assertion.
+        stop_buttons = []
+        for _ in range(5):
+            adb("shell", "uiautomator", "dump", "/data/local/tmp/rahyab-ui.xml")
+            cancel_xml = adb("shell", "cat", "/data/local/tmp/rahyab-ui.xml")
+            cancel_ui = ET.fromstring(cancel_xml)
+            stop_buttons = [node for node in cancel_ui.iter("node")
+                            if node.get("text") == "قطع اتصال" and node.get("enabled") == "true"
+                            and node.get("package") == PACKAGE]
+            if len(stop_buttons) == 1:
+                break
+            time.sleep(1)
         if len(stop_buttons) != 1:
+            print(cancel_xml, flush=True)
             raise SystemExit("FAIL: Disconnect is unavailable during discovery.")
         x1, y1, x2, y2 = map(int, re.findall(r"\d+", stop_buttons[0].attrib["bounds"]))
         adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
