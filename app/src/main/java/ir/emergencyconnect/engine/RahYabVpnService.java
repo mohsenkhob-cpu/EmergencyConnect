@@ -50,9 +50,15 @@ public final class RahYabVpnService extends VpnService {
     // Public VPN Gate relays often do not answer at all. Keep each candidate
     // bounded so one dead relay cannot stall a user-initiated smart search.
     // Public relays can remain in CONNECTING during a slow TLS handshake.
-    // Allow 22 seconds before abandoning a candidate, while keeping every
-    // candidate bounded and preserving the 12-candidate per-request limit.
+    // Allow up to 22 seconds for a responding handshake; silent transports
+    // have a shorter allowance. Search also has count and elapsed-time limits.
     private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 22;
+    private static final long AUTO_NO_PROGRESS_TIMEOUT_SECONDS = 10;
+    private static final long AUTO_SEARCH_BUDGET_MS = 180_000L;
+    private volatile long autoSearchStartedElapsedMs;
+    private volatile boolean attemptHandshakeStarted;
+    private String autoSearchBaselineExitIp;
+    private boolean autoSearchBaselineCaptured;
     // Connected-session quality supervision. A single bad sample never triggers a switch.
     private static final long AUTO_MONITOR_INTERVAL_SECONDS = 45L;
     private static final int AUTO_MONITOR_BAD_SAMPLES_TO_SWITCH = 2;
@@ -263,6 +269,9 @@ public final class RahYabVpnService extends VpnService {
             cancelQualityMonitor();
             stopRequested.set(false);
             autoCandidatesTried = 0;
+            autoSearchStartedElapsedMs = android.os.SystemClock.elapsedRealtime();
+            autoSearchBaselineExitIp = null;
+            autoSearchBaselineCaptured = false;
             autoConnected = false;
             autoSearchEnabled = false;
             activeAutoProfile = null;
@@ -484,7 +493,11 @@ public final class RahYabVpnService extends VpnService {
             updateStatus("این نوبت جست‌وجو به سقف ۲۰ سرور رسید و اتصال تأیید نشد؛ برای تلاش تازه، اتصال هوشمند را دوباره بزنید.");
             return;
         }
-        String baselineExitIp = fetchPublicIp(null);
+        if (!autoSearchBaselineCaptured) {
+            autoSearchBaselineExitIp = fetchPublicIp(null);
+            autoSearchBaselineCaptured = true;
+        }
+        String baselineExitIp = autoSearchBaselineExitIp;
         appendAutoHistory("AUTO_BASELINE_IP",
                 baselineExitIp == null ? "IP پیش از تونل قابل تشخیص نبود؛ تأیید نهایی IP ممکن نیست"
                         : "IP خروجی پیش از تونل ثبت شد");
@@ -492,6 +505,7 @@ public final class RahYabVpnService extends VpnService {
         for (int offset = 0; offset < candidatesToMeasure; offset++) {
             int i = (begin + offset) % count;
             if (isSessionCancelled()) return;
+            if (stopSearchAtTimeLimit()) return;
             String profile = autoProfiles.get(i);
             String endpoint = profileEndpoint(profile);
             synchronized (triedServerEndpoints) {
@@ -527,6 +541,7 @@ public final class RahYabVpnService extends VpnService {
                     return;
                 }
                 stopNativeSession();
+                attemptHandshakeStarted = false;
                 previousHardTransportError = null;
                 attemptHardFailure = null;
                 attemptSignal = signal;
@@ -551,7 +566,7 @@ public final class RahYabVpnService extends VpnService {
                     .commit();
             final boolean callbackReceived;
             try {
-                callbackReceived = signal.await(AUTO_ATTEMPT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                callbackReceived = awaitAttemptSignal(signal);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 attemptSignal = null;
@@ -659,6 +674,7 @@ public final class RahYabVpnService extends VpnService {
         }
 
         if (isSessionCancelled()) return;
+        if (stopSearchAtTimeLimit()) return;
         if (autoCandidatesTried >= AUTO_MAX_CANDIDATES_PER_REQUEST) {
             autoSearchEnabled = false;
             autoConnected = false;
@@ -750,6 +766,36 @@ public final class RahYabVpnService extends VpnService {
      * Short burst stability check through the active VPN tunnel.
      * Four of five independent HTTPS 204 requests must succeed.
      */
+    // Give a responding TLS peer the full handshake allowance, while a
+    // silent transport does not consume 22 seconds for every dead relay.
+    private boolean awaitAttemptSignal(CountDownLatch signal) throws InterruptedException {
+        long started = System.nanoTime();
+        while (true) {
+            if (signal.await(100, TimeUnit.MILLISECONDS)) return true;
+            long limit = attemptHandshakeStarted ? AUTO_ATTEMPT_TIMEOUT_SECONDS
+                    : AUTO_NO_PROGRESS_TIMEOUT_SECONDS;
+            if (System.nanoTime() - started >= TimeUnit.SECONDS.toNanos(limit)) return false;
+        }
+    }
+
+    private boolean stopSearchAtTimeLimit() {
+        if (android.os.SystemClock.elapsedRealtime() - autoSearchStartedElapsedMs
+                < AUTO_SEARCH_BUDGET_MS) return false;
+        autoConnected = false;
+        autoSearchEnabled = false;
+        setLampState("disconnected");
+        String message = "مهلت این نوبت جست‌وجو تمام شد؛ " + autoCandidatesTried
+                + " سرور بررسی شد و اتصال واقعی تأیید نشد.";
+        appendAutoHistory("AUTO_SEARCH_TIME_LIMIT", message);
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("session_start_result", message)
+                .remove("auto_current_endpoint")
+                .remove("auto_current_started_at")
+                .remove("auto_current_protocol").apply();
+        updateStatus(message);
+        return true;
+    }
+
     private int measureTunnelStability() {
         String[] probes = new String[] {
                 "https://connectivitycheck.gstatic.com/generate_204",
@@ -1213,6 +1259,7 @@ public final class RahYabVpnService extends VpnService {
             if (isSessionCancelled()) return false;
             stopNativeSession();
             attemptConnected = false;
+            attemptHandshakeStarted = false;
             previousHardTransportError = null;
             attemptHardFailure = null;
             attemptSignal = signal;
@@ -1223,8 +1270,7 @@ public final class RahYabVpnService extends VpnService {
         boolean connected = false;
         if (accepted) {
             try {
-                connected = signal.await(AUTO_ATTEMPT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                        && attemptConnected;
+                connected = awaitAttemptSignal(signal) && attemptConnected;
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
             }
@@ -1886,7 +1932,10 @@ public final class RahYabVpnService extends VpnService {
                 .putString("native_event_history", nextHistory).apply();
         CountDownLatch waiting = attemptSignal;
         if (waiting != null && waiting.getCount() != 0L) {
-            if ("CONNECTING".equals(name)) previousHardTransportError = null;
+            if ("CONNECTING".equals(name)) {
+                attemptHandshakeStarted = true;
+                previousHardTransportError = null;
+            }
             if ("CORE_LOG".equals(name) && lowerInfo.startsWith("transport error: tcp connect error")
                     && ("NO_ROUTE".equals(failureClass) || "CONNECTION_REFUSED".equals(failureClass))) {
                 // Let OpenVPN retry once. Only skip early when the same TCP
