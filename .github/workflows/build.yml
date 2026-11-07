@@ -223,7 +223,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/check-smart-connect.py device-test/app-debug.apk | tee device-test-result.txt
+          {
+            if [ "$(adb shell getprop ro.kernel.qemu | tr -d '\r')" = 1 ] ||
+               [[ "$(adb get-serialno)" == emulator-* ]]; then
+              echo "This job requires a physical Android device."
+              exit 1
+            fi
+            adb shell getprop ro.product.cpu.abilist | grep -qw arm64-v8a
+            expected_sha="$(awk '$2 == "app/build/outputs/apk/debug/app-debug.apk" {print $1}' device-test/APK-INTEGRITY.txt)"
+            if [[ ! "$expected_sha" =~ ^[[:xdigit:]]{64}$ ]]; then
+              echo "The build artifact is missing a valid APK checksum."
+              exit 1
+            fi
+            printf '%s  %s\n' "$expected_sha" device-test/app-debug.apk | sha256sum --check
+            python3 scripts/check-smart-connect.py device-test/app-debug.apk
+          } | tee device-test-result.txt
       - name: Upload device test result
         if: always()
         uses: actions/upload-artifact@v4
