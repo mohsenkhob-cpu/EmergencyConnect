@@ -457,6 +457,22 @@ public final class RahYabVpnService extends VpnService {
         if (profiles == null || profiles.isEmpty() || serviceDestroyed) return;
         autoSearchEnabled = true;
         autoProfiles = new ArrayList<>(profiles);
+        android.content.SharedPreferences successful =
+                getSharedPreferences("rah_yab_successful_relay", MODE_PRIVATE);
+        long successAge = System.currentTimeMillis() - successful.getLong("verified_at_ms", 0L);
+        String successfulEndpoint = successful.getString("endpoint", "");
+        if (startIndex == 0 && successAge >= 0L && successAge < 6 * 60 * 60 * 1000L) {
+            for (int index = 0; index < autoProfiles.size(); index++) {
+                if (!successfulEndpoint.isEmpty()
+                        && successfulEndpoint.equals(profileEndpoint(autoProfiles.get(index)))) {
+                    String recentProfile = autoProfiles.remove(index);
+                    autoProfiles.add(0, recentProfile);
+                    appendAutoHistory("AUTO_RECENT_SUCCESS_FIRST",
+                            "سرور با اتصال تأییدشده اخیر زودتر آزمایش می‌شود — " + successfulEndpoint);
+                    break;
+                }
+            }
+        }
         autoStartId = startId;
         autoConnected = false;
         int count = autoProfiles.size();
@@ -600,6 +616,7 @@ public final class RahYabVpnService extends VpnService {
                                 activeTunnelThroughputKbps = throughputKbps;
                                 nextAutoIndex = (i + 1) % count;
                                 autoConnected = true;
+                                rememberSuccessfulRelay(endpoint);
                                 setServerTestStatus(endpoint, "connected");
                                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                                         .putString("session_start_result",
@@ -1061,6 +1078,12 @@ public final class RahYabVpnService extends VpnService {
                 .putString("native_event_history", next).apply();
     }
 
+    private void rememberSuccessfulRelay(String endpoint) {
+        getSharedPreferences("rah_yab_successful_relay", MODE_PRIVATE).edit()
+                .putString("endpoint", endpoint)
+                .putLong("verified_at_ms", System.currentTimeMillis()).apply();
+    }
+
     private void cancelQualityMonitor() {
         java.util.concurrent.ScheduledFuture<?> task = qualityMonitorFuture;
         qualityMonitorFuture = null;
@@ -1348,6 +1371,7 @@ public final class RahYabVpnService extends VpnService {
             activeTunnelThroughputKbps = bestSpeed;
             nextAutoIndex = count == 0 ? 0
                     : (profiles.indexOf(bestProfile) + 1) % count;
+            rememberSuccessfulRelay(bestEndpoint);
             setServerTestStatus(bestEndpoint, "connected");
             setLampState("connected");
             appendAutoHistory("AUTO_FAILOVER_SUCCESS",
@@ -1369,6 +1393,7 @@ public final class RahYabVpnService extends VpnService {
                 && verifyTunnelTrafficForFailover(null, false)) {
             autoConnected = true;
             activeAutoProfile = previousProfile;
+            rememberSuccessfulRelay(previousEndpoint);
             setLampState("connected");
             appendAutoHistory("AUTO_FAILOVER_ROLLBACK_OK",
                     "اتصال قبلی " + previousEndpoint + " بازیابی و عبور اینترنت تأیید شد");

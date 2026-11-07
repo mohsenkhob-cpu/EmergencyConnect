@@ -48,6 +48,10 @@ public class MainActivity extends Activity {
     private Config pendingWireGuardConfig;
     private String pendingSingBoxJson;
     private ArrayList<String> pendingOpenVpnProfiles;
+    // Main-thread generation invalidates every delayed discovery/permission callback.
+    private int smartSearchGeneration;
+    private int pendingSmartSearchGeneration;
+    private boolean smartSearchPending;
     private Button singBoxConnectButton;
     private Button discoveryButton;
     private TextView status;
@@ -813,6 +817,7 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_OPENVPN_VPN_PERMISSION && resultCode != RESULT_OK) {
+            smartSearchPending = false;
             pendingOpenVpnProfiles = null;
             if (discoveryButton != null) discoveryButton.setEnabled(true);
             if (disconnectButton != null) disconnectButton.setEnabled(false);
@@ -1179,10 +1184,11 @@ public class MainActivity extends Activity {
         return profiles;
     }
 
-    private void prepareSmartProfiles(ArrayList<String> profiles, String status) {
+    private void prepareSmartProfiles(ArrayList<String> profiles, String status, int generation) {
         runOnUiThread(() -> {
-            if (isFinishing() || isDestroyed()) return;
-            discoveryButton.setEnabled(true);
+            if (isFinishing() || isDestroyed() || generation != smartSearchGeneration) return;
+            discoveryButton.setEnabled(false);
+            pendingSmartSearchGeneration = generation;
             pendingOpenVpnProfiles = profiles;
             publishDiscoveryStatus(status, "searching");
             Intent permission = VpnService.prepare(this);
@@ -1195,8 +1201,11 @@ public class MainActivity extends Activity {
     }
 
     private void startSmartOpenVpnSearch() {
-        if (discoveryButton == null || !discoveryButton.isEnabled()) return;
+        if (discoveryButton == null || !discoveryButton.isEnabled() || smartSearchPending) return;
+        final int generation = ++smartSearchGeneration;
+        smartSearchPending = true;
         discoveryButton.setEnabled(false);
+        disconnectButton.setEnabled(true);
         beginFreshDiscoveryDiagnostics();
         publishDiscoveryStatus("در حال جستجوی سرورهای رایگان و آماده‌سازی آزمون اتصال…", "searching");
         worker.execute(() -> {
@@ -1214,18 +1223,21 @@ public class MainActivity extends Activity {
                 if (profiles.isEmpty()) throw new IllegalStateException("پروفایل قابل استفاده‌ای پیدا نشد");
                 cacheSmartProfiles(profiles);
                 prepareSmartProfiles(profiles,
-                        profiles.size() + " پروفایل دریافت شد؛ برای اجازه VPN آماده‌اید");
+                        profiles.size() + " پروفایل دریافت شد؛ برای اجازه VPN آماده‌اید", generation);
             } catch (Exception error) {
                 ArrayList<String> cachedProfiles = loadRecentSmartProfiles();
                 if (!cachedProfiles.isEmpty()) {
                     prepareSmartProfiles(cachedProfiles,
                             "دریافت فهرست تازه ناموفق بود؛ آزمون "
                                     + cachedProfiles.size() + " پروفایل ذخیره‌شده؛ "
-                                    + safeMessage(error));
+                                    + safeMessage(error), generation);
                     return;
                 }
                 runOnUiThread(() -> {
+                    if (generation != smartSearchGeneration || isFinishing() || isDestroyed()) return;
+                    smartSearchPending = false;
                     discoveryButton.setEnabled(true);
+                    disconnectButton.setEnabled(false);
                     if (!isFinishing() && !isDestroyed())
                         publishDiscoveryStatus("جستجوی هوشمند ناموفق بود: " + safeMessage(error), "disconnected");
                 });
@@ -1234,6 +1246,10 @@ public class MainActivity extends Activity {
     }
 
     private void startOpenVpnService() {
+        if (!smartSearchPending || pendingSmartSearchGeneration != smartSearchGeneration) return;
+        final int generation = smartSearchGeneration;
+        final ArrayList<String> launchProfiles = pendingOpenVpnProfiles == null
+                ? new ArrayList<>() : new ArrayList<>(pendingOpenVpnProfiles);
         if (pendingOpenVpnProfiles == null || pendingOpenVpnProfiles.isEmpty()) {
             setStatus("فهرست سرورها آماده نیست؛ دوباره اتصال هوشمند را بزنید");
             return;
@@ -1249,10 +1265,9 @@ public class MainActivity extends Activity {
                 wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
             } catch (Exception ignored) { }
             runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
+                if (isFinishing() || isDestroyed() || generation != smartSearchGeneration) return;
                 Intent service = new Intent(this, RahYabVpnService.class);
                 service.setAction(RahYabVpnService.ACTION_START);
-                ArrayList<String> launchProfiles = new ArrayList<>(pendingOpenVpnProfiles);
                 String requestId = "rah-" + System.currentTimeMillis();
                 service.putExtra(RahYabVpnService.EXTRA_REQUEST_ID, requestId);
                 try {
@@ -1320,8 +1335,11 @@ public class MainActivity extends Activity {
                             .putString("service_start_dispatch", "startService from visible Activity")
                             .commit();
                     startService(service);
+                    smartSearchPending = false;
+                    pendingOpenVpnProfiles = null;
                     setStatus("درخواست شروع سرویس ارسال شد؛ منتظر ثبت onStartCommand هستیم…");
                 } catch (RuntimeException error) {
+                    smartSearchPending = false;
                     discoveryButton.setEnabled(true);
                     disconnectButton.setEnabled(false);
                     setStatus("شروع سرویس OpenVPN ناموفق بود: " + safeMessage(error));
@@ -1331,6 +1349,9 @@ public class MainActivity extends Activity {
     }
 
     private void disconnectAllEngines() {
+        final int generation = ++smartSearchGeneration;
+        smartSearchPending = false;
+        pendingOpenVpnProfiles = null;
         // A manual stop must invalidate any not-yet-consumed start request.
         getSharedPreferences("rah_yab_pending_start", MODE_PRIVATE).edit()
                 .clear().commit();
@@ -1343,6 +1364,7 @@ public class MainActivity extends Activity {
             try { wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null); }
             catch (Exception ignored) { }
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed() || generation != smartSearchGeneration) return;
                 disconnectButton.setEnabled(false);
                 discoveryButton.setEnabled(true);
                 setStatus("درخواست قطع اتصال به همه موتورها ارسال شد");
@@ -1356,7 +1378,7 @@ public class MainActivity extends Activity {
     }
 
     private void refreshServiceStatusFromPreferences() {
-        if (status == null) return;
+        if (status == null || smartSearchPending) return;
         android.content.SharedPreferences diagnostics = statusPreferences != null
                 ? statusPreferences
                 : getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
@@ -1390,7 +1412,7 @@ public class MainActivity extends Activity {
         renderConnectionOrb(lamp, visibleStatus);
         boolean active = connected || searching;
         if (disconnectButton != null) disconnectButton.setEnabled(active);
-        if (discoveryButton != null) discoveryButton.setEnabled(!searching);
+        if (discoveryButton != null) discoveryButton.setEnabled(!searching && !connected);
     }
 
     /**
@@ -1459,6 +1481,8 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        smartSearchGeneration++;
+        smartSearchPending = false;
         statusRefreshHandler.removeCallbacks(statusRefreshRunnable);
         if (statusPreferences != null && statusPreferenceListener != null) {
             statusPreferences.unregisterOnSharedPreferenceChangeListener(statusPreferenceListener);
