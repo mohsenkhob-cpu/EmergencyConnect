@@ -85,6 +85,8 @@ public final class RahYabVpnService extends VpnService {
     private volatile boolean autoSearchEnabled;
     private volatile boolean autoConnected;
     private volatile boolean attemptConnected;
+    private String previousHardTransportError;
+    private volatile String attemptHardFailure;
     private volatile CountDownLatch attemptSignal;
     private volatile ArrayList<String> autoProfiles;
     private volatile int nextAutoIndex;
@@ -173,6 +175,22 @@ public final class RahYabVpnService extends VpnService {
         foregroundStarted = true;
     }
 
+    private ArrayList<String> parsePendingProfiles(String profilesJson) {
+        ArrayList<String> profiles = new ArrayList<>();
+        if (profilesJson == null) return profiles;
+        try {
+            org.json.JSONArray json = new org.json.JSONArray(profilesJson);
+            for (int i = 0; i < json.length(); i++) {
+                String item = json.optString(i, "");
+                if (!item.trim().isEmpty()) profiles.add(item);
+            }
+        } catch (org.json.JSONException error) {
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("service_start_error", "Invalid stored OpenVPN profile list").apply();
+        }
+        return profiles;
+    }
+
     private synchronized boolean claimStartRequest(String requestId) {
         if (requestId == null || requestId.trim().isEmpty()) return false;
         android.content.SharedPreferences pending =
@@ -231,6 +249,12 @@ public final class RahYabVpnService extends VpnService {
                 .commit();
         android.util.Log.i("RahYabVpnService", "onStartCommand callback observed; action="
                 + String.valueOf(action) + ", requestId=" + String.valueOf(requestId));
+        android.content.SharedPreferences pendingStart =
+                getSharedPreferences(PENDING_START_PREFS, MODE_PRIVATE);
+        // Read before claimStartRequest consumes the persisted request.
+        String pendingProfilesJson = ACTION_START.equals(action) && requestId != null
+                && requestId.equals(pendingStart.getString(PENDING_START_ID, null))
+                ? pendingStart.getString(PENDING_START_PROFILES, null) : null;
         if (ACTION_START.equals(action)
                 && (requestId == null || !claimStartRequest(requestId))) {
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
@@ -350,7 +374,9 @@ public final class RahYabVpnService extends VpnService {
                     .putString("session_start_result", "درخواست شروع نشست در حال آماده‌سازی است…")
                     .apply();
             final String profile = intent.getStringExtra(EXTRA_PROFILE);
-            final ArrayList<String> profiles = intent.getStringArrayListExtra(EXTRA_PROFILES);
+            ArrayList<String> intentProfiles = intent.getStringArrayListExtra(EXTRA_PROFILES);
+            final ArrayList<String> profiles = intentProfiles != null
+                    ? intentProfiles : parsePendingProfiles(pendingProfilesJson);
             if ((profile == null || profile.trim().isEmpty())
                     && (profiles == null || profiles.isEmpty())) {
                 stopSelf(startId);
@@ -489,6 +515,8 @@ public final class RahYabVpnService extends VpnService {
                     return;
                 }
                 stopNativeSession();
+                previousHardTransportError = null;
+                attemptHardFailure = null;
                 attemptSignal = signal;
                 result = OpenVpn3Bridge.startSession(profile);
             }
@@ -524,6 +552,7 @@ public final class RahYabVpnService extends VpnService {
             final boolean cancelled = isSessionCancelled();
             String attemptOutcome = cancelled ? "CANCELLED_BY_STOP_OR_SERVICE"
                     : attemptConnected ? "OPENVPN_CONNECTED_EVENT"
+                    : attemptHardFailure != null ? "REPEATED_TRANSPORT_" + attemptHardFailure
                     : callbackReceived ? "NATIVE_CALLBACK_WITHOUT_CONNECTED"
                     : "NATIVE_CALLBACK_TIMEOUT";
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
@@ -1168,6 +1197,8 @@ public final class RahYabVpnService extends VpnService {
             if (isSessionCancelled()) return false;
             stopNativeSession();
             attemptConnected = false;
+            previousHardTransportError = null;
+            attemptHardFailure = null;
             attemptSignal = signal;
             result = OpenVpn3Bridge.startSession(profile);
         }
@@ -1471,12 +1502,7 @@ public final class RahYabVpnService extends VpnService {
                 return;
             }
             try {
-                org.json.JSONArray json = new org.json.JSONArray(profilesJson);
-                ArrayList<String> profiles = new ArrayList<>();
-                for (int i = 0; i < json.length(); i++) {
-                    String item = json.optString(i, "");
-                    if (!item.trim().isEmpty()) profiles.add(item);
-                }
+                ArrayList<String> profiles = parsePendingProfiles(profilesJson);
                 diagnosticsNow.edit().putInt("service_recovery_profile_count",
                         profiles.size()).commit();
                 if (profiles.isEmpty()) {
@@ -1857,7 +1883,19 @@ public final class RahYabVpnService extends VpnService {
         diagnostics.edit().putString("native_last_event", detail)
                 .putString("native_event_history", nextHistory).apply();
         CountDownLatch waiting = attemptSignal;
-        if (waiting != null) {
+        if (waiting != null && waiting.getCount() != 0L) {
+            if ("CONNECTING".equals(name)) previousHardTransportError = null;
+            if ("CORE_LOG".equals(name) && lowerInfo.startsWith("transport error: tcp connect error")
+                    && ("NO_ROUTE".equals(failureClass) || "CONNECTION_REFUSED".equals(failureClass))) {
+                // Let OpenVPN retry once. Only skip early when the same TCP
+                // endpoint reports the same hard failure again.
+                if (lowerInfo.equals(previousHardTransportError)) {
+                    attemptHardFailure = failureClass;
+                    attemptConnected = false;
+                    waiting.countDown();
+                }
+                previousHardTransportError = lowerInfo;
+            }
             if ("CONNECTED".equals(name) && !error && !fatal) {
                 attemptConnected = true;
                 waiting.countDown();

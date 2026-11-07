@@ -1254,9 +1254,9 @@ public class MainActivity extends Activity {
                 service.setAction(RahYabVpnService.ACTION_START);
                 ArrayList<String> launchProfiles = new ArrayList<>(pendingOpenVpnProfiles);
                 String requestId = "rah-" + System.currentTimeMillis();
-                service.putStringArrayListExtra(RahYabVpnService.EXTRA_PROFILES, launchProfiles);
                 service.putExtra(RahYabVpnService.EXTRA_REQUEST_ID, requestId);
                 try {
+                    // Profiles stay in local storage so the start intent stays small.
                     // Start a fresh diagnostic attempt so old service/JNI events
                     // cannot be mistaken for the current launch.
                     android.content.SharedPreferences diagnostics =
