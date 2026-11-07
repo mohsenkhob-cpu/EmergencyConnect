@@ -236,13 +236,46 @@ jobs:
     if: github.ref == 'refs/heads/rahyab-validation'
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Wait for the x86_64 OpenVPN library
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 90); do
+            status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/42316847954" --jq '.conclusion // "pending"')"
+            case "$status" in
+              success) exit 0 ;;
+              pending) sleep 15 ;;
+              *) echo "x86_64 OpenVPN build ended with $status"; exit 1 ;;
+            esac
+          done
+          echo "Timed out waiting for x86_64 OpenVPN"
+          exit 1
       - uses: actions/download-artifact@v4
         with:
-          name: RahYab-Next-debug
-          path: device-test
+          github-token: ${{ github.token }}
+          run-id: 42316847954
+          name: RahYab-OpenVPN3-native-x86_64-compile-check
+          path: app/src/main/jniLibs/x86_64
+      - name: Build the x86_64 test APK
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+          test -s app/src/main/jniLibs/x86_64/libopenvpn3_jni.so
+          gradle --no-daemon -PemulatorAbi -PciVersionCode="$GITHUB_RUN_NUMBER" assembleDebug
+          "$SDK/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -Fx "native-code: 'x86_64'"
       - name: Boot Android emulator and run Smart Connect
         shell: bash
         run: |
@@ -263,8 +296,8 @@ jobs:
           timeout 240 bash -c 'until [[ "$(adb shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 3; done'
           adb shell input keyevent 82
           adb shell getprop ro.product.cpu.abilist | tee device-test-result.txt
-          grep -qw arm64-v8a device-test-result.txt
-          python3 scripts/check-smart-connect.py --authorize-emulator device-test/app-debug.apk | tee -a device-test-result.txt
+          grep -qw x86_64 device-test-result.txt
+          python3 scripts/check-smart-connect.py --authorize-emulator app/build/outputs/apk/debug/app-debug.apk | tee -a device-test-result.txt
       - name: Upload emulator test result
         if: always()
         uses: actions/upload-artifact@v4
