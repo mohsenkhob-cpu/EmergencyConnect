@@ -97,6 +97,15 @@ def main(apk, authorize_emulator):
         if stopped_values.get("connection_lamp_state") != "disconnected":
             raise SystemExit("FAIL: A cancelled discovery restarted the VPN.")
         print("PASS: Disconnect cancels discovery and delayed results.", flush=True)
+        adb("shell", "uiautomator", "dump", "/data/local/tmp/rahyab-ui.xml")
+        restart_ui = ET.fromstring(adb("shell", "cat", "/data/local/tmp/rahyab-ui.xml"))
+        restart_buttons = [node for node in restart_ui.iter("node")
+                           if node.get("text") == "اتصال هوشمند" and node.get("enabled") == "true"
+                           and node.get("package") == PACKAGE]
+        if len(restart_buttons) != 1:
+            raise SystemExit("FAIL: Smart Connect is unavailable after cancellation.")
+        x1, y1, x2, y2 = map(int, re.findall(r"\d+", restart_buttons[0].attrib["bounds"]))
+        connect_x, connect_y = str((x1 + x2) // 2), str((y1 + y2) // 2)
     adb("shell", "input", "tap", connect_x, connect_y)
     print("Tapped Smart Connect once. Accept the Android VPN prompt if shown.", flush=True)
     deadline = time.monotonic() + 600
