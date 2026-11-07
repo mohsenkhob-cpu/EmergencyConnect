@@ -8,19 +8,23 @@ if(NOT DEFINED VCPKG_INSTALLED_DIR)
   message(FATAL_ERROR "VCPKG_INSTALLED_DIR is required")
 endif()
 
-set(VCPKG_ANDROID_INCLUDE "${VCPKG_INSTALLED_DIR}/arm64-android/include")
+if(NOT VCPKG_TARGET_TRIPLET)
+  set(VCPKG_TARGET_TRIPLET "arm64-android")
+endif()
+
+set(VCPKG_ANDROID_INCLUDE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
 if(NOT EXISTS "${VCPKG_ANDROID_INCLUDE}/asio.hpp")
   message(FATAL_ERROR "Standalone Asio headers not found under ${VCPKG_ANDROID_INCLUDE}")
 endif()
 # OpenVPN's Findasio.cmake does not consistently discover the vcpkg
-# arm64-android include directory from CMAKE_PREFIX_PATH alone.
+# target triplet include directory from CMAKE_PREFIX_PATH alone.
 set(ASIO_INCLUDE_DIR "${VCPKG_ANDROID_INCLUDE}" CACHE PATH "Standalone Asio include directory" FORCE)
 # OpenVPN ships a Findlz4.cmake module that uses the legacy LZ4_* variables.
 # Point it explicitly at the pinned vcpkg Android release artifacts.
 set(LZ4_INCLUDE_DIR "${VCPKG_ANDROID_INCLUDE}" CACHE PATH "LZ4 include directory" FORCE)
-set(LZ4_LIBRARY "${VCPKG_INSTALLED_DIR}/arm64-android/lib/liblz4.a" CACHE FILEPATH "LZ4 static library" FORCE)
+set(LZ4_LIBRARY "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/liblz4.a" CACHE FILEPATH "LZ4 static library" FORCE)
 # OpenVPN uses find_package(fmt); vcpkg installs its config under share/fmt.
-set(fmt_DIR "${VCPKG_INSTALLED_DIR}/arm64-android/share/fmt" CACHE PATH "fmt package config directory" FORCE)
+set(fmt_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/fmt" CACHE PATH "fmt package config directory" FORCE)
 if(NOT EXISTS "${fmt_DIR}/fmt-config.cmake" AND NOT EXISTS "${fmt_DIR}/fmtConfig.cmake")
   message(FATAL_ERROR "Pinned Android fmt CMake package was not found under ${fmt_DIR}")
 endif()
@@ -64,7 +68,7 @@ target_include_directories(openvpn3_jni PRIVATE
   "${VCPKG_ANDROID_INCLUDE}"
 )
 target_link_directories(openvpn3_jni PRIVATE
-  "${VCPKG_INSTALLED_DIR}/arm64-android/lib"
+  "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib"
 )
 # add_core_dependencies() uses the plain target_link_libraries signature.
 # Keep this target's remaining link additions on the same signature.
