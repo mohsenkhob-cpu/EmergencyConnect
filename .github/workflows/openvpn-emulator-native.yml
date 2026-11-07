@@ -1,0 +1,111 @@
+name: Build OpenVPN x86_64 for emulator validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - rahyab-validation
+    paths:
+      - "overlay/native/**"
+      - ".github/workflows/openvpn-emulator-native.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rahyab-openvpn-emulator-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-x86_64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout RahYab
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned OpenVPN 3 source
+        uses: actions/checkout@v4
+        with:
+          repository: OpenVPN/openvpn3
+          ref: 0abc8313b8fe5f63dbebc10d53094952957845d9
+          path: openvpn3
+          fetch-depth: 1
+
+      - name: Locate Android SDK tools
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager was not found under $SDK_ROOT/cmdline-tools"
+            exit 1
+          fi
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+
+      - name: Install Android SDK and NDK packages
+        run: |
+          yes | "$SDKMANAGER" --licenses
+          "$SDKMANAGER" "platform-tools"
+          "$SDKMANAGER" "platforms;android-35"
+          "$SDKMANAGER" "build-tools;35.0.0"
+          "$SDKMANAGER" "ndk;27.2.12479018"
+          "$SDKMANAGER" "cmake;3.31.6"
+
+      - name: Set up vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Verify pinned upstream and dependency overlay
+        run: |
+          test "$(git -C openvpn3 rev-parse HEAD)" = "0abc8313b8fe5f63dbebc10d53094952957845d9"
+          test -f openvpn3/deps/vcpkg-ports/asio/portfile.cmake
+          test -f overlay/native/vcpkg.json
+          test -f overlay/native/android-jni/CMakeLists.txt
+
+      - name: Build pinned Android dependencies
+        run: |
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root="$GITHUB_WORKSPACE/overlay/native" \
+            --x-install-root="$GITHUB_WORKSPACE/overlay/native/vcpkg_installed" \
+            --triplet=x64-android \
+            --host-triplet=x64-linux \
+            --overlay-ports="$GITHUB_WORKSPACE/openvpn3/deps/vcpkg-ports" \
+            --no-print-usage
+
+      - name: Configure OpenVPN 3 JNI for x86_64
+        run: |
+          cmake -S overlay/native/android-jni -B build/openvpn3-x86_64 \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-android \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/overlay/native/vcpkg_installed" \
+            -DOPENVPN3_SOURCE_DIR="$GITHUB_WORKSPACE/openvpn3" \
+            -DANDROID_ABI=x86_64 \
+            -DANDROID_PLATFORM=26 \
+            -DCMAKE_ANDROID_NDK="$ANDROID_NDK_HOME" \
+            -DCMAKE_ANDROID_ARCH_ABI=x86_64 \
+            -DCMAKE_SYSTEM_VERSION=26
+
+      - name: Compile OpenVPN 3 JNI shared library
+        run: cmake --build build/openvpn3-x86_64 --parallel 2
+
+      - name: Verify native library ABI and exported JNI entry points
+        run: |
+          LIB="build/openvpn3-x86_64/libopenvpn3_jni.so"
+          test -s "$LIB"
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$LIB" | grep -q "Advanced Micro Devices X86-64"
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D "$LIB" | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession"
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D "$LIB" | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStopSession"
+
+      - name: Upload native compile artifact (not an APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: RahYab-OpenVPN3-native-x86_64-compile-check
+          path: build/openvpn3-x86_64/libopenvpn3_jni.so
+          if-no-files-found: error
