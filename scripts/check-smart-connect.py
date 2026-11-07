@@ -69,8 +69,35 @@ def main(apk, authorize_emulator):
         packages = sorted({node.get("package", "") for node in ui.iter("node")})
         print(adb("logcat", "-d", "-b", "crash", "-t", "80"), flush=True)
         raise SystemExit(f"Expected one enabled Smart Connect button. Visible packages: {packages}")
+    try:
+        initial = ET.fromstring(adb("shell", "run-as", PACKAGE, "cat", DIAGNOSTICS))
+        initial_values = {node.get("name"): node.text for node in initial}
+    except subprocess.CalledProcessError:
+        initial_values = {}
+    if initial_values.get("service_launch_request_id"):
+        raise SystemExit("FAIL: Opening the app started a VPN request without a tap.")
     left, top, right, bottom = map(int, re.findall(r"\d+", buttons[0].attrib["bounds"]))
-    adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
+    connect_x, connect_y = str((left + right) // 2), str((top + bottom) // 2)
+    if authorize_emulator:
+        # Regression: a discovery response arriving after Disconnect must not
+        # start the VPN. Exercise the normal visible buttons on the emulator.
+        adb("shell", "input", "tap", connect_x, connect_y)
+        adb("shell", "uiautomator", "dump", "/data/local/tmp/rahyab-ui.xml")
+        cancel_ui = ET.fromstring(adb("shell", "cat", "/data/local/tmp/rahyab-ui.xml"))
+        stop_buttons = [node for node in cancel_ui.iter("node")
+                        if node.get("text") == "قطع اتصال" and node.get("enabled") == "true"
+                        and node.get("package") == PACKAGE]
+        if len(stop_buttons) != 1:
+            raise SystemExit("FAIL: Disconnect is unavailable during discovery.")
+        x1, y1, x2, y2 = map(int, re.findall(r"\d+", stop_buttons[0].attrib["bounds"]))
+        adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
+        time.sleep(35)
+        stopped = ET.fromstring(adb("shell", "run-as", PACKAGE, "cat", DIAGNOSTICS))
+        stopped_values = {node.get("name"): node.text for node in stopped}
+        if stopped_values.get("connection_lamp_state") != "disconnected":
+            raise SystemExit("FAIL: A cancelled discovery restarted the VPN.")
+        print("PASS: Disconnect cancels discovery and delayed results.", flush=True)
+    adb("shell", "input", "tap", connect_x, connect_y)
     print("Tapped Smart Connect once. Accept the Android VPN prompt if shown.", flush=True)
     deadline = time.monotonic() + 600
     while time.monotonic() < deadline:
