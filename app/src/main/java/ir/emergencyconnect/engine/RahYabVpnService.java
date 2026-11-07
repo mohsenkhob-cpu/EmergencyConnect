@@ -1297,11 +1297,6 @@ public final class RahYabVpnService extends VpnService {
 
         ArrayList<String> profiles = autoProfiles;
         if (profiles == null || profiles.isEmpty()) profiles = new ArrayList<>();
-        String bestProfile = null;
-        String bestEndpoint = "";
-        long bestLatency = Long.MAX_VALUE;
-        long bestSpeed = -1L;
-        double bestScore = Double.MAX_VALUE;
         int tested = 0;
         int count = profiles.size();
         int start = count == 0 ? 0 : Math.max(0, nextAutoIndex % count);
@@ -1332,48 +1327,37 @@ public final class RahYabVpnService extends VpnService {
                 synchronized (nativeSessionLock) { stopNativeSession(); }
                 continue;
             }
+            Network measuredVpn = activeVpnNetwork();
             int stable = measureTunnelStability();
             long latency = measureTunnelLatencyMs();
             long speed = measureTunnelDownloadKbps();
-            if (stable < 4 || latency < 0L) {
+            if (measuredVpn == null || !measuredVpn.equals(activeVpnNetwork())
+                    || stable < 4 || latency < 0L) {
                 appendAutoHistory("AUTO_FAILOVER_CANDIDATE_FAILED",
                         endpoint + "؛ کیفیت کافی نبود؛ پایداری " + stable
                                 + "/5 و تأخیر " + latency + "ms");
                 synchronized (nativeSessionLock) { stopNativeSession(); }
                 continue;
             }
-            double score = latency + (5 - stable) * 250.0
-                    + (speed > 0 ? 1000.0 / Math.max(0.1, speed / 1000.0) : 0.0);
-            if (score < bestScore) {
-                bestScore = score;
-                bestProfile = candidate;
-                bestEndpoint = endpoint;
-                bestLatency = latency;
-                bestSpeed = speed;
-            }
-            synchronized (nativeSessionLock) { stopNativeSession(); }
-        }
-
-        if (isSessionCancelled()) return;
-        if (bestProfile != null && connectMeasuredProfile(bestProfile)
-                && verifyTunnelTrafficForFailover(previousExitIp, true)
-                && measureTunnelStability() >= 4) {
+            if (isSessionCancelled()) return;
+            // Keep the proven candidate alive; comparing more relays used to
+            // tear this tunnel down and require a second handshake.
             autoConnected = true;
-            activeAutoProfile = bestProfile;
-            activeTunnelLatencyMs = bestLatency;
-            activeTunnelThroughputKbps = bestSpeed;
+            activeAutoProfile = candidate;
+            activeTunnelLatencyMs = latency;
+            activeTunnelThroughputKbps = speed;
             nextAutoIndex = count == 0 ? 0
-                    : (profiles.indexOf(bestProfile) + 1) % count;
-            rememberSuccessfulRelay(bestEndpoint);
-            setServerTestStatus(bestEndpoint, "connected");
+                    : (profiles.indexOf(candidate) + 1) % count;
+            rememberSuccessfulRelay(endpoint);
+            setServerTestStatus(endpoint, "connected");
             setLampState("connected");
             appendAutoHistory("AUTO_FAILOVER_SUCCESS",
-                    "اتصال به سرور جایگزین " + bestEndpoint
-                            + " تأیید شد؛ تأخیر " + bestLatency + "ms؛ سرعت "
-                            + (bestSpeed > 0 ? bestSpeed + "kbps" : "نامشخص"));
-            updateStatus("سرور جایگزین انتخاب شد — " + bestEndpoint
-                    + "؛ تأخیر " + bestLatency + " ms"
-                    + (bestSpeed > 0 ? "؛ دریافت " + bestSpeed + " kbps" : ""));
+                    "اتصال به سرور جایگزین " + endpoint
+                            + " تأیید شد؛ تأخیر " + latency + "ms؛ سرعت "
+                            + (speed > 0 ? speed + "kbps" : "نامشخص"));
+            updateStatus("سرور جایگزین انتخاب شد — " + endpoint
+                    + "؛ تأخیر " + latency + " ms"
+                    + (speed > 0 ? "؛ دریافت " + speed + " kbps" : ""));
             monitorBadSamples = 0;
             startQualityMonitor();
             return;
