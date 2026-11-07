@@ -252,7 +252,7 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in $(seq 1 90); do
-            status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/42316847954" --jq '.conclusion // "pending"')"
+            status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/42317604466" --jq '.conclusion // "pending"')"
             case "$status" in
               success) exit 0 ;;
               pending) sleep 15 ;;
@@ -264,7 +264,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
-          run-id: 42316847954
+          run-id: 42317604466
           name: RahYab-OpenVPN3-native-x86_64-compile-check
           path: app/src/main/jniLibs/x86_64
       - name: Build the x86_64 test APK
