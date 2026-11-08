@@ -35,6 +35,8 @@ jobs:
           TEST_CLASSES="$(mktemp -d)"
           javac -d "$TEST_CLASSES" app/src/main/java/com/rahyab/next/VpnGateProvider.java scripts/tests/ProviderNetworkTest.java
           java -cp "$TEST_CLASSES" com.rahyab.next.ProviderNetworkTest
+      - name: Verify first-packet handshake timeout regression
+        run: python3 scripts/tests/check-attempt-response.py
       - name: Verify VPN quality network isolation
         run: python3 scripts/tests/check-quality-network.py
       - name: Locate Android SDK tools

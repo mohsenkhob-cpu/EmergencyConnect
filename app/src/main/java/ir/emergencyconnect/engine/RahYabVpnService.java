@@ -49,14 +49,12 @@ public final class RahYabVpnService extends VpnService {
     private static final long PENDING_START_MAX_AGE_MS = 90_000L;
     // Public VPN Gate relays often do not answer at all. Keep each candidate
     // bounded so one dead relay cannot stall a user-initiated smart search.
-    // Public relays can remain in CONNECTING during a slow TLS handshake.
-    // Allow up to 22 seconds for a responding handshake; silent transports
-    // have a shorter allowance. Search also has count and elapsed-time limits.
-    private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 22;
-    private static final long AUTO_NO_PROGRESS_TIMEOUT_SECONDS = 10;
+    // CONNECTING in the pinned core means its first incoming transport packet,
+    // not merely a locally sent handshake. Allow responding peers a bounded
+    // handshake window; never treat that unauthenticated packet as success.
     private static final long AUTO_SEARCH_BUDGET_MS = 180_000L;
     private volatile long autoSearchStartedElapsedMs;
-    private volatile boolean attemptHandshakeStarted;
+    private volatile boolean attemptPeerPacketReceived;
     private String autoSearchBaselineExitIp;
     private boolean autoSearchBaselineCaptured;
     // Connected-session quality supervision. A single bad sample never triggers a switch.
@@ -542,7 +540,7 @@ public final class RahYabVpnService extends VpnService {
                     return;
                 }
                 stopNativeSession();
-                attemptHandshakeStarted = false;
+                attemptPeerPacketReceived = false;
                 previousHardTransportError = null;
                 attemptHardFailure = null;
                 attemptSignal = signal;
@@ -582,7 +580,8 @@ public final class RahYabVpnService extends VpnService {
                     : attemptConnected ? "OPENVPN_CONNECTED_EVENT"
                     : attemptHardFailure != null ? "REPEATED_TRANSPORT_" + attemptHardFailure
                     : callbackReceived ? "NATIVE_CALLBACK_WITHOUT_CONNECTED"
-                    : "NATIVE_CALLBACK_TIMEOUT";
+                    : attemptPeerPacketReceived ? "PEER_RESPONDED_HANDSHAKE_TIMEOUT"
+                    : "NO_PEER_RESPONSE_TIMEOUT";
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("auto_last_attempt_endpoint", endpoint)
                     .putString("auto_last_attempt_protocol", profileProtocol(profile))
@@ -592,6 +591,10 @@ public final class RahYabVpnService extends VpnService {
                     .putString("auto_last_attempt_connected_event", String.valueOf(attemptConnected))
                     .putString("auto_last_attempt_callback_received",
                             String.valueOf(callbackReceived && !cancelled))
+                    .putString("auto_last_attempt_peer_response_received",
+                            String.valueOf(attemptPeerPacketReceived))
+                    .putString("auto_last_attempt_wait_limit_ms",
+                            String.valueOf(OpenVpnAttemptPolicy.timeoutMillis(attemptPeerPacketReceived)))
                     .putString("auto_last_attempt_cancelled", String.valueOf(cancelled))
                     .putString("auto_current_wait_state", attemptOutcome)
                     .commit();
@@ -779,9 +782,8 @@ public final class RahYabVpnService extends VpnService {
         long started = System.nanoTime();
         while (true) {
             if (signal.await(100, TimeUnit.MILLISECONDS)) return true;
-            long limit = attemptHandshakeStarted ? AUTO_ATTEMPT_TIMEOUT_SECONDS
-                    : AUTO_NO_PROGRESS_TIMEOUT_SECONDS;
-            if (System.nanoTime() - started >= TimeUnit.SECONDS.toNanos(limit)) return false;
+            long limitMillis = OpenVpnAttemptPolicy.timeoutMillis(attemptPeerPacketReceived);
+            if (System.nanoTime() - started >= TimeUnit.MILLISECONDS.toNanos(limitMillis)) return false;
         }
     }
 
@@ -1279,7 +1281,7 @@ public final class RahYabVpnService extends VpnService {
             if (isSessionCancelled()) return false;
             stopNativeSession();
             attemptConnected = false;
-            attemptHandshakeStarted = false;
+            attemptPeerPacketReceived = false;
             previousHardTransportError = null;
             attemptHardFailure = null;
             attemptSignal = signal;
@@ -1905,7 +1907,7 @@ public final class RahYabVpnService extends VpnService {
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         String lowerInfo = safeInfo.toLowerCase(java.util.Locale.ROOT);
         String phase = "WAIT".equals(name) ? "TRANSPORT_WAIT"
-                : "CONNECTING".equals(name) ? "LOCAL_HANDSHAKE_SENT"
+                : "CONNECTING".equals(name) ? "FIRST_TRANSPORT_PACKET_RECEIVED"
                 : isPeerHandshakeProgress(name, lowerInfo) ? "PEER_TLS_OR_CONFIG_RECEIVED"
                 : "CONNECTED".equals(name) ? "TUNNEL_CONNECTED_NEEDS_HTTPS_VERIFICATION" : null;
         if (phase != null) diagnostics.edit().putString("native_attempt_phase",
@@ -1959,10 +1961,12 @@ public final class RahYabVpnService extends VpnService {
         CountDownLatch waiting = attemptSignal;
         if (waiting != null && waiting.getCount() != 0L) {
             if ("CONNECTING".equals(name)) previousHardTransportError = null;
-            // CONNECTING is emitted when sending our own handshake, even
-            // when the peer never answers. Extend the deadline only after
-            // authenticated TLS/configuration progress from the peer.
-            if (isPeerHandshakeProgress(name, lowerInfo)) attemptHandshakeStarted = true;
+            // OpenVPN 3 cliproto.hpp (pinned 0abc8313): CONNECTING is
+            // emitted inside transport_recv() on the first incoming packet.
+            // It is response evidence, not authenticated TLS or usable internet.
+            if (OpenVpnAttemptPolicy.isPeerResponseEvent(name, lowerInfo)) {
+                attemptPeerPacketReceived = true;
+            }
             if ("CORE_LOG".equals(name) && lowerInfo.startsWith("transport error: tcp connect error")
                     && ("NO_ROUTE".equals(failureClass) || "CONNECTION_REFUSED".equals(failureClass))) {
                 // Let OpenVPN retry once. Only skip early when the same TCP

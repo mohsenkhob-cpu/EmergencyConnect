@@ -302,8 +302,12 @@ public class MainActivity extends Activity {
                 prefs.getString("auto_last_attempt_outcome", ""));
         appendReportSection(report, "دریافت رویداد اتصال در آخرین تلاش",
                 prefs.getString("auto_last_attempt_connected_event", ""));
-        appendReportSection(report, "دریافت callback در آخرین تلاش",
+        appendReportSection(report, "دریافت نتیجه نهایی موتور در آخرین تلاش",
                 prefs.getString("auto_last_attempt_callback_received", ""));
+        appendReportSection(report, "دریافت بسته ورودی در آخرین تلاش (تأیید TLS نیست)",
+                prefs.getString("auto_last_attempt_peer_response_received", ""));
+        appendReportSection(report, "مهلت تلاش آخر برحسب میلی‌ثانیه",
+                prefs.getString("auto_last_attempt_wait_limit_ms", ""));
         appendReportSection(report, "سرور در حال آزمایش",
                 prefs.getString("auto_current_endpoint", ""));
         appendReportSection(report, "پروتکل در حال آزمایش (از پروفایل)",
@@ -1160,6 +1164,8 @@ public class MainActivity extends Activity {
                 .remove("auto_last_attempt_outcome")
                 .remove("auto_last_attempt_connected_event")
                 .remove("auto_last_attempt_callback_received")
+                .remove("auto_last_attempt_peer_response_received")
+                .remove("auto_last_attempt_wait_limit_ms")
                 .remove("auto_current_endpoint")
                 .remove("auto_current_protocol")
                 .remove("auto_current_started_at")
@@ -1410,6 +1416,8 @@ public class MainActivity extends Activity {
                             .remove("auto_last_attempt_outcome")
                             .remove("auto_last_attempt_connected_event")
                             .remove("auto_last_attempt_callback_received")
+                            .remove("auto_last_attempt_peer_response_received")
+                            .remove("auto_last_attempt_wait_limit_ms")
                             .remove("auto_current_endpoint")
                             .remove("auto_current_protocol")
                             .remove("auto_current_started_at")
