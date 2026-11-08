@@ -141,6 +141,7 @@ public final class VpnGateProvider {
     /** Must be called from a worker thread, never from Android's main thread. */
     public interface ConnectionFactory {
         java.net.URLConnection open(URL url) throws IOException;
+        default void onResult(String host, String result) { }
     }
 
     public static Result fetch() throws IOException {
@@ -304,10 +305,26 @@ public final class VpnGateProvider {
                 throw new IOException("پاسخ HTTP " + code + " از " + new URL(address).getHost());
             }
             try (InputStream input = connection.getInputStream()) {
-                return readLimited(input, maxBytes);
+                byte[] bytes = readLimited(input, maxBytes);
+                recordSourceResult(connections, address, "HTTPS_200 bytes=" + bytes.length);
+                return bytes;
             }
+        } catch (IOException error) {
+            String outcome = error instanceof java.net.UnknownHostException ? "DNS_FAILED"
+                    : error instanceof java.net.SocketTimeoutException ? "TIMEOUT"
+                    : "IO_FAILED:" + error.getClass().getSimpleName();
+            recordSourceResult(connections, address, outcome);
+            throw error;
         } finally {
             if (connection != null) connection.disconnect();
+        }
+    }
+
+    private static void recordSourceResult(ConnectionFactory connections, String address, String result) {
+        try {
+            connections.onResult(new URL(address).getHost(), result);
+        } catch (RuntimeException | IOException ignored) {
+            // Diagnostic observers must never change discovery behavior.
         }
     }
 

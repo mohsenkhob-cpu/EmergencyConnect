@@ -525,6 +525,7 @@ public final class RahYabVpnService extends VpnService {
             // Clear the previous candidate's transport observation so a
             // missing event cannot make the report display a stale TCP/UDP value.
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("native_attempt_phase", "PREPARING_NEW_ATTEMPT")
                     .remove("native_observed_transport_protocol")
                     .remove("native_observed_transport_at")
                     .remove("native_observed_transport_detail")
@@ -1890,6 +1891,12 @@ public final class RahYabVpnService extends VpnService {
         android.content.SharedPreferences diagnostics =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         String lowerInfo = safeInfo.toLowerCase(java.util.Locale.ROOT);
+        String phase = "WAIT".equals(name) ? "TRANSPORT_WAIT"
+                : "CONNECTING".equals(name) ? "LOCAL_HANDSHAKE_SENT"
+                : isPeerHandshakeProgress(name, lowerInfo) ? "PEER_TLS_OR_CONFIG_RECEIVED"
+                : "CONNECTED".equals(name) ? "TUNNEL_CONNECTED_NEEDS_HTTPS_VERIFICATION" : null;
+        if (phase != null) diagnostics.edit().putString("native_attempt_phase",
+                timestamp + " | " + phase).apply();
         String failureClass = classifyNativeFailure(name, lowerInfo, error || fatal);
         boolean disconnectEvent = "DISCONNECTED".equals(name) || "EXITING".equals(name);
         // Native stop() itself emits DISCONNECTED. Suppress that lifecycle callback
@@ -2009,6 +2016,10 @@ public final class RahYabVpnService extends VpnService {
 
     /** Protect transport sockets from being routed into their own TUN. */
     public boolean protectTransportSocket(int socketFd) {
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("transport_network_snapshot",
+                        formatDiagnosticTime(System.currentTimeMillis()) + "\n"
+                                + com.rahyab.next.NetworkDiagnostics.snapshot(this)).apply();
         return protect(socketFd);
     }
 

@@ -205,6 +205,16 @@ public class MainActivity extends Activity {
                 prefs.getString("discovery_attempt_started_at", ""));
         appendReportSection(report, "نتیجه آخرین جست‌وجوی هوشمند",
                 prefs.getString("discovery_attempt_result", ""));
+        appendReportSection(report, "شبکه انتخاب‌شده برای دریافت فهرست",
+                prefs.getString("discovery_network", ""));
+        appendReportSection(report, "وضعیت شبکه‌ها هنگام دریافت فهرست",
+                prefs.getString("discovery_network_snapshot", ""));
+        appendReportSection(report, "نتیجه منابع دریافت فهرست",
+                prefs.getString("discovery_source_results", ""));
+        appendReportSection(report, "وضعیت شبکه‌ها هنگام ایجاد سوکت VPN",
+                prefs.getString("transport_network_snapshot", ""));
+        appendReportSection(report, "آخرین مرحله تلاش اتصال موتور",
+                prefs.getString("native_attempt_phase", ""));
         appendReportSection(report, "رویدادهای موتور OpenVPN",
                 prefs.getString("native_event_history", ""));
         appendReportSection(report, "آخرین وضعیت سرویس",
@@ -1126,6 +1136,11 @@ public class MainActivity extends Activity {
                         new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
                                 java.util.Locale.US).format(new java.util.Date()))
                 .putString("discovery_attempt_result", "جست‌وجو آغاز شد")
+                .remove("discovery_network")
+                .remove("discovery_network_snapshot")
+                .remove("discovery_source_results")
+                .remove("transport_network_snapshot")
+                .remove("native_attempt_phase")
                 .remove("native_last_event")
                 .remove("native_event_history")
                 .remove("native_last_event_at")
@@ -1200,6 +1215,19 @@ public class MainActivity extends Activity {
         });
     }
 
+    private synchronized void recordDiscoverySource(int generation, String entry) {
+        if (generation != smartSearchGeneration) return;
+        android.content.SharedPreferences diagnostics = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        String history = diagnostics.getString("discovery_source_results", "");
+        String stamp = new java.text.SimpleDateFormat("HH:mm:ss.SSS",
+                java.util.Locale.US).format(new java.util.Date());
+        String next = history + (history.isEmpty() ? "" : "\n") + stamp + " | " + entry;
+        String[] lines = next.split("\n");
+        if (lines.length > 20) next = String.join("\n",
+                java.util.Arrays.copyOfRange(lines, lines.length - 20, lines.length));
+        diagnostics.edit().putString("discovery_source_results", next).apply();
+    }
+
     private android.net.Network discoveryNetwork() {
         android.net.ConnectivityManager manager =
                 getSystemService(android.net.ConnectivityManager.class);
@@ -1238,7 +1266,17 @@ public class MainActivity extends Activity {
             try {
                 // Network.openConnection scopes both DNS and HTTPS to the same
                 // live non-VPN network, without binding the whole app process.
-                return VpnGateProvider.fetch(selected::openConnection);
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("discovery_network", NetworkDiagnostics.describe(this, selected))
+                        .putString("discovery_network_snapshot", NetworkDiagnostics.snapshot(this)).apply();
+                return VpnGateProvider.fetch(new VpnGateProvider.ConnectionFactory() {
+                    @Override public java.net.URLConnection open(java.net.URL url) throws java.io.IOException {
+                        return selected.openConnection(url);
+                    }
+                    @Override public void onResult(String host, String result) {
+                        recordDiscoverySource(generation, host + " | " + result);
+                    }
+                });
             } catch (java.io.IOException error) {
                 String message = error.getMessage() == null ? "" : error.getMessage();
                 boolean dnsFailed = message.contains("Unable to resolve host")

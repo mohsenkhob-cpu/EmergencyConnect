@@ -17,6 +17,23 @@ String manifest="{\"schema_version\":1,\"source_url\":\"https://www.vpngate.net/
 calls.clear();
 r=VpnGateProvider.fetch(u->{calls.add(u.toString());if(u.getHost().equals("www.vpngate.net"))throw new IOException("mock official unavailable");return new Response(u,u.getPath().endsWith("latest.json")?manifest.getBytes(StandardCharsets.UTF_8):body);});
 check(r.servers.size()==1&&calls.stream().anyMatch(v->v.endsWith("/data/vpngate.csv")));
-System.out.println("PASS: injected network handles official, mirror manifest and CSV; mirror hash validation retained.");
+List<String> observations=new java.util.concurrent.CopyOnWriteArrayList<>();
+try {
+ VpnGateProvider.fetch(new VpnGateProvider.ConnectionFactory(){
+  public URLConnection open(URL url)throws IOException {throw new UnknownHostException("test DNS");}
+  public void onResult(String host,String result){observations.add(host+" "+result);}
+ });
+ throw new AssertionError("DNS failure accepted");
+} catch(IOException expected) { }
+check(observations.size()==3 && observations.stream().allMatch(x->x.endsWith("DNS_FAILED")));
+r=VpnGateProvider.fetch(new VpnGateProvider.ConnectionFactory(){
+ public URLConnection open(URL u)throws IOException {
+  if(u.getHost().equals("www.vpngate.net"))return new Response(u,body);
+  throw new IOException("mock mirror");
+ }
+ public void onResult(String host,String result){throw new IllegalStateException("observer failure");}
+});
+check(r.servers.size()==1);
+System.out.println("PASS: network-scoped official/mirror fetch, hash validation, DNS classification, and observer failure isolation.");
 }}
 
