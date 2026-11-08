@@ -759,7 +759,7 @@ public class MainActivity extends Activity {
         setStatus("در حال دریافت فهرست سرورهای رایگان از منبع رسمی VPN Gate…");
         worker.execute(() -> {
             try {
-                VpnGateProvider.Result result = fetchSmartProfilesOnNetwork(generation);
+                VpnGateProvider.Result result = VpnGateProvider.fetch();
                 runOnUiThread(() -> {
                     discoveryButton.setEnabled(true);
                     if (isFinishing() || isDestroyed()) return;
@@ -1263,7 +1263,7 @@ public class MainActivity extends Activity {
         publishDiscoveryStatus("در حال جستجوی سرورهای رایگان و آماده‌سازی آزمون اتصال…", "searching");
         worker.execute(() -> {
             try {
-                VpnGateProvider.Result result = VpnGateProvider.fetch();
+                VpnGateProvider.Result result = fetchSmartProfilesOnNetwork(generation);
                 ArrayList<String> profiles = new ArrayList<>();
                 java.util.HashSet<String> seen = new java.util.HashSet<>();
                 for (VpnGateProvider.Server server : result.servers) {
