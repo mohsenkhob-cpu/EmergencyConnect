@@ -208,7 +208,10 @@ public final class VpnGateProvider {
             throws IOException {
         byte[] indexBytes = fetchBytes(indexUrl, MAX_INDEX_BYTES,
                 CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, false, connections);
-        MirrorManifest manifest = parseMirrorManifest(new String(indexBytes, StandardCharsets.UTF_8));
+        String indexJson = new String(indexBytes, StandardCharsets.UTF_8);
+        MirrorManifest manifest = parseMirrorManifest(indexJson);
+        long ageMillis = validateMirrorFreshness(indexJson, System.currentTimeMillis());
+        recordSourceResult(connections, indexUrl, "MIRROR_FRESH age_minutes=" + ageMillis / 60_000L);
         byte[] csvBytes = fetchBytes(csvBase + manifest.commit + "/data/vpngate.csv", manifest.bytes,
                 CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, false, connections);
         verifyMirrorBytes(csvBytes, manifest);
@@ -219,6 +222,22 @@ public final class VpnGateProvider {
         }
         return new Result(parsed, csvBytes.length, MIRROR_LABEL
                 + "؛ شناسه داده: " + manifest.commit.substring(0, 8));
+    }
+
+
+    /** Reject stale third-party snapshots even when their size and hash still match. */
+    static long validateMirrorFreshness(String json, long nowMillis) throws IOException {
+        String fetchedAt = capture(json, "\"fetched_at\"\\s*:\\s*\"([^\"]+)\"");
+        try {
+            long fetchedMillis = java.time.Instant.parse(fetchedAt).toEpochMilli();
+            long ageMillis = Math.subtractExact(nowMillis, fetchedMillis);
+            if (ageMillis < -10L * 60L * 1000L || ageMillis > 6L * 60L * 60L * 1000L) {
+                throw new IOException("فهرست آینه قدیمی است یا زمان آن با ساعت دستگاه سازگار نیست");
+            }
+            return Math.max(0L, ageMillis);
+        } catch (java.time.DateTimeException | ArithmeticException error) {
+            throw new IOException("زمان دریافت فهرست آینه معتبر نیست", error);
+        }
     }
 
     static final class MirrorManifest {

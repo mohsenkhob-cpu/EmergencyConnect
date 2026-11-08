@@ -13,10 +13,23 @@ Set<String> calls=java.util.concurrent.ConcurrentHashMap.newKeySet();
 VpnGateProvider.Result r=VpnGateProvider.fetch(u->{calls.add(u.toString());if(u.getHost().equals("www.vpngate.net"))return new Response(u,body);throw new IOException("mock mirror");});
 check(r.servers.size()==1&&calls.contains("https://www.vpngate.net/api/iphone/"));
 String sha=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(body));
-String manifest="{\"schema_version\":1,\"source_url\":\"https://www.vpngate.net/api/iphone/\",\"data_commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"data/vpngate.csv\":{\"bytes\":"+body.length+",\"server_count\":1,\"sha256\":\""+sha+"\"}}";
+String manifest="{\"fetched_at\":\""+java.time.Instant.now()+"\",\"schema_version\":1,\"source_url\":\"https://www.vpngate.net/api/iphone/\",\"data_commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"data/vpngate.csv\":{\"bytes\":"+body.length+",\"server_count\":1,\"sha256\":\""+sha+"\"}}";
+long now = java.time.Instant.parse("2026-11-08T08:00:00Z").toEpochMilli();
+check(VpnGateProvider.validateMirrorFreshness("{\"fetched_at\":\"2026-11-08T07:00:00Z\"}", now) == 3_600_000L);
+for (String badTime : new String[]{"2026-11-08T01:59:59Z", "2026-11-08T08:10:01Z", "bad"}) {
+ try { VpnGateProvider.validateMirrorFreshness("{\"fetched_at\":\""+badTime+"\"}", now); throw new AssertionError("invalid age accepted"); }
+ catch(IOException expected) { }
+}
 calls.clear();
 r=VpnGateProvider.fetch(u->{calls.add(u.toString());if(u.getHost().equals("www.vpngate.net"))throw new IOException("mock official unavailable");return new Response(u,u.getPath().endsWith("latest.json")?manifest.getBytes(StandardCharsets.UTF_8):body);});
 check(r.servers.size()==1&&calls.stream().anyMatch(v->v.endsWith("/data/vpngate.csv")));
+calls.clear();
+String staleManifest=manifest.replaceFirst("\"fetched_at\":\"[^\"]+\"", "\"fetched_at\":\"2020-01-01T00:00:00Z\"");
+try {
+ VpnGateProvider.fetch(u->{calls.add(u.toString());if(u.getHost().equals("www.vpngate.net"))throw new IOException("mock official");return new Response(u,staleManifest.getBytes(StandardCharsets.UTF_8));});
+ throw new AssertionError("stale source accepted");
+} catch(IOException expected) { }
+check(calls.stream().noneMatch(v->v.endsWith("/data/vpngate.csv")));
 List<String> observations=new java.util.concurrent.CopyOnWriteArrayList<>();
 try {
  VpnGateProvider.fetch(new VpnGateProvider.ConnectionFactory(){
@@ -34,6 +47,6 @@ r=VpnGateProvider.fetch(new VpnGateProvider.ConnectionFactory(){
  public void onResult(String host,String result){throw new IllegalStateException("observer failure");}
 });
 check(r.servers.size()==1);
-System.out.println("PASS: network-scoped official/mirror fetch, hash validation, DNS classification, and observer failure isolation.");
+System.out.println("PASS: network-scoped sources, mirror hash/age/future-date checks, stale-source rejection before CSV, DNS classification, observer isolation.");
 }}
 

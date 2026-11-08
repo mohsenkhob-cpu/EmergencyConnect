@@ -804,6 +804,8 @@ public final class RahYabVpnService extends VpnService {
     }
 
     private int measureTunnelStability() {
+        Network measuredVpn = activeVpnNetwork();
+        if (measuredVpn == null || isSessionCancelled()) return 0;
         String[] probes = new String[] {
                 "https://connectivitycheck.gstatic.com/generate_204",
                 "https://cp.cloudflare.com/generate_204",
@@ -815,13 +817,15 @@ public final class RahYabVpnService extends VpnService {
         for (int i = 0; i < probes.length; i++) {
             HttpURLConnection connection = null;
             try {
-                connection = (HttpURLConnection) new URL(probes[i]).openConnection();
+                if (isSessionCancelled() || !measuredVpn.equals(activeVpnNetwork())) return 0;
+                connection = (HttpURLConnection) measuredVpn.openConnection(new URL(probes[i]), java.net.Proxy.NO_PROXY);
                 connection.setInstanceFollowRedirects(false);
                 connection.setConnectTimeout(3000);
                 connection.setReadTimeout(3000);
                 connection.setUseCaches(false);
                 connection.setRequestMethod("GET");
-                if (connection.getResponseCode() == 204) successes++;
+                if (connection.getResponseCode() == 204
+                        && measuredVpn.equals(activeVpnNetwork()) && !isSessionCancelled()) successes++;
             } catch (IOException | RuntimeException ignored) {
                 // A failed sample reduces the stability score.
             } finally {
@@ -836,7 +840,7 @@ public final class RahYabVpnService extends VpnService {
                 }
             }
         }
-        return successes;
+        return measuredVpn.equals(activeVpnNetwork()) && !isSessionCancelled() ? successes : 0;
     }
 
     /**
@@ -845,12 +849,14 @@ public final class RahYabVpnService extends VpnService {
      * Returns kilobits per second, or -1 when the probe is unavailable.
      */
     private long measureTunnelDownloadKbps() {
+        Network measuredVpn = activeVpnNetwork();
+        if (measuredVpn == null || isSessionCancelled()) return -1L;
         HttpURLConnection connection = null;
         long bytesRead = 0L;
         long startedAt = System.nanoTime();
         try {
             URL url = new URL("https://speed.cloudflare.com/__down?bytes=131072");
-            connection = (HttpURLConnection) url.openConnection();
+            connection = (HttpURLConnection) measuredVpn.openConnection(url, java.net.Proxy.NO_PROXY);
             connection.setInstanceFollowRedirects(false);
             connection.setConnectTimeout(5000);
             connection.setReadTimeout(6000);
@@ -863,11 +869,13 @@ public final class RahYabVpnService extends VpnService {
                 int count;
                 while ((count = input.read(buffer)) != -1) {
                     bytesRead += count;
+                    if (isSessionCancelled() || !measuredVpn.equals(activeVpnNetwork())) return -1L;
                     if (bytesRead >= 256L * 1024L) break;
                 }
             }
             long elapsedNanos = System.nanoTime() - startedAt;
-            if (bytesRead < 16L * 1024L || elapsedNanos <= 0L) return -1L;
+            if (bytesRead < 16L * 1024L || elapsedNanos <= 0L
+                    || !measuredVpn.equals(activeVpnNetwork()) || isSessionCancelled()) return -1L;
             double seconds = elapsedNanos / 1_000_000_000.0;
             return Math.max(1L, Math.round(bytesRead * 8.0 / seconds / 1000.0));
         } catch (IOException | RuntimeException ignored) {
@@ -882,6 +890,8 @@ public final class RahYabVpnService extends VpnService {
      * Returns the mean successful latency; at least two probes must succeed.
      */
     private long measureTunnelLatencyMs() {
+        Network measuredVpn = activeVpnNetwork();
+        if (measuredVpn == null || isSessionCancelled()) return -1L;
         String[] probes = new String[] {
                 "https://connectivitycheck.gstatic.com/generate_204",
                 "https://cp.cloudflare.com/generate_204",
@@ -893,13 +903,15 @@ public final class RahYabVpnService extends VpnService {
             HttpURLConnection connection = null;
             long startedAt = System.nanoTime();
             try {
-                connection = (HttpURLConnection) new URL(probe).openConnection();
+                if (isSessionCancelled() || !measuredVpn.equals(activeVpnNetwork())) return -1L;
+                connection = (HttpURLConnection) measuredVpn.openConnection(new URL(probe), java.net.Proxy.NO_PROXY);
                 connection.setInstanceFollowRedirects(false);
                 connection.setConnectTimeout(4500);
                 connection.setReadTimeout(4500);
                 connection.setUseCaches(false);
                 connection.setRequestMethod("GET");
-                if (connection.getResponseCode() == 204) {
+                if (connection.getResponseCode() == 204 && measuredVpn.equals(activeVpnNetwork())
+                        && !isSessionCancelled()) {
                     totalMs += TimeUnit.NANOSECONDS.toMillis(
                             System.nanoTime() - startedAt);
                     successes++;
@@ -910,7 +922,8 @@ public final class RahYabVpnService extends VpnService {
                 if (connection != null) connection.disconnect();
             }
         }
-        return successes >= 2 ? totalMs / successes : -1L;
+        return successes >= 2 && measuredVpn.equals(activeVpnNetwork())
+                && !isSessionCancelled() ? totalMs / successes : -1L;
     }
 
     /**
