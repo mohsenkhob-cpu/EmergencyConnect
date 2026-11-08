@@ -768,6 +768,12 @@ public final class RahYabVpnService extends VpnService {
      */
     // Give a responding TLS peer the full handshake allowance, while a
     // silent transport does not consume 22 seconds for every dead relay.
+    private static boolean isPeerHandshakeProgress(String name, String lowerInfo) {
+        return "GET_CONFIG".equals(name)
+                || ("CORE_LOG".equals(name)
+                && lowerInfo.startsWith("tls handshake: peer certificate:"));
+    }
+
     private boolean awaitAttemptSignal(CountDownLatch signal) throws InterruptedException {
         long started = System.nanoTime();
         while (true) {
@@ -1932,10 +1938,11 @@ public final class RahYabVpnService extends VpnService {
                 .putString("native_event_history", nextHistory).apply();
         CountDownLatch waiting = attemptSignal;
         if (waiting != null && waiting.getCount() != 0L) {
-            if ("CONNECTING".equals(name)) {
-                attemptHandshakeStarted = true;
-                previousHardTransportError = null;
-            }
+            if ("CONNECTING".equals(name)) previousHardTransportError = null;
+            // CONNECTING is emitted when sending our own handshake, even
+            // when the peer never answers. Extend the deadline only after
+            // authenticated TLS/configuration progress from the peer.
+            if (isPeerHandshakeProgress(name, lowerInfo)) attemptHandshakeStarted = true;
             if ("CORE_LOG".equals(name) && lowerInfo.startsWith("transport error: tcp connect error")
                     && ("NO_ROUTE".equals(failureClass) || "CONNECTION_REFUSED".equals(failureClass))) {
                 // Let OpenVPN retry once. Only skip early when the same TCP
