@@ -30,6 +30,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Verify discovery network routing regression
+        run: |
+          TEST_CLASSES="$(mktemp -d)"
+          javac -d "$TEST_CLASSES" app/src/main/java/com/rahyab/next/VpnGateProvider.java scripts/tests/ProviderNetworkTest.java
+          java -cp "$TEST_CLASSES" com.rahyab.next.ProviderNetworkTest
       - name: Locate Android SDK tools
         run: |
           echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"

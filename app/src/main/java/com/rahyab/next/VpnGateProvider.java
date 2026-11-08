@@ -139,16 +139,25 @@ public final class VpnGateProvider {
     }
 
     /** Must be called from a worker thread, never from Android's main thread. */
+    public interface ConnectionFactory {
+        java.net.URLConnection open(URL url) throws IOException;
+    }
+
     public static Result fetch() throws IOException {
-        return firstAvailable(VpnGateProvider::fetchOfficial,
-                () -> fetchMirror(MIRROR_INDEX_RAW, MIRROR_RAW_BASE),
-                () -> fetchMirror(MIRROR_INDEX_CDN, MIRROR_CDN_BASE),
+        return fetch(URL::openConnection);
+    }
+
+    /** Scope every source and manifest request to one caller-selected network. */
+    public static Result fetch(ConnectionFactory connections) throws IOException {
+        return firstAvailable(() -> fetchOfficial(connections),
+                () -> fetchMirror(MIRROR_INDEX_RAW, MIRROR_RAW_BASE, connections),
+                () -> fetchMirror(MIRROR_INDEX_CDN, MIRROR_CDN_BASE, connections),
                 25_000);
     }
 
-    private static Result fetchOfficial() throws IOException {
+    private static Result fetchOfficial(ConnectionFactory connections) throws IOException {
         byte[] body = fetchBytes(OFFICIAL_API, MAX_RESPONSE_BYTES, CONNECT_TIMEOUT_MS,
-                READ_TIMEOUT_MS, true);
+                READ_TIMEOUT_MS, true, connections);
         List<Server> parsed = parse(new String(body, StandardCharsets.UTF_8), "VPN Gate رسمی");
         if (parsed.isEmpty()) {
             throw new IOException("منبع رسمی پاسخ داد، اما پروفایل OpenVPN معتبری پیدا نشد");
@@ -194,13 +203,13 @@ public final class VpnGateProvider {
         }
     }
 
-    private static Result fetchMirror(String indexUrl, String csvBase)
+    private static Result fetchMirror(String indexUrl, String csvBase, ConnectionFactory connections)
             throws IOException {
         byte[] indexBytes = fetchBytes(indexUrl, MAX_INDEX_BYTES,
-                CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, false);
+                CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, false, connections);
         MirrorManifest manifest = parseMirrorManifest(new String(indexBytes, StandardCharsets.UTF_8));
         byte[] csvBytes = fetchBytes(csvBase + manifest.commit + "/data/vpngate.csv", manifest.bytes,
-                CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, false);
+                CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, false, connections);
         verifyMirrorBytes(csvBytes, manifest);
 
         List<Server> parsed = parse(new String(csvBytes, StandardCharsets.UTF_8), MIRROR_LABEL);
@@ -279,10 +288,10 @@ public final class VpnGateProvider {
     }
 
     private static byte[] fetchBytes(String address, int maxBytes, int connectTimeout,
-                                     int readTimeout, boolean followRedirects) throws IOException {
+                                     int readTimeout, boolean followRedirects, ConnectionFactory connections) throws IOException {
         HttpURLConnection connection = null;
         try {
-            connection = (HttpURLConnection) new URL(address).openConnection();
+            connection = (HttpURLConnection) connections.open(new URL(address));
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(connectTimeout);
             connection.setReadTimeout(readTimeout);

@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     private String pendingSingBoxJson;
     private ArrayList<String> pendingOpenVpnProfiles;
     // Main-thread generation invalidates every delayed discovery/permission callback.
-    private int smartSearchGeneration;
+    private volatile int smartSearchGeneration;
     private int pendingSmartSearchGeneration;
     private boolean smartSearchPending;
     private Button singBoxConnectButton;
@@ -759,7 +759,7 @@ public class MainActivity extends Activity {
         setStatus("در حال دریافت فهرست سرورهای رایگان از منبع رسمی VPN Gate…");
         worker.execute(() -> {
             try {
-                VpnGateProvider.Result result = VpnGateProvider.fetch();
+                VpnGateProvider.Result result = fetchSmartProfilesOnNetwork(generation);
                 runOnUiThread(() -> {
                     discoveryButton.setEnabled(true);
                     if (isFinishing() || isDestroyed()) return;
@@ -1198,6 +1198,59 @@ public class MainActivity extends Activity {
                 startOpenVpnService();
             }
         });
+    }
+
+    private android.net.Network discoveryNetwork() {
+        android.net.ConnectivityManager manager =
+                getSystemService(android.net.ConnectivityManager.class);
+        if (manager == null) return null;
+        android.net.Network active = manager.getActiveNetwork();
+        android.net.Network fallback = null;
+        for (android.net.Network network : manager.getAllNetworks()) {
+            android.net.NetworkCapabilities caps = manager.getNetworkCapabilities(network);
+            if (caps == null || !caps.hasCapability(
+                    android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    || caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) continue;
+            if (network.equals(active)) return network;
+            if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                fallback = network;
+            }
+        }
+        return fallback;
+    }
+
+    private VpnGateProvider.Result fetchSmartProfilesOnNetwork(int generation)
+            throws java.io.IOException, InterruptedException {
+        for (int retry = 0; retry < 2; retry++) {
+            long deadline = android.os.SystemClock.elapsedRealtime() + 8000L;
+            android.net.Network network;
+            do {
+                if (generation != smartSearchGeneration || Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedException("Discovery cancelled");
+                }
+                network = discoveryNetwork();
+                if (network != null) break;
+                Thread.sleep(200L);
+            } while (android.os.SystemClock.elapsedRealtime() < deadline);
+            if (network == null) throw new java.io.IOException(
+                    "شبکه اینترنت آماده نیست؛ پس از برقراری وای‌فای یا داده همراه دوباره تلاش کنید");
+            final android.net.Network selected = network;
+            try {
+                // Network.openConnection scopes both DNS and HTTPS to the same
+                // live non-VPN network, without binding the whole app process.
+                return VpnGateProvider.fetch(selected::openConnection);
+            } catch (java.io.IOException error) {
+                String message = error.getMessage() == null ? "" : error.getMessage();
+                boolean dnsFailed = message.contains("Unable to resolve host")
+                        || message.contains("No address associated with hostname");
+                if (retry != 0 || !dnsFailed) throw error;
+                if (generation != smartSearchGeneration) throw new InterruptedException("Discovery cancelled");
+                Thread.sleep(1200L);
+                // Re-select after a SIM/Wi-Fi transition rather than repeating
+                // against a network handle which may already have disappeared.
+            }
+        }
+        throw new java.io.IOException("دریافت فهرست در شبکه فعلی ناموفق بود");
     }
 
     private void startSmartOpenVpnSearch() {
