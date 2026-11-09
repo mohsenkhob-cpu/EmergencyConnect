@@ -109,7 +109,10 @@ class SingBoxVpnService : VpnService() {
         profile = requestedProfile
         recoveryCount = 0
         networkWaitSince = 0L
-        currentResolver = 0
+        currentResolver = when (runCatching {
+            JSONObject(requestedProfile).getJSONObject("dns").getJSONArray("servers")
+                .getJSONObject(0).getString("server")
+        }.getOrDefault("")) { "8.8.8.8" -> 1; "9.9.9.9" -> 2; else -> 0 }
         physicalNetwork()?.let { preferredPhysical = it; setUnderlyingNetworks(arrayOf(it)) }
         try {
             startForeground(notificationId, notification("در حال راه‌اندازی موتور VPN…"))

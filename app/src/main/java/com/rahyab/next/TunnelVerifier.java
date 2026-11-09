@@ -59,6 +59,7 @@ public final class TunnelVerifier {
         String[] urls = {IP_CHECK_URL, "https://www.gstatic.com/generate_204",
                 "https://cp.cloudflare.com/generate_204"};
         StringBuilder errors = new StringBuilder();
+        boolean lookupFailure = false;
         for (int i = 0; i < urls.length; i++) {
             if (Thread.currentThread().isInterrupted() || !vpn.equals(manager.getActiveNetwork()))
                 return Result.failure("آزمون لغو شد یا شبکه تغییر کرد");
@@ -79,6 +80,7 @@ public final class TunnelVerifier {
                 }
                 errors.append("HTTPS-").append(i + 1).append(":HTTP_").append(code).append(" ");
             } catch (Exception e) {
+                if (e instanceof java.net.UnknownHostException) lookupFailure = true;
                 errors.append("HTTPS-").append(i + 1).append(":").append(e.getClass().getSimpleName()).append(" ");
             } finally { if (c != null) c.disconnect(); }
         }
@@ -95,7 +97,9 @@ public final class TunnelVerifier {
                     body = new String(readLimited(in, MAX_RESPONSE_BYTES), StandardCharsets.UTF_8);
                 }
                 if (traceHasPublicIp(body) && vpn.equals(manager.getActiveNetwork()))
-                    return Result.dnsFailure("HTTPS بدون DNS کار می‌کند؛ بازیابی DNS لازم است");
+                    return lookupFailure
+                            ? Result.dnsFailure("HTTPS بدون DNS کار می‌کند؛ بازیابی DNS لازم است")
+                            : Result.failure("HTTPS عددی پاسخ داد؛ مقصدهای دامنه‌ای آزمون ناموفق بودند؛ " + errors);
             }
         } catch (Exception ignored) { }
         finally { if (c != null) c.disconnect(); }
