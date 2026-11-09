@@ -62,6 +62,10 @@ class SingBoxVpnService : VpnService() {
     private val lifecycle: ExecutorService = Executors.newSingleThreadExecutor { task ->
         Thread(task, "RahYab-singbox-lifecycle").apply { isDaemon = true }
     }
+    @Volatile private var verificationEpoch = 0
+    private val verifier = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+    private var verificationTask: java.util.concurrent.Future<*>? = null
+    private fun isAutomatic() = profile?.contains("rahyab-auto") == true
     private val channel = "rahyab-singbox"
     private val notificationId = 7301
 
@@ -91,6 +95,8 @@ class SingBoxVpnService : VpnService() {
         }
         val requestedProfile = intent?.getStringExtra(EXTRA_PROFILE)
         if (requestedProfile.isNullOrBlank()) { stopSelf(startId); return START_NOT_STICKY }
+        verificationEpoch++
+        verificationTask?.cancel(true)
         profile = requestedProfile
         try {
             startForeground(notificationId, notification("در حال راه‌اندازی موتور VPN…"))
@@ -130,6 +136,10 @@ class SingBoxVpnService : VpnService() {
                 Log.i(TAG, "libbox accepted the profile and started/reloaded its service")
                 updateNotification("موتور VPN راه‌اندازی شد؛ وضعیت مسیر اینترنت در حال بررسی است")
                 sendEvent(EVENT_ENGINE_STARTED)
+                if (isAutomatic()) {
+                    sendEvent("AUTO_SEARCHING", "sing-box در حال آزمون مسیرهای VLESS/Trojan و عبور واقعی اینترنت است…")
+                    beginAutomaticVerification(verificationEpoch, false)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "sing-box startup failed", e)
                 runCatching { created?.closeService() }
@@ -381,6 +391,8 @@ class SingBoxVpnService : VpnService() {
     }
 
     private fun stopEngine() {
+        verificationEpoch++
+        verificationTask?.cancel(true)
         runCatching { server?.closeService() }.onFailure { Log.w(TAG, "closeService", it) }
         runCatching { server?.close() }.onFailure { Log.w(TAG, "close", it) }
         server = null
@@ -392,13 +404,53 @@ class SingBoxVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE) else @Suppress("DEPRECATION") stopForeground(true)
     }
 
+    private fun beginAutomaticVerification(epoch: Int, monitoring: Boolean) {
+        verificationTask = verifier.submit {
+            var result: TunnelVerifier.Result? = null
+            // URLTest probes candidates concurrently; allow its first selection to settle.
+            for (attempt in 0 until 3) {
+                if (epoch != verificationEpoch || Thread.currentThread().isInterrupted) return@submit
+                result = TunnelVerifier.verify(this)
+                if (result.verified) break
+                if (attempt < 2) {
+                    try { Thread.sleep(2500L) } catch (_: InterruptedException) { return@submit }
+                }
+            }
+            if (epoch != verificationEpoch || Thread.currentThread().isInterrupted) return@submit
+            if (result?.verified == true) {
+                val message = "اتصال جایگزین sing-box تأیید شد؛ HTTPS از مسیر VPN پاسخ داد"
+                sendEvent("AUTO_CONNECTED", message)
+                updateNotification(message)
+                verificationTask = verifier.schedule({
+                    if (epoch == verificationEpoch) beginAutomaticVerification(epoch, true)
+                }, 45L, java.util.concurrent.TimeUnit.SECONDS)
+            } else {
+                val message = if (monitoring) "عبور اینترنت اتصال جایگزین قطع شد؛ دوباره اتصال جایگزین را بزنید"
+                    else "مسیرهای جایگزین عبور اینترنت را تأیید نکردند؛ " + (result?.message ?: "آزمون ناموفق")
+                enqueueLifecycle {
+                    if (epoch == verificationEpoch) {
+                        stopEngine()
+                        sendEvent("AUTO_FAILED", message)
+                        stopSelf()
+                    }
+                }
+            }
+        }
+    }
+
     private fun sendEvent(event: String, detail: String? = null) {
+        val publishedEvent = if (isAutomatic() && event == EVENT_ERROR) "AUTO_FAILED"
+            else if (isAutomatic() && event == EVENT_STOPPED) "AUTO_STOPPED" else event
+        val publishedDetail = if (publishedEvent == "AUTO_STOPPED") "اتصال جایگزین متوقف شد"
+            else if (publishedEvent == "AUTO_FAILED" && event == EVENT_ERROR)
+                "راه‌اندازی موتور جایگزین ناموفق بود؛ گزارش موتور را بررسی کنید"
+            else detail
         // SharedPreferences do not provide coherent reads across processes.
-        runCatching { persistEvent(event, detail) }
+        runCatching { persistEvent(publishedEvent, publishedDetail) }
             .onFailure { Log.w(TAG, "Could not persist sing-box status", it) }
         val intent = Intent(ACTION_EVENT).setPackage(packageName)
-            .putExtra(EXTRA_EVENT, event)
-        if (detail != null) intent.putExtra(EXTRA_DETAIL, detail)
+            .putExtra(EXTRA_EVENT, publishedEvent)
+        if (publishedDetail != null) intent.putExtra(EXTRA_DETAIL, publishedDetail)
         sendBroadcast(intent)
     }
 
@@ -430,9 +482,12 @@ class SingBoxVpnService : VpnService() {
         super.onRevoke()
     }
     override fun onDestroy() {
+        verificationEpoch++
+        verificationTask?.cancel(true)
+        verifier.shutdownNow()
         enqueueLifecycle {
             stopEngine()
-            if (lastEvent != EVENT_ERROR && lastEvent != EVENT_STOPPED) sendEvent(EVENT_STOPPED)
+            if (lastEvent != EVENT_ERROR && lastEvent != EVENT_STOPPED && lastEvent != "AUTO_FAILED" && lastEvent != "AUTO_STOPPED") sendEvent(EVENT_STOPPED)
         }
         lifecycle.shutdown()
         super.onDestroy()
@@ -488,3 +543,4 @@ class SingBoxVpnService : VpnService() {
         }
     }
 }
+

@@ -33,7 +33,8 @@ def verified_events(xml):
     return None
 
 
-def main(apk, authorize_emulator):
+def main(apk, authorize_emulator, alternative=False):
+    button_text = "اتصال جایگزین • VLESS / Trojan" if alternative else "اتصال قبلی • OpenVPN"
     if adb("shell", "pm", "list", "packages", PACKAGE) == f"package:{PACKAGE}":
         raise SystemExit("Use a dedicated Android device without RahYab installed.")
     print("APK SHA-256:", hashlib.sha256(apk.read_bytes()).hexdigest(), flush=True)
@@ -53,7 +54,7 @@ def main(apk, authorize_emulator):
         adb("shell", "uiautomator", "dump", "/data/local/tmp/rahyab-ui.xml")
         ui = ET.fromstring(adb("shell", "cat", "/data/local/tmp/rahyab-ui.xml"))
         buttons = [node for node in ui.iter("node")
-                   if node.get("text") == "اتصال هوشمند" and node.get("enabled") == "true"
+                   if node.get("text") == button_text and node.get("enabled") == "true"
                    and node.get("package") == PACKAGE]
         if len(buttons) == 1:
             break
@@ -109,7 +110,7 @@ def main(apk, authorize_emulator):
         adb("shell", "uiautomator", "dump", "/data/local/tmp/rahyab-ui.xml")
         restart_ui = ET.fromstring(adb("shell", "cat", "/data/local/tmp/rahyab-ui.xml"))
         restart_buttons = [node for node in restart_ui.iter("node")
-                           if node.get("text") == "اتصال هوشمند" and node.get("enabled") == "true"
+                           if node.get("text") == button_text and node.get("enabled") == "true"
                            and node.get("package") == PACKAGE]
         if len(restart_buttons) != 1:
             raise SystemExit("FAIL: Smart Connect is unavailable after cancellation.")
@@ -120,12 +121,19 @@ def main(apk, authorize_emulator):
     deadline = time.monotonic() + 600
     while time.monotonic() < deadline:
         try:
-            evidence = verified_events(adb("shell", "run-as", PACKAGE, "cat", DIAGNOSTICS))
+            if alternative:
+                import json
+                state = json.loads(adb("shell", "run-as", PACKAGE, "cat", "files/singbox-status.json"))
+                evidence = [state["last_detail"]] if state.get("last_event") == "AUTO_CONNECTED" else None
+                if state.get("last_event") == "AUTO_FAILED":
+                    raise SystemExit("FAIL: Alternative engine: " + state.get("last_detail", ""))
+            else:
+                evidence = verified_events(adb("shell", "run-as", PACKAGE, "cat", DIAGNOSTICS))
         except (subprocess.CalledProcessError, ET.ParseError):
             evidence = None
         if evidence:
             print(*evidence, sep="\n")
-            print("PASS: Smart Connect, HTTPS 204, and changed VPN exit IP.")
+            print("PASS: sing-box URLTest and VPN-bound HTTPS egress." if alternative else "PASS: Smart Connect, HTTPS 204, and changed VPN exit IP.")
             return
         time.sleep(3)
     raise SystemExit("FAIL: No verified HTTPS tunnel and changed exit IP within 10 minutes.")
@@ -135,5 +143,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("apk", type=pathlib.Path)
     parser.add_argument("--authorize-emulator", action="store_true")
+    parser.add_argument("--alternative", action="store_true")
     args = parser.parse_args()
-    main(args.apk, args.authorize_emulator)
+    main(args.apk, args.authorize_emulator, args.alternative)
+

@@ -38,6 +38,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
+    private static final int REQUEST_ALTERNATIVE_PERMISSION = 4106;
+    private int alternativePermissionGeneration = -1;
+    private long lastAlternativeEvent;
+    private Button alternativeButton;
     private static final int REQUEST_CONFIG = 4101;
     private static final int REQUEST_VPN_PERMISSION = 4102;
     private static final int REQUEST_SINGBOX_PROFILE = 4103;
@@ -88,7 +92,8 @@ public class MainActivity extends Activity {
             } else if ("ENGINE_STARTED".equals(event)) {
                 singBoxConnectButton.setEnabled(true);
                 disconnectButton.setEnabled(true);
-                verifyTunnel("sing-box");
+                if (pendingSingBoxJson == null || !pendingSingBoxJson.contains("rahyab-auto"))
+                    verifyTunnel("sing-box");
             } else if ("TUN_ESTABLISHED".equals(event)) {
                 setStatus("تونل اندروید ایجاد شد؛ بررسی عبور واقعی اینترنت لازم است");
                 singBoxConnectButton.setEnabled(true);
@@ -532,7 +537,17 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams discoveryParams = new LinearLayout.LayoutParams(-1, dp(58));
         discoveryParams.topMargin = dp(16);
         page.addView(discoveryButton, discoveryParams);
+        discoveryButton.setText("اتصال قبلی • OpenVPN");
         discoveryButton.setOnClickListener(v -> startSmartOpenVpnSearch());
+        alternativeButton = new Button(this);
+        alternativeButton.setText("اتصال جایگزین • VLESS / Trojan");
+        alternativeButton.setAllCaps(false);
+        alternativeButton.setTextColor(Color.WHITE);
+        alternativeButton.setBackground(shape(Color.rgb(63, 92, 175), 18));
+        LinearLayout.LayoutParams alternativeParams = new LinearLayout.LayoutParams(-1, dp(58));
+        alternativeParams.topMargin = dp(10);
+        page.addView(alternativeButton, alternativeParams);
+        alternativeButton.setOnClickListener(v -> startAlternativeSearch());
 
         LinearLayout advancedPanel = new LinearLayout(this);
         advancedPanel.setOrientation(LinearLayout.VERTICAL);
@@ -702,7 +717,8 @@ public class MainActivity extends Activity {
         } else if ("ENGINE_STARTED".equals(event)) {
             singBoxConnectButton.setEnabled(true);
             disconnectButton.setEnabled(true);
-            verifyTunnel("sing-box");
+            if (pendingSingBoxJson == null || !pendingSingBoxJson.contains("rahyab-auto"))
+                    verifyTunnel("sing-box");
         } else if ("TUN_ESTABLISHED".equals(event)) {
             setStatus("تونل اندروید ایجاد شد؛ بررسی عبور واقعی اینترنت لازم است");
             singBoxConnectButton.setEnabled(true);
@@ -836,6 +852,14 @@ public class MainActivity extends Activity {
             if (discoveryButton != null) discoveryButton.setEnabled(true);
             if (disconnectButton != null) disconnectButton.setEnabled(false);
             setStatus("اجازه ایجاد اتصال VPN داده نشد؛ برای اتصال هوشمند دوباره تلاش کنید");
+            return;
+        }
+        if (requestCode == REQUEST_ALTERNATIVE_PERMISSION) {
+            if (alternativePermissionGeneration != smartSearchGeneration || !smartSearchPending) return;
+            smartSearchPending = false;
+            alternativePermissionGeneration = -1;
+            if (resultCode == RESULT_OK) startSingBox();
+            else publishDiscoveryStatus("اجازه VPN داده نشد؛ اتصال جایگزین متوقف شد", "disconnected");
             return;
         }
         if (resultCode != RESULT_OK) return;
@@ -1297,6 +1321,52 @@ public class MainActivity extends Activity {
         throw new java.io.IOException("دریافت فهرست در شبکه فعلی ناموفق بود");
     }
 
+    private void startAlternativeSearch() {
+        if (smartSearchPending || alternativeButton == null || !alternativeButton.isEnabled()) return;
+        final int generation = ++smartSearchGeneration;
+        smartSearchPending = true;
+        alternativeButton.setEnabled(false);
+        discoveryButton.setEnabled(false);
+        disconnectButton.setEnabled(true);
+        beginFreshDiscoveryDiagnostics();
+        publishDiscoveryStatus("جست‌وجوی فهرست تازه VLESS و Trojan برای موتور sing-box…", "searching");
+        worker.execute(() -> {
+            try {
+                final android.net.Network network = discoveryNetwork();
+                if (network == null) throw new java.io.IOException("شبکه اینترنت آماده نیست");
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("discovery_network", NetworkDiagnostics.describe(this, network))
+                        .putString("discovery_network_snapshot", NetworkDiagnostics.snapshot(this)).apply();
+                PublicProxyProvider.Result result = PublicProxyProvider.fetch(
+                        url -> network.openConnection(url, java.net.Proxy.NO_PROXY),
+                        () -> generation != smartSearchGeneration);
+                runOnUiThread(() -> {
+                    if (generation != smartSearchGeneration || isFinishing() || isDestroyed()) return;
+                    pendingSingBoxJson = result.profile;
+                    publishDiscoveryStatus(result.count + " مسیر VLESS/Trojan آماده آزمون خودکار؛ منبع: "
+                            + result.source, "searching");
+                    Intent permission = VpnService.prepare(this);
+                    if (permission != null) {
+                        alternativePermissionGeneration = generation;
+                        startActivityForResult(permission, REQUEST_ALTERNATIVE_PERMISSION);
+                    } else {
+                        smartSearchPending = false;
+                        startSingBox();
+                    }
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (generation != smartSearchGeneration || isFinishing() || isDestroyed()) return;
+                    smartSearchPending = false;
+                    publishDiscoveryStatus("جست‌وجوی جایگزین ناموفق: " + safeMessage(error), "disconnected");
+                    alternativeButton.setEnabled(true);
+                    discoveryButton.setEnabled(true);
+                    disconnectButton.setEnabled(false);
+                });
+            }
+        });
+    }
+
     private void startSmartOpenVpnSearch() {
         if (discoveryButton == null || !discoveryButton.isEnabled() || smartSearchPending) return;
         final int generation = ++smartSearchGeneration;
@@ -1449,12 +1519,14 @@ public class MainActivity extends Activity {
 
     private void disconnectAllEngines() {
         final int generation = ++smartSearchGeneration;
+        alternativePermissionGeneration = -1;
+        pendingSingBoxJson = null;
         smartSearchPending = false;
         pendingOpenVpnProfiles = null;
         // A manual stop must invalidate any not-yet-consumed start request.
         getSharedPreferences("rah_yab_pending_start", MODE_PRIVATE).edit()
                 .clear().commit();
-        setStatus("در حال قطع همه موتورهای VPN…");
+        publishDiscoveryStatus("در حال قطع همه موتورهای VPN…", "disconnected");
         SingBoxVpnService.stop(getApplicationContext());
         Intent stop = new Intent(this, RahYabVpnService.class);
         stop.setAction(RahYabVpnService.ACTION_STOP);
@@ -1466,6 +1538,7 @@ public class MainActivity extends Activity {
                 if (isFinishing() || isDestroyed() || generation != smartSearchGeneration) return;
                 disconnectButton.setEnabled(false);
                 discoveryButton.setEnabled(true);
+                if (alternativeButton != null) alternativeButton.setEnabled(true);
                 setStatus("درخواست قطع اتصال به همه موتورها ارسال شد");
             });
         });
@@ -1478,6 +1551,19 @@ public class MainActivity extends Activity {
 
     private void refreshServiceStatusFromPreferences() {
         if (status == null || smartSearchPending) return;
+        Bundle alternative = SingBoxVpnService.readStatus(this);
+        long eventAt = alternative.getLong("last_event_time", 0L);
+        String event = alternative.getString("last_event", "");
+        if (event.startsWith("AUTO_") && eventAt > lastAlternativeEvent) {
+            lastAlternativeEvent = eventAt;
+            long published = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
+                    .getLong("service_status_updated_at", 0L);
+            if (eventAt > published) {
+                String lampValue = "AUTO_CONNECTED".equals(event) ? "connected"
+                        : "AUTO_SEARCHING".equals(event) ? "searching" : "disconnected";
+                publishDiscoveryStatus(alternative.getString("last_detail", "اتصال جایگزین"), lampValue);
+            }
+        }
         android.content.SharedPreferences diagnostics = statusPreferences != null
                 ? statusPreferences
                 : getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
@@ -1512,6 +1598,7 @@ public class MainActivity extends Activity {
         boolean active = connected || searching;
         if (disconnectButton != null) disconnectButton.setEnabled(active);
         if (discoveryButton != null) discoveryButton.setEnabled(!searching && !connected);
+        if (alternativeButton != null) alternativeButton.setEnabled(!searching && !connected);
     }
 
     /**
@@ -1590,3 +1677,4 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 }
+

@@ -360,7 +360,7 @@ public final class SingBoxProfile {
         return root.toString();
     }
 
-    private static void addGeneratedProfileDns(JSONObject root, String name)
+    static void addGeneratedProfileDns(JSONObject root, String name)
             throws JSONException {
         // Application DNS uses HTTPS through the selected server, without UDP support.
         JSONObject remote = new JSONObject().put("type", "https").put("tag", "rah-yab-dns")
@@ -382,3 +382,4 @@ public final class SingBoxProfile {
     public String getOutboundTag() { return outboundTag; }
     public String getProtocol() { return protocol; }
 }
+

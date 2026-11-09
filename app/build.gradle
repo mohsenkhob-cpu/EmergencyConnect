@@ -38,4 +38,6 @@ dependencies {
 
     // Local JVM tests for provider parsing and ranking rules.
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
 }
+
