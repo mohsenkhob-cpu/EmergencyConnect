@@ -126,6 +126,10 @@ def main(apk, authorize_emulator, alternative=False):
                 state = json.loads(adb("shell", "run-as", PACKAGE, "cat", "files/singbox-status.json"))
                 evidence = [state["last_detail"]] if state.get("last_event") == "AUTO_CONNECTED" else None
                 if state.get("last_event") == "AUTO_FAILED":
+                    runtime_log = adb("shell", "run-as", PACKAGE, "tail", "-n", "100", "files/singbox-runtime.log")
+                    runtime_log = re.sub(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", "[redacted]", runtime_log)
+                    print(runtime_log, flush=True)
+                    print(adb("logcat", "-d", "-s", "RahYabSingBox:I", "*:S"), flush=True)
                     raise SystemExit("FAIL: Alternative engine: " + state.get("last_detail", ""))
             else:
                 evidence = verified_events(adb("shell", "run-as", PACKAGE, "cat", DIAGNOSTICS))

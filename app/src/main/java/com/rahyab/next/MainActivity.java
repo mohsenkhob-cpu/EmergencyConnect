@@ -1575,6 +1575,20 @@ public class MainActivity extends Activity {
 
         // Do not resurrect an abandoned search after the service heartbeat expires.
         boolean connected = "connected".equals(lamp);
+        if (connected && savedStatus != null && savedStatus.contains("اتصال جایگزین")) {
+            android.net.ConnectivityManager cm = getSystemService(android.net.ConnectivityManager.class);
+            android.net.Network vpn = cm == null ? null : cm.getActiveNetwork();
+            android.net.NetworkCapabilities caps = vpn == null ? null : cm.getNetworkCapabilities(vpn);
+            if (caps == null || !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
+                    || System.currentTimeMillis() - eventAt > 150_000L) {
+                connected = false;
+                lamp = "disconnected";
+                savedStatus = "اتصال جایگزین دیگر تأییدشده نیست؛ دوباره اتصال جایگزین را بزنید";
+                diagnostics.edit().putString("connection_lamp_state", lamp)
+                        .putString("service_status_message", savedStatus)
+                        .putLong("service_status_updated_at", System.currentTimeMillis()).apply();
+            }
+        }
         boolean searching = "searching".equals(lamp) && statusAge >= 0L
                 && statusAge <= 90_000L;
         if ("searching".equals(lamp) && !searching) {
@@ -1586,8 +1600,7 @@ public class MainActivity extends Activity {
             lamp = "disconnected";
         }
 
-        String visibleStatus = (connected || searching)
-                && savedStatus != null && !savedStatus.trim().isEmpty()
+        String visibleStatus = savedStatus != null && !savedStatus.trim().isEmpty()
                 ? savedStatus
                 : "اتصال برقرار نیست؛ برای شروع، دکمه اتصال هوشمند را بزنید.";
         if (!visibleStatus.equals(lastRenderedServiceStatus)) {

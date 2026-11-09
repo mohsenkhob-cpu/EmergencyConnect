@@ -98,6 +98,7 @@ class SingBoxVpnService : VpnService() {
         verificationEpoch++
         verificationTask?.cancel(true)
         profile = requestedProfile
+        physicalNetwork()?.let { setUnderlyingNetworks(arrayOf(it)) }
         try {
             startForeground(notificationId, notification("در حال راه‌اندازی موتور VPN…"))
         } catch (e: Exception) {
@@ -121,15 +122,22 @@ class SingBoxVpnService : VpnService() {
                     appMarketingVersion = "0.2.0"
                 }
                 Libbox.setup(setup)
+                val launchProfile = if (isAutomatic()) {
+                    val root = JSONObject(requestedProfile)
+                    val runtimeLog = File(filesDir, "singbox-runtime.log")
+                    runtimeLog.writeText("")
+                    root.getJSONObject("log").put("output", runtimeLog.absolutePath).put("level", "info")
+                    root.toString()
+                } else requestedProfile
                 val active = server
                 if (active != null) {
-                    active.startOrReloadService(requestedProfile, OverrideOptions())
+                    active.startOrReloadService(launchProfile, OverrideOptions())
                 } else {
                     val platform = Proxy.newProxyInstance(PlatformInterface::class.java.classLoader, arrayOf(PlatformInterface::class.java), PlatformHandler()) as PlatformInterface
                     val callbacks = Proxy.newProxyInstance(CommandServerHandler::class.java.classLoader, arrayOf(CommandServerHandler::class.java), CommandHandler()) as CommandServerHandler
                     created = CommandServer(callbacks, platform)
                     created.start()
-                    created.startOrReloadService(requestedProfile, OverrideOptions())
+                    created.startOrReloadService(launchProfile, OverrideOptions())
                     server = created
                     created = null
                 }
@@ -153,6 +161,16 @@ class SingBoxVpnService : VpnService() {
         return START_NOT_STICKY
     }
 
+    private fun physicalNetwork(): Network? {
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val active = cm.activeNetwork
+        return cm.allNetworks.filter { network ->
+            val caps = cm.getNetworkCapabilities(network)
+            caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        }.sortedByDescending { it == active }.firstOrNull()
+    }
+
     private inner class PlatformHandler : InvocationHandler {
         override fun invoke(proxy: Any, method: Method, args: Array<out Any?>?): Any? {
             val a = args ?: emptyArray()
@@ -161,6 +179,9 @@ class SingBoxVpnService : VpnService() {
                 "autoDetectInterfaceControl" -> {
                     val fd = a[0] as Int
                     check(protect(fd)) { "اندروید نتوانست سوکت سرور sing-box را از تونل جدا کند" }
+                    val network = physicalNetwork() ?: error("شبکه زیرین VPN در دسترس نیست")
+                    // Bind the protected socket itself, never the whole app process.
+                    ParcelFileDescriptor.fromFd(fd).use { network.bindSocket(it.fileDescriptor) }
                     null
                 }
                 "openTun" -> openTun(a[0] as TunOptions)
@@ -311,7 +332,9 @@ class SingBoxVpnService : VpnService() {
                 this.addresses = iterator(addresses, StringIterator::class.java)
                 dnsServer = iterator(emptyList(), StringIterator::class.java)
                 gateway = iterator(emptyList(), StringIterator::class.java)
-                flags = 0
+                flags = (if (item.isUp) 1 or 64 else 0) or
+                    (if (item.supportsMulticast()) 4096 else 0) or
+                    (if (item.isPointToPoint) 16 else 2)
                 metered = false
             }
             values.add(value)
