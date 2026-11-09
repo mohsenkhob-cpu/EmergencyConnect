@@ -80,6 +80,7 @@ class SingBoxVpnService : VpnService() {
     private var recoveryCount = 0
     private var currentResolver = 0
     private var lastProbe = ""
+    @Volatile private var initialConnectionVerified = false
     private var verificationTask: java.util.concurrent.Future<*>? = null
     private fun isAutomatic() = profile?.contains("rahyab-auto") == true
     private val channel = "rahyab-singbox"
@@ -114,6 +115,21 @@ class SingBoxVpnService : VpnService() {
         stopping = false
         verificationEpoch++
         val startEpoch = verificationEpoch
+        initialConnectionVerified = false
+        // Bound the initial search, including DNS retries and pool reloads.
+        if (requestedProfile.contains("rahyab-auto")) Handler(Looper.getMainLooper()).postDelayed({
+            if (!stopping && startEpoch == verificationEpoch && !initialConnectionVerified) {
+                val timeoutEpoch = ++verificationEpoch
+                verificationTask?.cancel(true)
+                releaseOwnedTun()
+                enqueueLifecycle {
+                    if (stopping || timeoutEpoch != verificationEpoch) return@enqueueLifecycle
+                    stopEngine()
+                    sendEvent("AUTO_FAILED", "تا پایان مهلت دو دقیقه‌ای مسیر قابل استفاده پیدا نشد؛ VPN متوقف شد؛ " + lastProbe)
+                    stopSelf()
+                }
+            }
+        }, 120000L)
         verificationTask?.cancel(true)
         profile = requestedProfile
         recoveryCount = 0
@@ -487,26 +503,34 @@ class SingBoxVpnService : VpnService() {
     private fun beginAutomaticVerification(epoch: Int, monitoring: Boolean) {
         verificationTask = verifier.submit {
             var result: TunnelVerifier.Result? = null
-            // URLTest probes candidates concurrently; allow its first selection to settle.
-            for (attempt in 0 until 2) {
+            // Initial green requires repeated usable results, not one small HTTPS response.
+            var usableInARow = 0
+            val required = if (monitoring) 1 else 2
+            for (attempt in 0 until 3) {
                 if (epoch != verificationEpoch || Thread.currentThread().isInterrupted) return@submit
-                if (!monitoring) sendEvent("AUTO_SEARCHING", "آزمون مستقل اینترنت؛ تلاش " + (attempt + 1) + " از ۲")
+                if (!monitoring) sendEvent("AUTO_SEARCHING", "بررسی کیفیت و پایداری؛ مرحله " + (attempt + 1) + " از ۳")
                 result = TunnelVerifier.verify(this)
                 lastProbe = result.message
-                if (result.verified) break
-                if (attempt < 1) {
+                if (monitoring && !result.verified) {
+                    sendEvent("AUTO_SEARCHING", "کیفیت اتصال افت کرده؛ بررسی و بازیابی مسیر… " + lastProbe)
+                    updateNotification("کیفیت اتصال افت کرده؛ در حال بررسی مسیر")
+                }
+                usableInARow = if (result.verified) usableInARow + 1 else 0
+                if (usableInARow >= required) break
+                if (attempt < 2) {
                     try { Thread.sleep(2500L) } catch (_: InterruptedException) { return@submit }
                 }
             }
             if (epoch != verificationEpoch || Thread.currentThread().isInterrupted) return@submit
-            if (result?.verified == true) {
+            if (result?.verified == true && usableInARow >= required) {
+                initialConnectionVerified = true
                 runCatching { saveSuccessfulPool() }
-                val message = "اتصال جایگزین sing-box تأیید شد؛ آزمون مستقل HTTPS موفق بود"
+                val message = "اتصال جایگزین تأیید شد؛ " + lastProbe
                 sendEvent("AUTO_CONNECTED", message)
                 updateNotification(message)
                 verificationTask = verifier.schedule({
                     if (epoch == verificationEpoch) beginAutomaticVerification(epoch, true)
-                }, 45L, java.util.concurrent.TimeUnit.SECONDS)
+                }, 15L, java.util.concurrent.TimeUnit.SECONDS)
             } else {
                 if (recoveryCount < 3) {
                     recoverAutomatic(epoch, result?.dnsOnlyFailure == true)
@@ -737,6 +761,7 @@ class SingBoxVpnService : VpnService() {
         }
     }
 }
+
 
 
 

@@ -21,9 +21,9 @@ import java.nio.charset.StandardCharsets;
 public final class TunnelVerifier {
     private static final String IP_CHECK_URL = "https://api.ipify.org?format=json";
     private static final String DNS_INDEPENDENT_PROBE_URL = "https://1.1.1.1/cdn-cgi/trace";
-    private static final int DNS_INDEPENDENT_TIMEOUT_MS = 5000;
-    private static final int CONNECT_TIMEOUT_MS = 7000;
-    private static final int READ_TIMEOUT_MS = 7000;
+    private static final int DOWNLOAD_BYTES = 65536;
+    private static final long MIN_DOWNLOAD_KBPS = 128;
+    private static final long DOWNLOAD_DEADLINE_MS = 8000;
     private static final int MAX_RESPONSE_BYTES = 4096;
 
     private TunnelVerifier() { }
@@ -46,7 +46,9 @@ public final class TunnelVerifier {
             this.message = message; this.dnsOnlyFailure = true;
         }
         static Result dnsFailure(String message) { return new Result(message); }
-        static Result success(String ip) { return new Result(true, ip, "HTTPS از مسیر VPN پاسخ داد"); }
+        static Result success(String ip, long kbps) {
+            return new Result(true, ip, "دو مقصد HTTPS و دریافت ۶۴ کیلوبایت از مسیر VPN تأیید شد؛ سرعت آزمون " + kbps + " کیلوبیت‌برثانیه");
+        }
         static Result failure(String message) { return new Result(false, null, message); }
     }
 
@@ -60,6 +62,8 @@ public final class TunnelVerifier {
                 "https://cp.cloudflare.com/generate_204"};
         StringBuilder errors = new StringBuilder();
         boolean lookupFailure = false;
+        int successes = 0;
+        String exitIp = "";
         for (int i = 0; i < urls.length; i++) {
             if (Thread.currentThread().isInterrupted() || !vpn.equals(manager.getActiveNetwork()))
                 return Result.failure("آزمون لغو شد یا شبکه تغییر کرد");
@@ -68,21 +72,27 @@ public final class TunnelVerifier {
                 c = (HttpURLConnection) vpn.openConnection(new URL(urls[i]), java.net.Proxy.NO_PROXY);
                 configure(c);
                 int code = c.getResponseCode();
-                if (i > 0 && code == 204 && vpn.equals(manager.getActiveNetwork()))
-                    return Result.success("");
+                if (i > 0 && code == 204 && vpn.equals(manager.getActiveNetwork())) successes++;
                 if (i == 0 && code == 200) {
                     String ip;
                     try (InputStream in = c.getInputStream()) {
                         ip = new JSONObject(new String(readLimited(in, MAX_RESPONSE_BYTES), StandardCharsets.UTF_8))
                                 .optString("ip", "").trim();
                     }
-                    if (isPublicAddressLiteral(ip) && vpn.equals(manager.getActiveNetwork())) return Result.success(ip);
+                    if (isPublicAddressLiteral(ip) && vpn.equals(manager.getActiveNetwork())) {
+                        successes++; exitIp = ip;
+                    }
                 }
                 errors.append("HTTPS-").append(i + 1).append(":HTTP_").append(code).append(" ");
             } catch (Exception e) {
                 if (e instanceof java.net.UnknownHostException) lookupFailure = true;
                 errors.append("HTTPS-").append(i + 1).append(":").append(e.getClass().getSimpleName()).append(" ");
             } finally { if (c != null) c.disconnect(); }
+            if (successes >= 2) {
+                if (Thread.currentThread().isInterrupted() || !vpn.equals(manager.getActiveNetwork()))
+                    return Result.failure("آزمون لغو شد یا شبکه تغییر کرد");
+                return verifyDownload(vpn, manager, exitIp);
+            }
         }
         // A working numeric HTTPS path is DNS degradation, not proof of normal app connectivity.
         HttpURLConnection c = null;
@@ -103,7 +113,41 @@ public final class TunnelVerifier {
             }
         } catch (Exception ignored) { }
         finally { if (c != null) c.disconnect(); }
-        return Result.failure("مقصدهای مستقل HTTPS پاسخ معتبر ندادند؛ " + errors);
+        return Result.failure("اتصال قابل استفاده تأیید نشد؛ " + successes + " از ۲ مقصد مستقل پاسخ داد؛ " + errors);
+    }
+
+    private static Result verifyDownload(Network vpn, ConnectivityManager manager, String exitIp) {
+        HttpURLConnection c = null;
+        long started = android.os.SystemClock.elapsedRealtime();
+        int total = 0;
+        try {
+            c = (HttpURLConnection) vpn.openConnection(
+                    new URL("https://speed.cloudflare.com/__down?bytes=" + DOWNLOAD_BYTES), java.net.Proxy.NO_PROXY);
+            configure(c);
+            c.setRequestProperty("Accept-Encoding", "identity");
+            if (c.getResponseCode() != 200) return Result.failure("مقصد سنجش دریافت پاسخ معتبر نداد");
+            try (InputStream input = c.getInputStream()) {
+                byte[] buffer = new byte[8192];
+                while (total < DOWNLOAD_BYTES) {
+                    if (Thread.currentThread().isInterrupted() || !vpn.equals(manager.getActiveNetwork()))
+                        return Result.failure("آزمون سرعت لغو شد یا شبکه تغییر کرد");
+                    if (android.os.SystemClock.elapsedRealtime() - started > DOWNLOAD_DEADLINE_MS)
+                        return Result.failure("مسیر بیش از حد کند است؛ دریافت ۶۴ کیلوبایت در مهلت آزمون تمام نشد");
+                    int count = input.read(buffer, 0, Math.min(buffer.length, DOWNLOAD_BYTES - total));
+                    if (count < 0) break;
+                    total += count;
+                }
+            }
+            if (Thread.currentThread().isInterrupted() || !vpn.equals(manager.getActiveNetwork()))
+                return Result.failure("آزمون سرعت لغو شد یا شبکه تغییر کرد");
+            long elapsed = Math.max(1L, android.os.SystemClock.elapsedRealtime() - started);
+            long kbps = total * 8L / elapsed;
+            if (total != DOWNLOAD_BYTES || elapsed > DOWNLOAD_DEADLINE_MS || kbps < MIN_DOWNLOAD_KBPS)
+                return Result.failure("مسیر ضعیف یا دریافت ناقص؛ " + total + " بایت؛ سرعت آزمون " + kbps + " کیلوبیت‌برثانیه");
+            return Result.success(exitIp, kbps);
+        } catch (Exception error) {
+            return Result.failure("آزمون دریافت واقعی ناموفق بود: " + error.getClass().getSimpleName());
+        } finally { if (c != null) c.disconnect(); }
     }
 
     private static void configure(HttpURLConnection c) {
@@ -168,3 +212,4 @@ public final class TunnelVerifier {
         return output.toByteArray();
     }
 }
+
