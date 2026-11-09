@@ -83,7 +83,7 @@ public final class TunnelVerifier {
             }
             return Result.success(ip);
         } catch (java.net.UnknownHostException e) {
-            return Result.failure("DNS برای api.ipify.org پاسخ نداد؛ "
+            return Result.failure("DNS برای api.ipify.org پاسخ نداد (UnknownHostException)؛ "
                     + probeWithoutDns(manager, vpn));
         } catch (Exception e) {
             String message = e.getMessage();
@@ -112,7 +112,19 @@ public final class TunnelVerifier {
             if (!vpn.equals(manager.getActiveNetwork())) {
                 return "شبکه هنگام آزمون مستقیم IP تغییر کرد";
             }
-            return "آزمون HTTPS بدون DNS از مسیر VPN پاسخ HTTP " + code + " گرفت";
+            if (code != HttpURLConnection.HTTP_OK) {
+                return "مسیر IP مستقیم پاسخ HTTP " + code
+                        + " داد؛ سلامت عبور HTTPS تأیید نشد";
+            }
+            byte[] response;
+            try (InputStream input = connection.getInputStream()) {
+                response = readLimited(input, MAX_RESPONSE_BYTES);
+            }
+            String trace = new String(response, StandardCharsets.UTF_8);
+            if (!trace.contains("ip=") || !trace.contains("colo=")) {
+                return "پاسخ IP مستقیم دریافت شد اما قالب پاسخ مورد انتظار نبود";
+            }
+            return "آزمون HTTPS مستقیم IP از مسیر VPN موفق بود؛ احتمال اختلال DNS وجود دارد";
         } catch (Exception error) {
             return "آزمون HTTPS بدون DNS هم ناموفق بود (" + error.getClass().getSimpleName() + ")";
         } finally {
@@ -147,6 +159,26 @@ public final class TunnelVerifier {
         boolean ipv4 = value.matches("[0-9]{1,3}(\\.[0-9]{1,3}){3}");
         boolean ipv6 = value.indexOf(':') >= 0 && value.matches("[0-9a-fA-F:.%]+");
         if (!ipv4 && !ipv6) return false;
+        // Reject malformed IPv4 before InetAddress parsing; never resolve arbitrary hostnames.
+        if (ipv4) {
+            String[] octets = value.split("\\.");
+            for (String octet : octets) {
+                if (octet.length() > 1 && octet.charAt(0) == '0') return false;
+                if (Integer.parseInt(octet) > 255) return false;
+            }
+            int first = Integer.parseInt(octets[0]);
+            int second = Integer.parseInt(octets[1]);
+            int third = Integer.parseInt(octets[2]);
+            if (first == 0 || first >= 224 || first == 10 || first == 127
+                    || (first == 100 && second >= 64 && second <= 127)
+                    || (first == 169 && second == 254)
+                    || (first == 172 && second >= 16 && second <= 31)
+                    || (first == 192 && second == 168)
+                    || (first == 192 && second == 0 && third == 2)
+                    || (first == 198 && (second == 18 || second == 19))
+                    || (first == 198 && second == 51 && third == 100)
+                    || (first == 203 && second == 0 && third == 113)) return false;
+        }
         try {
             InetAddress address = InetAddress.getByName(value);
             return !address.isAnyLocalAddress() && !address.isLoopbackAddress()
