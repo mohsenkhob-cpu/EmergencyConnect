@@ -136,6 +136,11 @@ def main(apk, authorize_emulator, alternative=False):
         except (subprocess.CalledProcessError, ET.ParseError):
             evidence = None
         if evidence:
+            if alternative:
+                transport_log = adb("logcat", "-d", "-s", "RahYabSingBox:I", "*:S")
+                if "Physical transport socket protected and bound" not in transport_log:
+                    raise SystemExit("FAIL: No protected physical relay socket was observed.")
+                print("PASS: Physical relay socket protection and binding were invoked.", flush=True)
             print(*evidence, sep="\n")
             print("PASS: sing-box URLTest and VPN-bound HTTPS egress." if alternative else "PASS: Smart Connect, HTTPS 204, and changed VPN exit IP.")
             return

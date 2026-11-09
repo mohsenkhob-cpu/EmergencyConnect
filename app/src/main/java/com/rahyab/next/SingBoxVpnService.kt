@@ -127,7 +127,7 @@ class SingBoxVpnService : VpnService() {
                     val root = JSONObject(requestedProfile)
                     val runtimeLog = File(filesDir, "singbox-runtime.log")
                     runtimeLog.writeText("")
-                    root.getJSONObject("log").put("output", runtimeLog.absolutePath).put("level", "info")
+                    root.getJSONObject("log").put("output", runtimeLog.absolutePath).put("level", "warn")
                     root.toString()
                 } else requestedProfile
                 val active = server
@@ -191,6 +191,7 @@ class SingBoxVpnService : VpnService() {
                     val network = physicalNetwork() ?: error("شبکه زیرین VPN در دسترس نیست")
                     // Bind the protected socket itself, never the whole app process.
                     ParcelFileDescriptor.fromFd(fd).use { network.bindSocket(it.fileDescriptor) }
+                    Log.i(TAG, "Physical transport socket protected and bound")
                     null
                 }
                 "openTun" -> openTun(a[0] as TunOptions)

@@ -25,6 +25,7 @@ public class PublicProxyProviderTest {
         JSONObject generated = new JSONObject(PublicProxyProvider.buildProfile(clean));
         assertFalse(generated.has("experimental"));
         assertEquals("rahyab-auto", generated.getJSONObject("route").getString("final"));
+        assertTrue(generated.getJSONObject("route").getBoolean("auto_detect_interface"));
         assertEquals("hijack-dns", generated.getJSONObject("route").getJSONArray("rules")
                 .getJSONObject(0).getString("action"));
         JSONArray out = generated.getJSONArray("outbounds");

@@ -373,7 +373,10 @@ public final class SingBoxProfile {
                 .put("tag", "rah-yab-bootstrap").put("server", "1.1.1.1")
                 .put("path", "/dns-query").put("tls", new JSONObject().put("enabled", true)
                         .put("server_name", "cloudflare-dns.com"));
-        root.getJSONObject("route").put("default_domain_resolver", "rah-yab-bootstrap");
+        // Required even on Android: libbox's dialer only installs ProtectFunc
+        // when NetworkManager.AutoDetectInterface() is enabled.
+        root.getJSONObject("route").put("auto_detect_interface", true)
+                .put("default_domain_resolver", "rah-yab-bootstrap");
         root.put("dns", new JSONObject().put("servers", new JSONArray().put(remote).put(bootstrap))
                 .put("final", "rah-yab-dns"));
     }
