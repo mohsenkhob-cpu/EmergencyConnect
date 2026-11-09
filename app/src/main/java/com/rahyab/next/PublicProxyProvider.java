@@ -87,7 +87,7 @@ public final class PublicProxyProvider {
         Collections.shuffle(accepted);
         JSONArray result = new JSONArray();
         for (JSONObject node : accepted) {
-            if (result.length() == 24) break;
+            if (result.length() == 40) break;
             node.put("tag", "relay-" + (result.length() + 1)); result.put(node);
         }
         return result;
@@ -166,6 +166,21 @@ public final class PublicProxyProvider {
             dest.put(field, value);
         }
     }
+    /** Switch resolver without accepting any DNS controls from the downloaded feed. */
+    static String withResolver(String profile, int index) throws Exception {
+        JSONObject root = new JSONObject(profile);
+        String[] ips = {"1.1.1.1", "8.8.8.8", "9.9.9.9"};
+        String[] names = {"cloudflare-dns.com", "dns.google", "dns.quad9.net"};
+        int selected = Math.floorMod(index, ips.length);
+        JSONArray servers = root.getJSONObject("dns").getJSONArray("servers");
+        for (int i = 0; i < servers.length(); i++) {
+            JSONObject dns = servers.getJSONObject(i);
+            dns.put("server", ips[selected]);
+            dns.getJSONObject("tls").put("server_name", names[selected]);
+        }
+        return root.toString();
+    }
+
     static String buildProfile(JSONArray nodes) throws Exception {
         JSONArray tags = new JSONArray();
         for (int i = 0; i < nodes.length(); i++) tags.put(nodes.getJSONObject(i).getString("tag"));
@@ -185,3 +200,4 @@ public final class PublicProxyProvider {
         return root.toString();
     }
 }
+

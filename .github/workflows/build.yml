@@ -37,6 +37,8 @@ jobs:
           java -cp "$TEST_CLASSES" com.rahyab.next.ProviderNetworkTest
       - name: Verify first-packet handshake timeout regression
         run: python3 scripts/tests/check-attempt-response.py
+      - name: Verify independent VPN health classification
+        run: python3 scripts/tests/check-alternative-health.py
       - name: Verify VPN quality network isolation
         run: python3 scripts/tests/check-quality-network.py
       - name: Locate Android SDK tools
@@ -330,4 +332,5 @@ jobs:
             device-test-result.txt
             emulator.log
           if-no-files-found: ignore
+
 

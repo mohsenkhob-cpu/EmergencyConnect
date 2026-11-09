@@ -43,7 +43,7 @@ public class PublicProxyProviderTest {
     @Test public void capsAndDeduplicatesPool() throws Exception {
         JSONArray out = new JSONArray();
         for (int i=0; i<80; i++) out.put(relay().put("server", "203.0.113."+(i+1)));
-        assertEquals(24, PublicProxyProvider.sanitize(new JSONObject().put("outbounds", out)).length());
+        assertEquals(40, PublicProxyProvider.sanitize(new JSONObject().put("outbounds", out)).length());
         assertEquals(1, PublicProxyProvider.sanitize(new JSONObject().put("outbounds",
                 new JSONArray().put(relay()).put(relay()))).length());
     }
@@ -59,4 +59,20 @@ public class PublicProxyProviderTest {
         try { PublicProxyProvider.fetch(url -> { fail("Cancelled fetch opened a connection"); return null; }, () -> true); fail(); }
         catch (InterruptedException expected) { }
     }
+
+    @Test public void dnsRepairPreservesRelayPoolAndSocketProtection() throws Exception {
+        String original = PublicProxyProvider.buildProfile(PublicProxyProvider.sanitize(
+                new JSONObject().put("outbounds", new JSONArray().put(relay()))));
+        JSONObject repaired = new JSONObject(PublicProxyProvider.withResolver(original, 1));
+        assertEquals(new JSONObject(original).getJSONArray("outbounds").toString(),
+                repaired.getJSONArray("outbounds").toString());
+        assertEquals("8.8.8.8", repaired.getJSONObject("dns").getJSONArray("servers")
+                .getJSONObject(0).getString("server"));
+        assertEquals("dns.google", repaired.getJSONObject("dns").getJSONArray("servers")
+                .getJSONObject(0).getJSONObject("tls").getString("server_name"));
+        assertTrue(repaired.getJSONObject("route").getBoolean("auto_detect_interface"));
+        assertEquals("9.9.9.9", new JSONObject(PublicProxyProvider.withResolver(original, 2))
+                .getJSONObject("dns").getJSONArray("servers").getJSONObject(0).getString("server"));
+    }
 }
+

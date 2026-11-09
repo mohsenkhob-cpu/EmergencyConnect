@@ -32,92 +32,86 @@ public final class TunnelVerifier {
         public final boolean verified;
         public final String exitIp;
         public final String message;
+        public final boolean dnsOnlyFailure;
 
         private Result(boolean verified, String exitIp, String message) {
             this.verified = verified;
             this.exitIp = exitIp;
             this.message = message;
+            this.dnsOnlyFailure = false;
         }
 
+        private Result(String message) {
+            this.verified = false; this.exitIp = null;
+            this.message = message; this.dnsOnlyFailure = true;
+        }
+        static Result dnsFailure(String message) { return new Result(message); }
         static Result success(String ip) { return new Result(true, ip, "HTTPS از مسیر VPN پاسخ داد"); }
         static Result failure(String message) { return new Result(false, null, message); }
     }
 
-    /** Must be called on a worker thread. */
+    /** Check independent HTTPS destinations, always on the same captured VPN Network. */
     public static Result verify(Context context) {
-        ConnectivityManager manager =
-                (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+        ConnectivityManager manager = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
         if (manager == null) return Result.failure("مدیر اتصال اندروید در دسترس نیست");
-
         Network vpn = awaitActiveVpn(manager);
-        if (vpn == null) {
-            return Result.failure("مسیر VPN تا پایان مهلت ۸ ثانیه‌ای در اندروید فعال نشد");
+        if (vpn == null) return Result.failure("مسیر VPN در اندروید فعال نشد");
+        String[] urls = {IP_CHECK_URL, "https://www.gstatic.com/generate_204",
+                "https://cp.cloudflare.com/generate_204"};
+        StringBuilder errors = new StringBuilder();
+        for (int i = 0; i < urls.length; i++) {
+            if (Thread.currentThread().isInterrupted() || !vpn.equals(manager.getActiveNetwork()))
+                return Result.failure("آزمون لغو شد یا شبکه تغییر کرد");
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) vpn.openConnection(new URL(urls[i]), java.net.Proxy.NO_PROXY);
+                configure(c);
+                int code = c.getResponseCode();
+                if (i > 0 && code == 204 && vpn.equals(manager.getActiveNetwork()))
+                    return Result.success("");
+                if (i == 0 && code == 200) {
+                    String ip;
+                    try (InputStream in = c.getInputStream()) {
+                        ip = new JSONObject(new String(readLimited(in, MAX_RESPONSE_BYTES), StandardCharsets.UTF_8))
+                                .optString("ip", "").trim();
+                    }
+                    if (isPublicAddressLiteral(ip) && vpn.equals(manager.getActiveNetwork())) return Result.success(ip);
+                }
+                errors.append("HTTPS-").append(i + 1).append(":HTTP_").append(code).append(" ");
+            } catch (Exception e) {
+                errors.append("HTTPS-").append(i + 1).append(":").append(e.getClass().getSimpleName()).append(" ");
+            } finally { if (c != null) c.disconnect(); }
         }
-
-        HttpURLConnection connection = null;
+        // A working numeric HTTPS path is DNS degradation, not proof of normal app connectivity.
+        HttpURLConnection c = null;
         try {
-            connection = (HttpURLConnection) vpn.openConnection(new URL(IP_CHECK_URL));
-            connection.setRequestMethod("GET");
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
-            connection.setUseCaches(false);
-            connection.setInstanceFollowRedirects(false);
-            connection.setRequestProperty("Accept", "application/json");
-            connection.setRequestProperty("User-Agent", "RahYabAndroid/0.3");
-
-            int code = connection.getResponseCode();
-            if (code != HttpURLConnection.HTTP_OK) {
-                return Result.failure("آزمون HTTPS پاسخ HTTP " + code + " دریافت کرد");
+            if (Thread.currentThread().isInterrupted() || !vpn.equals(manager.getActiveNetwork()))
+                return Result.failure("آزمون لغو شد یا شبکه تغییر کرد");
+            c = (HttpURLConnection) vpn.openConnection(new URL(DNS_INDEPENDENT_PROBE_URL), java.net.Proxy.NO_PROXY);
+            configure(c);
+            if (c.getResponseCode() == 200) {
+                String body;
+                try (InputStream in = c.getInputStream()) {
+                    body = new String(readLimited(in, MAX_RESPONSE_BYTES), StandardCharsets.UTF_8);
+                }
+                if (traceHasPublicIp(body) && vpn.equals(manager.getActiveNetwork()))
+                    return Result.dnsFailure("HTTPS بدون DNS کار می‌کند؛ بازیابی DNS لازم است");
             }
-
-            byte[] body;
-            try (InputStream input = connection.getInputStream()) {
-                body = readLimited(input, MAX_RESPONSE_BYTES);
-            }
-            String ip = new JSONObject(new String(body, StandardCharsets.UTF_8)).optString("ip", "").trim();
-            if (!isPublicAddressLiteral(ip)) {
-                return Result.failure("سرویس بررسی، نشانی IP معتبر و عمومی برنگرداند");
-            }
-            if (!vpn.equals(manager.getActiveNetwork())) {
-                return Result.failure("مسیر فعال شبکه هنگام بررسی تغییر کرد");
-            }
-            return Result.success(ip);
-        } catch (java.net.UnknownHostException e) {
-            return Result.failure("DNS برای api.ipify.org پاسخ نداد؛ "
-                    + probeWithoutDns(manager, vpn));
-        } catch (Exception e) {
-            String message = e.getMessage();
-            return Result.failure("آزمون عبور HTTPS ناموفق بود: "
-                    + (message == null || message.trim().isEmpty()
-                    ? e.getClass().getSimpleName() : message));
-        } finally {
-            if (connection != null) connection.disconnect();
-        }
+        } catch (Exception ignored) { }
+        finally { if (c != null) c.disconnect(); }
+        return Result.failure("مقصدهای مستقل HTTPS پاسخ معتبر ندادند؛ " + errors);
     }
 
-    /** Distinguish a DNS lookup failure from a failed HTTPS path without changing VPN status. */
-    private static String probeWithoutDns(ConnectivityManager manager, Network vpn) {
-        if (!vpn.equals(manager.getActiveNetwork())) {
-            return "شبکه پیش از آزمون مستقیم IP تغییر کرد";
-        }
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) vpn.openConnection(
-                    new URL(DNS_INDEPENDENT_PROBE_URL), java.net.Proxy.NO_PROXY);
-            connection.setConnectTimeout(DNS_INDEPENDENT_TIMEOUT_MS);
-            connection.setReadTimeout(DNS_INDEPENDENT_TIMEOUT_MS);
-            connection.setUseCaches(false);
-            connection.setInstanceFollowRedirects(false);
-            int code = connection.getResponseCode();
-            if (!vpn.equals(manager.getActiveNetwork())) {
-                return "شبکه هنگام آزمون مستقیم IP تغییر کرد";
-            }
-            return "آزمون HTTPS بدون DNS از مسیر VPN پاسخ HTTP " + code + " گرفت";
-        } catch (Exception error) {
-            return "آزمون HTTPS بدون DNS هم ناموفق بود (" + error.getClass().getSimpleName() + ")";
-        } finally {
-            if (connection != null) connection.disconnect();
-        }
+    private static void configure(HttpURLConnection c) {
+        c.setConnectTimeout(3000); c.setReadTimeout(3000);
+        c.setUseCaches(false); c.setInstanceFollowRedirects(false);
+        c.setRequestProperty("User-Agent", "RahYab/verified-egress");
+    }
+
+    static boolean traceHasPublicIp(String body) {
+        for (String line : body.split("\\r?\\n"))
+            if (line.startsWith("ip=") && isPublicAddressLiteral(line.substring(3).trim())) return true;
+        return false;
     }
 
     private static Network awaitActiveVpn(ConnectivityManager manager) {

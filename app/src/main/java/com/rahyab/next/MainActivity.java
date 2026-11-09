@@ -204,6 +204,28 @@ public class MainActivity extends Activity {
         }
         report.append('\n');
 
+        if ("sing-box".equals(prefs.getString("active_engine", ""))) {
+            Bundle engine = SingBoxVpnService.readStatus(this);
+            appendReportSection(report, "موتور فعال", "sing-box — VLESS / Trojan");
+            String today = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                    .format(new java.util.Date());
+            StringBuilder events = new StringBuilder();
+            for (String line : prefs.getString("app_event_history", "").split("\\n"))
+                if (line.startsWith(today)) events.append(line).append('\n');
+            appendReportSection(report, "رویدادهای امروز", events.toString());
+            appendReportSection(report, "شروع درخواست", prefs.getString("discovery_attempt_started_at", ""));
+            appendReportSection(report, "آخرین وضعیت", engine.getString("last_event", "") + " | "
+                    + engine.getString("last_detail", ""));
+            appendReportSection(report, "آخرین آزمون واقعی اینترنت", engine.getString("probe_result", ""));
+            appendReportSection(report, "شبکه زیرین فعلی موتور", engine.getString("physical_network", ""));
+            appendReportSection(report, "شبکه دریافت فهرست", prefs.getString("discovery_network", ""));
+            appendReportSection(report, "نوبت بازیابی", engine.getInt("recovery_count", 0) + " از ۳");
+            appendReportSection(report, "حل‌کننده HTTPS فعال", new String[]{"Cloudflare", "Google", "Quad9"}
+                    [Math.floorMod(engine.getInt("resolver_index", 0), 3)]);
+            appendReportSection(report, "وضعیت چراغ اتصال", prefs.getString("connection_lamp_state", ""));
+            report.append("\nپروفایل‌ها و کلیدهای اتصال در گزارش درج نمی‌شوند.\n");
+            return report.toString();
+        }
         appendReportSection(report, "رویدادهای برنامه",
                 prefs.getString("app_event_history", ""));
         appendReportSection(report, "زمان آغاز آخرین جست‌وجوی هوشمند",
@@ -1329,6 +1351,8 @@ public class MainActivity extends Activity {
         discoveryButton.setEnabled(false);
         disconnectButton.setEnabled(true);
         beginFreshDiscoveryDiagnostics();
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("active_engine", "sing-box").apply();
         publishDiscoveryStatus("جست‌وجوی فهرست تازه VLESS و Trojan برای موتور sing-box…", "searching");
         worker.execute(() -> {
             try {
@@ -1337,9 +1361,14 @@ public class MainActivity extends Activity {
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                         .putString("discovery_network", NetworkDiagnostics.describe(this, network))
                         .putString("discovery_network_snapshot", NetworkDiagnostics.snapshot(this)).apply();
-                PublicProxyProvider.Result result = PublicProxyProvider.fetch(
-                        url -> network.openConnection(url, java.net.Proxy.NO_PROXY),
-                        () -> generation != smartSearchGeneration);
+                String recent = SingBoxVpnService.recentSuccessfulPool(this, network);
+                PublicProxyProvider.Result result = recent != null
+                        ? new PublicProxyProvider.Result(recent,
+                            new JSONObject(recent).getJSONArray("outbounds").length() - 1,
+                            "مجموعه موفق اخیر همین شبکه")
+                        : PublicProxyProvider.fetch(
+                            url -> network.openConnection(url, java.net.Proxy.NO_PROXY),
+                            () -> generation != smartSearchGeneration);
                 runOnUiThread(() -> {
                     if (generation != smartSearchGeneration || isFinishing() || isDestroyed()) return;
                     pendingSingBoxJson = result.profile;
@@ -1374,6 +1403,8 @@ public class MainActivity extends Activity {
         discoveryButton.setEnabled(false);
         disconnectButton.setEnabled(true);
         beginFreshDiscoveryDiagnostics();
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("active_engine", "OpenVPN").apply();
         publishDiscoveryStatus("در حال جستجوی سرورهای رایگان و آماده‌سازی آزمون اتصال…", "searching");
         worker.execute(() -> {
             try {
@@ -1690,4 +1721,5 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 }
+
 

@@ -143,6 +143,33 @@ def main(apk, authorize_emulator, alternative=False):
                 print("PASS: Physical relay socket protection and binding were invoked.", flush=True)
             print(*evidence, sep="\n")
             print("PASS: sing-box URLTest and VPN-bound HTTPS egress." if alternative else "PASS: Smart Connect, HTTPS 204, and changed VPN exit IP.")
+            if alternative and authorize_emulator:
+                import json
+                cache = json.loads(adb("shell", "run-as", PACKAGE, "cat", "files/singbox-success-pool.json"))
+                assert cache.get("saved_at", 0) > 0 and cache.get("network_key")
+                print("PASS: Successful pool saved privately with freshness and network scope.", flush=True)
+                previous = state.get("last_event_time", 0)
+                print("Testing automatic recovery after a controlled physical network outage…", flush=True)
+                try:
+                    adb("shell", "svc", "wifi", "disable")
+                    adb("shell", "svc", "data", "disable")
+                    time.sleep(70)
+                finally:
+                    adb("shell", "svc", "data", "enable")
+                    adb("shell", "svc", "wifi", "enable")
+                recovered = False
+                recovery_deadline = time.monotonic() + 240
+                while time.monotonic() < recovery_deadline:
+                    current = json.loads(adb("shell", "run-as", PACKAGE, "cat", "files/singbox-status.json"))
+                    if current.get("last_event") == "AUTO_FAILED":
+                        raise SystemExit("FAIL: Automatic recovery stopped: " + current.get("last_detail", ""))
+                    if current.get("last_event") == "AUTO_CONNECTED" and current.get("last_event_time", 0) > previous:
+                        recovered = True
+                        break
+                    time.sleep(3)
+                if not recovered:
+                    raise SystemExit("FAIL: VPN did not recover automatically after restoring the network.")
+                print("PASS: VPN HTTPS recovered after network loss without another Connect tap.", flush=True)
             return
         time.sleep(3)
     raise SystemExit("FAIL: No verified HTTPS tunnel and changed exit IP within 10 minutes.")
@@ -155,4 +182,5 @@ if __name__ == "__main__":
     parser.add_argument("--alternative", action="store_true")
     args = parser.parse_args()
     main(args.apk, args.authorize_emulator, args.alternative)
+
 

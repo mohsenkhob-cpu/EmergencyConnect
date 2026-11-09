@@ -47,6 +47,10 @@ class SingBoxVpnService : VpnService() {
             val value = JSONObject().put(KEY_LAST_EVENT, event)
                 .put(KEY_LAST_DETAIL, detail.orEmpty())
                 .put(KEY_LAST_EVENT_TIME, System.currentTimeMillis())
+                .put("probe_result", lastProbe)
+                .put("recovery_count", recoveryCount)
+                .put("resolver_index", currentResolver)
+                .put("physical_network", physicalNetwork()?.let { NetworkDiagnostics.describe(this, it) }.orEmpty())
             output.write(value.toString().toByteArray(Charsets.UTF_8))
             file.finishWrite(output)
         } catch (e: Exception) {
@@ -65,6 +69,10 @@ class SingBoxVpnService : VpnService() {
     @Volatile private var verificationEpoch = 0
     @Volatile private var preferredPhysical: Network? = null
     private val verifier = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+    private var networkWaitSince = 0L
+    private var recoveryCount = 0
+    private var currentResolver = 0
+    private var lastProbe = ""
     private var verificationTask: java.util.concurrent.Future<*>? = null
     private fun isAutomatic() = profile?.contains("rahyab-auto") == true
     private val channel = "rahyab-singbox"
@@ -99,6 +107,9 @@ class SingBoxVpnService : VpnService() {
         verificationEpoch++
         verificationTask?.cancel(true)
         profile = requestedProfile
+        recoveryCount = 0
+        networkWaitSince = 0L
+        currentResolver = 0
         physicalNetwork()?.let { preferredPhysical = it; setUnderlyingNetworks(arrayOf(it)) }
         try {
             startForeground(notificationId, notification("در حال راه‌اندازی موتور VPN…"))
@@ -445,32 +456,100 @@ class SingBoxVpnService : VpnService() {
         verificationTask = verifier.submit {
             var result: TunnelVerifier.Result? = null
             // URLTest probes candidates concurrently; allow its first selection to settle.
-            for (attempt in 0 until 3) {
+            for (attempt in 0 until 2) {
                 if (epoch != verificationEpoch || Thread.currentThread().isInterrupted) return@submit
+                if (!monitoring) sendEvent("AUTO_SEARCHING", "آزمون مستقل اینترنت؛ تلاش " + (attempt + 1) + " از ۲")
                 result = TunnelVerifier.verify(this)
+                lastProbe = result.message
                 if (result.verified) break
-                if (attempt < 2) {
+                if (attempt < 1) {
                     try { Thread.sleep(2500L) } catch (_: InterruptedException) { return@submit }
                 }
             }
             if (epoch != verificationEpoch || Thread.currentThread().isInterrupted) return@submit
             if (result?.verified == true) {
-                val message = "اتصال جایگزین sing-box تأیید شد؛ HTTPS از مسیر VPN پاسخ داد"
+                runCatching { saveSuccessfulPool() }
+                val message = "اتصال جایگزین sing-box تأیید شد؛ آزمون مستقل HTTPS موفق بود"
                 sendEvent("AUTO_CONNECTED", message)
                 updateNotification(message)
                 verificationTask = verifier.schedule({
                     if (epoch == verificationEpoch) beginAutomaticVerification(epoch, true)
                 }, 45L, java.util.concurrent.TimeUnit.SECONDS)
             } else {
-                val message = if (monitoring) "عبور اینترنت اتصال جایگزین قطع شد؛ دوباره اتصال جایگزین را بزنید"
-                    else "مسیرهای جایگزین عبور اینترنت را تأیید نکردند؛ " + (result?.message ?: "آزمون ناموفق")
-                enqueueLifecycle {
-                    if (epoch == verificationEpoch) {
-                        stopEngine()
-                        sendEvent("AUTO_FAILED", message)
-                        stopSelf()
+                if (recoveryCount < 3) {
+                    recoverAutomatic(epoch, result?.dnsOnlyFailure == true)
+                } else {
+                    val message = "سه نوبت بازیابی انجام شد؛ اتصال پایدار تأیید نشد؛ " + lastProbe
+                    enqueueLifecycle {
+                        if (epoch == verificationEpoch) {
+                            stopEngine()
+                            sendEvent("AUTO_FAILED", message)
+                            stopSelf()
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    private fun saveSuccessfulPool() {
+        val current = profile ?: return
+        val value = JSONObject().put("saved_at", System.currentTimeMillis())
+            .put("network_key", physicalNetwork()?.let { poolNetworkKey(this, it) }.orEmpty())
+            .put("profile", current)
+        val file = AtomicFile(File(filesDir, "singbox-success-pool.json"))
+        val output = file.startWrite()
+        try { output.write(value.toString().toByteArray(Charsets.UTF_8)); file.finishWrite(output) }
+        catch (e: Exception) { file.failWrite(output); throw e }
+    }
+
+    private fun recoverAutomatic(epoch: Int, dnsOnly: Boolean) {
+        if (epoch != verificationEpoch || Thread.currentThread().isInterrupted) return
+        if (physicalNetwork() == null) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (networkWaitSince == 0L) networkWaitSince = now
+            if (now - networkWaitSince < 120000L) {
+                sendEvent("AUTO_SEARCHING", "شبکه زیرین قطع است؛ در انتظار بازگشت شبکه و بازیابی خودکار…")
+                verificationTask = verifier.schedule({ recoverAutomatic(epoch, dnsOnly) },
+                    10L, java.util.concurrent.TimeUnit.SECONDS)
+            } else enqueueLifecycle {
+                if (epoch == verificationEpoch) {
+                    stopEngine(); sendEvent("AUTO_FAILED", "شبکه زیرین تا پایان مهلت دو دقیقه‌ای برنگشت"); stopSelf()
+                }
+            }
+            return
+        }
+        networkWaitSince = 0L
+        recoveryCount++
+        currentResolver = (currentResolver + 1) % 3
+        sendEvent("AUTO_SEARCHING", if (dnsOnly) "مسیر HTTPS برقرار است؛ بازیابی DNS با حل‌کننده جایگزین…"
+            else "بازیابی خودکار مسیر؛ نوبت " + recoveryCount + " از ۳؛ دریافت مجموعه تازه…")
+        val next = runCatching {
+            val base = if (dnsOnly) profile ?: error("No profile") else {
+                val network = physicalNetwork() ?: error("No physical network")
+                PublicProxyProvider.fetch(
+                    { url -> network.openConnection(url, java.net.Proxy.NO_PROXY) },
+                    { epoch != verificationEpoch || Thread.currentThread().isInterrupted }
+                ).profile
+            }
+            PublicProxyProvider.withResolver(base, currentResolver)
+        }.getOrElse {
+            // Re-probe the retained pool if discovery is temporarily unavailable.
+            if (epoch != verificationEpoch || Thread.currentThread().isInterrupted) return
+            runCatching { PublicProxyProvider.withResolver(profile ?: return, currentResolver) }
+                .getOrNull() ?: run { sendEvent("AUTO_FAILED", "بازیابی تنظیمات ناموفق بود"); return }
+        }
+        enqueueLifecycle {
+            if (epoch != verificationEpoch) return@enqueueLifecycle
+            try {
+                profile = next
+                server?.startOrReloadService(next, OverrideOptions()) ?: error("Engine unavailable")
+                sendEvent("AUTO_SEARCHING", "مسیر بازیابی شد؛ بررسی عبور اینترنت؛ نوبت " + recoveryCount + " از ۳")
+                beginAutomaticVerification(epoch, false)
+            } catch (error: Exception) {
+                stopEngine()
+                sendEvent("AUTO_FAILED", "بارگذاری مسیر جایگزین ناموفق بود")
+                stopSelf()
             }
         }
     }
@@ -531,6 +610,23 @@ class SingBoxVpnService : VpnService() {
     }
 
     companion object {
+        @JvmStatic
+        fun poolNetworkKey(context: Context, network: Network): String {
+            val cm = context.getSystemService(ConnectivityManager::class.java)
+            val caps = cm.getNetworkCapabilities(network)
+            val kind = if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) "wifi" else "cellular"
+            return kind + ":" + cm.getLinkProperties(network)?.dnsServers.orEmpty()
+                .map { it.hostAddress }.sorted().joinToString(",")
+        }
+
+        @JvmStatic
+        fun recentSuccessfulPool(context: Context, network: Network): String? = runCatching {
+            val value = JSONObject(File(context.filesDir, "singbox-success-pool.json").readText())
+            val age = System.currentTimeMillis() - value.getLong("saved_at")
+            if (age !in 0L..21600000L || value.getString("network_key") != poolNetworkKey(context, network)) null
+            else value.getString("profile")
+        }.getOrNull()
+
         private const val TAG = "RahYabSingBox"
         private const val KEY_LAST_EVENT = "last_event"
         private const val KEY_LAST_DETAIL = "last_detail"
@@ -550,6 +646,10 @@ class SingBoxVpnService : VpnService() {
                 status.putString(KEY_LAST_EVENT, value.optString(KEY_LAST_EVENT))
                 status.putString(KEY_LAST_DETAIL, value.optString(KEY_LAST_DETAIL))
                 status.putLong(KEY_LAST_EVENT_TIME, value.optLong(KEY_LAST_EVENT_TIME))
+                status.putString("probe_result", value.optString("probe_result"))
+                status.putString("physical_network", value.optString("physical_network"))
+                status.putInt("recovery_count", value.optInt("recovery_count"))
+                status.putInt("resolver_index", value.optInt("resolver_index"))
             }
             return status
         }
@@ -580,4 +680,5 @@ class SingBoxVpnService : VpnService() {
         }
     }
 }
+
 
