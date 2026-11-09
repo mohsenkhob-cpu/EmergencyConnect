@@ -63,6 +63,7 @@ class SingBoxVpnService : VpnService() {
         Thread(task, "RahYab-singbox-lifecycle").apply { isDaemon = true }
     }
     @Volatile private var verificationEpoch = 0
+    @Volatile private var preferredPhysical: Network? = null
     private val verifier = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
     private var verificationTask: java.util.concurrent.Future<*>? = null
     private fun isAutomatic() = profile?.contains("rahyab-auto") == true
@@ -98,7 +99,7 @@ class SingBoxVpnService : VpnService() {
         verificationEpoch++
         verificationTask?.cancel(true)
         profile = requestedProfile
-        physicalNetwork()?.let { setUnderlyingNetworks(arrayOf(it)) }
+        physicalNetwork()?.let { preferredPhysical = it; setUnderlyingNetworks(arrayOf(it)) }
         try {
             startForeground(notificationId, notification("در حال راه‌اندازی موتور VPN…"))
         } catch (e: Exception) {
@@ -164,11 +165,19 @@ class SingBoxVpnService : VpnService() {
     private fun physicalNetwork(): Network? {
         val cm = getSystemService(ConnectivityManager::class.java)
         val active = cm.activeNetwork
-        return cm.allNetworks.filter { network ->
+        val candidates = cm.allNetworks.filter { network ->
             val caps = cm.getNetworkCapabilities(network)
             caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                 !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-        }.sortedByDescending { it == active }.firstOrNull()
+        }
+        if (active in candidates) return active
+        preferredPhysical?.let { if (it in candidates) return it }
+        return candidates.maxByOrNull { network ->
+            val caps = cm.getNetworkCapabilities(network)
+            val dnsReady = !cm.getLinkProperties(network)?.dnsServers.isNullOrEmpty()
+            (if (dnsReady) 4 else 0) +
+                (if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true) 2 else 0)
+        }
     }
 
     private inner class PlatformHandler : InvocationHandler {
@@ -389,7 +398,11 @@ class SingBoxVpnService : VpnService() {
                 if (defaultInterfaceCallback !== this || currentNetwork != network) return
                 val name = properties.interfaceName ?: return
                 val index = runCatching { JavaNetworkInterface.getByName(name)?.index }.getOrNull() ?: return
-                if (index > 0) listener.updateDefaultInterface(name, index, false, false)
+                if (index > 0) {
+                    preferredPhysical = network
+                    setUnderlyingNetworks(arrayOf(network))
+                    listener.updateDefaultInterface(name, index, false, false)
+                }
             }
 
             override fun onLost(network: Network) {
