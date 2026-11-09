@@ -170,6 +170,64 @@ def main(apk, authorize_emulator, alternative=False):
                 if not recovered:
                     raise SystemExit("FAIL: VPN did not recover automatically after restoring the network.")
                 print("PASS: VPN HTTPS recovered after network loss without another Connect tap.", flush=True)
+            if alternative and authorize_emulator:
+                def current_tuns():
+                    return {n for n in adb("shell", "ls", "/sys/class/net").split()
+                            if re.fullmatch(r"tun[0-9]+", n)}
+
+                def tap_visible(text):
+                    adb("shell", "input", "keyevent", "224")
+                    adb("shell", "wm", "dismiss-keyguard")
+                    for _ in range(8):
+                        adb("shell", "uiautomator", "dump", "/data/local/tmp/stop-ui.xml")
+                        tree = ET.fromstring(adb("shell", "cat", "/data/local/tmp/stop-ui.xml"))
+                        found = [n for n in tree.iter("node") if n.get("package") == PACKAGE
+                                 and n.get("text") == text and n.get("enabled") == "true"]
+                        if found:
+                            x1,y1,x2,y2 = map(int,re.findall(r"\d+",found[0].get("bounds")))
+                            adb("shell","input","tap",str((x1+x2)//2),str((y1+y2)//2))
+                            return
+                        time.sleep(1)
+                    raise SystemExit("FAIL: Expected enabled button: "+text)
+
+                def stop_and_confirm():
+                    owned = current_tuns()
+                    if not owned: raise SystemExit("FAIL: No kernel TUN observed before Disconnect.")
+                    tap_visible("قطع اتصال")
+                    deadline = time.monotonic()+15
+                    while time.monotonic()<deadline:
+                        stopped = json.loads(adb("shell","run-as",PACKAGE,"cat","files/singbox-status.json"))
+                        prefs = ET.fromstring(adb("shell","run-as",PACKAGE,"cat",DIAGNOSTICS))
+                        values = {n.get("name"): n.text or n.get("value") for n in prefs}
+                        if (stopped.get("last_event") == "AUTO_STOPPED"
+                                and not stopped.get("tun_open",True)
+                                and not stopped.get("engine_open",True)
+                                and not current_tuns()
+                                and values.get("connection_lamp_state") == "disconnected"
+                                and values.get("manual_stop_pending") == "false"):
+                            break
+                        time.sleep(0.5)
+                    else:
+                        raise SystemExit("FAIL: Disconnect did not close engine, remove kernel TUN, and confirm Android stop.")
+                    time.sleep(3)
+                    services = adb("shell","dumpsys","activity","services",PACKAGE)
+                    if re.search(r"ServiceRecord\{[^\n]*[/.]SingBoxVpnService\b",services):
+                        raise SystemExit("FAIL: VPN service is still active after Disconnect.")
+                    print("PASS: Disconnect acknowledged; engine closed, kernel TUN removed, service released.",flush=True)
+
+                stop_and_confirm()
+                time.sleep(50)
+                if current_tuns(): raise SystemExit("FAIL: VPN returned after explicit Disconnect.")
+                print("PASS: No delayed monitor/recovery recreated VPN after Disconnect.",flush=True)
+                tap_visible(button_text)
+                reconnect_deadline=time.monotonic()+420
+                while time.monotonic()<reconnect_deadline:
+                    restarted=json.loads(adb("shell","run-as",PACKAGE,"cat","files/singbox-status.json"))
+                    if restarted.get("last_event")=="AUTO_CONNECTED" and current_tuns(): break
+                    time.sleep(2)
+                else: raise SystemExit("FAIL: Explicit reconnect after full stop failed.")
+                print("PASS: Explicit reconnect works after complete stop.",flush=True)
+                stop_and_confirm()
             return
         time.sleep(3)
     raise SystemExit("FAIL: No verified HTTPS tunnel and changed exit IP within 10 minutes.")
@@ -182,5 +240,6 @@ if __name__ == "__main__":
     parser.add_argument("--alternative", action="store_true")
     args = parser.parse_args()
     main(args.apk, args.authorize_emulator, args.alternative)
+
 
 

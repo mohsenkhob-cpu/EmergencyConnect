@@ -50,6 +50,9 @@ class SingBoxVpnService : VpnService() {
                 .put("probe_result", lastProbe)
                 .put("recovery_count", recoveryCount)
                 .put("resolver_index", currentResolver)
+                .put("tun_open", tunnel.get() != null)
+                .put("engine_open", server != null)
+                .put("stop_requested", stopping)
                 .put("physical_network", physicalNetwork()?.let { NetworkDiagnostics.describe(this, it) }.orEmpty())
             output.write(value.toString().toByteArray(Charsets.UTF_8))
             file.finishWrite(output)
@@ -60,8 +63,12 @@ class SingBoxVpnService : VpnService() {
     }
 
     @Volatile private var lastEvent: String? = null
-    private var server: CommandServer? = null
-    private var tunnel: ParcelFileDescriptor? = null
+    @Volatile private var server: CommandServer? = null
+    private val tunnel = java.util.concurrent.atomic.AtomicReference<ParcelFileDescriptor?>(null)
+    @Volatile private var stopping = false
+    private val control = android.os.Messenger(Handler(Looper.getMainLooper()) { message ->
+        if (message.what == CONTROL_STOP) { requestStop(); true } else false
+    })
     @Volatile private var profile: String? = null
     private val lifecycle: ExecutorService = Executors.newSingleThreadExecutor { task ->
         Thread(task, "RahYab-singbox-lifecycle").apply { isDaemon = true }
@@ -99,12 +106,14 @@ class SingBoxVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            enqueueLifecycle { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf(startId) }
+            requestStop()
             return START_NOT_STICKY
         }
         val requestedProfile = intent?.getStringExtra(EXTRA_PROFILE)
         if (requestedProfile.isNullOrBlank()) { stopSelf(startId); return START_NOT_STICKY }
+        stopping = false
         verificationEpoch++
+        val startEpoch = verificationEpoch
         verificationTask?.cancel(true)
         profile = requestedProfile
         recoveryCount = 0
@@ -124,6 +133,7 @@ class SingBoxVpnService : VpnService() {
         }
         sendEvent(EVENT_STARTING)
         enqueueLifecycle {
+            if (stopping || startEpoch != verificationEpoch) return@enqueueLifecycle
             var created: CommandServer? = null
             try {
                 val setup = SetupOptions().apply {
@@ -156,6 +166,7 @@ class SingBoxVpnService : VpnService() {
                     server = created
                     created = null
                 }
+                if (stopping || startEpoch != verificationEpoch) return@enqueueLifecycle
                 Log.i(TAG, "libbox accepted the profile and started/reloaded its service")
                 updateNotification("موتور VPN راه‌اندازی شد؛ وضعیت مسیر اینترنت در حال بررسی است")
                 sendEvent(EVENT_ENGINE_STARTED)
@@ -267,7 +278,7 @@ class SingBoxVpnService : VpnService() {
         override fun invoke(proxy: Any, method: Method, args: Array<out Any?>?): Any? {
             return when (method.name) {
                 "serviceStop" -> {
-                    enqueueLifecycle { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf() }
+                    Handler(Looper.getMainLooper()).post { requestStop() }
                     null
                 }
                 "serviceReload" -> {
@@ -293,6 +304,7 @@ class SingBoxVpnService : VpnService() {
 
     @Synchronized
     private fun openTun(options: TunOptions): Int {
+        check(!stopping) { "VPN start cancelled by Disconnect" }
         if (VpnService.prepare(this) != null) error("مجوز VPN صادر نشده است")
         val builder = Builder().setSession("راه‌یاب").setMtu(options.mtu)
         if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
@@ -330,8 +342,8 @@ class SingBoxVpnService : VpnService() {
         }
 
         val descriptor = builder.establish() ?: error("Android نتوانست تونل VPN را بسازد")
-        tunnel?.close()
-        tunnel = descriptor
+        if (stopping) { descriptor.close(); error("VPN start cancelled by Disconnect") }
+        tunnel.getAndSet(descriptor)?.close()
         sendEvent(EVENT_TUN_ESTABLISHED)
         return descriptor.fd
     }
@@ -441,17 +453,34 @@ class SingBoxVpnService : VpnService() {
         getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback)
     }
 
+    private fun releaseOwnedTun() {
+        runCatching { tunnel.getAndSet(null)?.close() }.onFailure { Log.w(TAG, "close TUN", it) }
+    }
+
+    private fun requestStop() {
+        if (stopping) return
+        stopping = true
+        verificationEpoch++
+        verificationTask?.cancel(true)
+        // Release our descriptor now; native duplicated descriptors are closed below.
+        releaseOwnedTun()
+        sendEvent("AUTO_STOPPING", "در حال بستن موتور و آزادکردن تونل اندروید…")
+        enqueueLifecycle {
+            stopEngine()
+            sendEvent(EVENT_STOPPED)
+            stopSelf()
+        }
+    }
+
     private fun stopEngine() {
         verificationEpoch++
         verificationTask?.cancel(true)
+        releaseOwnedTun()
         runCatching { server?.closeService() }.onFailure { Log.w(TAG, "closeService", it) }
         runCatching { server?.close() }.onFailure { Log.w(TAG, "close", it) }
         server = null
         runCatching { stopDefaultInterfaceMonitor() }.onFailure { Log.w(TAG, "close network monitor", it) }
-        synchronized(this) {
-            runCatching { tunnel?.close() }
-            tunnel = null
-        }
+        releaseOwnedTun()
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE) else @Suppress("DEPRECATION") stopForeground(true)
     }
 
@@ -558,6 +587,7 @@ class SingBoxVpnService : VpnService() {
     }
 
     private fun sendEvent(event: String, detail: String? = null) {
+        if (stopping && event != "AUTO_STOPPING" && event != EVENT_STOPPED && event != "AUTO_STOPPED") return
         val publishedEvent = if (isAutomatic() && event == EVENT_ERROR) "AUTO_FAILED"
             else if (isAutomatic() && event == EVENT_STOPPED) "AUTO_STOPPED" else event
         val publishedDetail = if (publishedEvent == "AUTO_STOPPED") "اتصال جایگزین متوقف شد"
@@ -595,13 +625,17 @@ class SingBoxVpnService : VpnService() {
         getSystemService(NotificationManager::class.java).notify(notificationId, notification(message))
     }
 
-    override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
+    override fun onBind(intent: Intent?): IBinder? =
+        if (intent?.action == ACTION_CONTROL) control.binder else super.onBind(intent)
+
     override fun onRevoke() {
-        enqueueLifecycle { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf() }
+        Handler(Looper.getMainLooper()).post { requestStop() }
         super.onRevoke()
     }
     override fun onDestroy() {
+        stopping = true
         verificationEpoch++
+        releaseOwnedTun()
         verificationTask?.cancel(true)
         verifier.shutdownNow()
         enqueueLifecycle {
@@ -653,10 +687,15 @@ class SingBoxVpnService : VpnService() {
                 status.putString("physical_network", value.optString("physical_network"))
                 status.putInt("recovery_count", value.optInt("recovery_count"))
                 status.putInt("resolver_index", value.optInt("resolver_index"))
+                status.putBoolean("tun_open", value.optBoolean("tun_open"))
+                status.putBoolean("engine_open", value.optBoolean("engine_open"))
+                status.putBoolean("stop_requested", value.optBoolean("stop_requested"))
             }
             return status
         }
         private const val EXTRA_PROFILE = "rahyab.profile"
+        private const val ACTION_CONTROL = "com.rahyab.next.SINGBOX_CONTROL"
+        private const val CONTROL_STOP = 1
         private const val ACTION_STOP = "com.rahyab.next.STOP_SINGBOX"
         const val ACTION_EVENT = "com.rahyab.next.SINGBOX_EVENT"
         const val EXTRA_EVENT = "rahyab.event"
@@ -674,14 +713,30 @@ class SingBoxVpnService : VpnService() {
         }
 
         @JvmStatic
-        fun stop(context: Context) {
-            // Do not start an idle service just to stop it: that creates a
-            // spurious STOPPED broadcast which can overwrite another engine's
-            // startup status. stopService() still invokes onDestroy() for an
-            // active started service, where stopEngine() performs cleanup.
-            context.stopService(Intent(context, SingBoxVpnService::class.java))
+        fun stop(context: Context): Boolean {
+            val app = context.applicationContext
+            val connection = object : android.content.ServiceConnection {
+                override fun onServiceConnected(name: android.content.ComponentName, binder: IBinder) {
+                    try {
+                        android.os.Messenger(binder).send(android.os.Message.obtain(null, CONTROL_STOP))
+                    } catch (e: android.os.RemoteException) {
+                        Log.w(TAG, "Stop receiver already exited", e)
+                    } finally { runCatching { app.unbindService(this) } }
+                }
+                override fun onServiceDisconnected(name: android.content.ComponentName) { }
+                override fun onNullBinding(name: android.content.ComponentName) {
+                    runCatching { app.unbindService(this) }
+                }
+            }
+            // Flags=0: contact an existing started/bound service, never create an idle VPN.
+            val bound = app.bindService(Intent(app, SingBoxVpnService::class.java).setAction(ACTION_CONTROL), connection, 0)
+            if (bound) Handler(Looper.getMainLooper()).postDelayed({
+                runCatching { app.unbindService(connection) }
+            }, 3000L)
+            return bound
         }
     }
 }
+
 
 

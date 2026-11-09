@@ -35,6 +35,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * managed by the native OpenVPNClient adapter; this class alone is not a VPN.
  */
 public final class RahYabVpnService extends VpnService {
+    private static final java.lang.ref.WeakReference<RahYabVpnService> EMPTY_SERVICE =
+            new java.lang.ref.WeakReference<>(null);
+    private static volatile java.lang.ref.WeakReference<RahYabVpnService> liveService = EMPTY_SERVICE;
+    private int lastStartId;
+    public static void requestStopIfRunning() {
+        RahYabVpnService running = liveService.get();
+        if (running == null || running.serviceDestroyed) return;
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            if (liveService.get() == running && !running.serviceDestroyed)
+                running.stopFromUser(running.lastStartId);
+        });
+    }
+
     public static final String ACTION_START = "ir.emergencyconnect.engine.START_VPN";
     public static final String ACTION_STOP = "ir.emergencyconnect.engine.STOP_VPN";
     public static final String EXTRA_PROFILE = "ir.emergencyconnect.engine.PROFILE";
@@ -234,8 +247,67 @@ public final class RahYabVpnService extends VpnService {
         return claimedNow;
     }
 
+    private int stopFromUser(final int startId) {
+        stopRequested.set(true);
+
+        android.content.SharedPreferences pending =
+                getSharedPreferences(PENDING_START_PREFS, MODE_PRIVATE);
+        String cancelledRequestId = pending.getString(PENDING_START_ID, null);
+        if (cancelledRequestId != null) {
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("service_start_cancelled_request_id",
+                            cancelledRequestId)
+                    .commit();
+        }
+        pending.edit().clear().commit();
+        autoSearchEnabled = false;
+        autoConnected = false;
+        cancelQualityMonitor();
+        autoProfiles = null;
+        activeAutoProfile = null;
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("service_stop_requested_at", formatDiagnosticTime(System.currentTimeMillis()))
+                .putString("service_stop_reason", "ACTION_STOP received; active automatic attempt released if waiting")
+                .putString("service_stop_active_endpoint",
+                        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
+                                .getString("auto_current_endpoint", ""))
+                .commit();
+        appendAutoHistory("AUTO_STOP_REQUESTED",
+                "دستور توقف دریافت شد؛ آزمون جاری در صورت انتظار لغو می‌شود و به‌عنوان خرابی سرور شمرده نخواهد شد");
+        CountDownLatch activeAttempt = attemptSignal;
+        if (activeAttempt != null) activeAttempt.countDown();
+        attemptSignal = null;
+        setLampState("disconnected");
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .remove("auto_current_endpoint")
+                .remove("auto_current_started_at")
+                .remove("auto_current_protocol")
+                .putString("auto_current_wait_state", "CANCELLED_BY_STOP_OR_SERVICE")
+                .putString("session_start_result",
+                        "اتصال به درخواست کاربر متوقف شد؛ برای شروع دوباره اتصال هوشمند را بزنید.")
+                .commit();
+        updateStatus("اتصال برقرار نیست؛ برای شروع، دکمه اتصال هوشمند را بزنید.");
+        try {
+            sessionExecutor.execute(() -> {
+                synchronized (nativeSessionLock) {
+                    stopNativeSession();
+                }
+                closeTun();
+                stopSelf(startId);
+            });
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
+            // onDestroy already owns native/TUN cleanup; a late stop
+            // command must not crash Android's service main thread.
+            appendAutoHistory("STOP_QUEUE_CLOSED",
+                    "درخواست توقف پس از بسته‌شدن صف سرویس دریافت شد؛ پاک‌سازی نهایی در حال انجام است");
+        }
+        return START_NOT_STICKY;
+        
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        lastStartId = startId;
         String action = intent == null ? null : intent.getAction();
         if (ACTION_STOP.equals(action)) stopRequested.set(true);
         String requestId = intent == null ? null : intent.getStringExtra(EXTRA_REQUEST_ID);
@@ -309,60 +381,7 @@ public final class RahYabVpnService extends VpnService {
             }
         }
 
-        if (ACTION_STOP.equals(action)) {
-            android.content.SharedPreferences pending =
-                    getSharedPreferences(PENDING_START_PREFS, MODE_PRIVATE);
-            String cancelledRequestId = pending.getString(PENDING_START_ID, null);
-            if (cancelledRequestId != null) {
-                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                        .putString("service_start_cancelled_request_id",
-                                cancelledRequestId)
-                        .commit();
-            }
-            pending.edit().clear().commit();
-            autoSearchEnabled = false;
-            autoConnected = false;
-            cancelQualityMonitor();
-            autoProfiles = null;
-            activeAutoProfile = null;
-            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                    .putString("service_stop_requested_at", formatDiagnosticTime(System.currentTimeMillis()))
-                    .putString("service_stop_reason", "ACTION_STOP received; active automatic attempt released if waiting")
-                    .putString("service_stop_active_endpoint",
-                            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
-                                    .getString("auto_current_endpoint", ""))
-                    .commit();
-            appendAutoHistory("AUTO_STOP_REQUESTED",
-                    "دستور توقف دریافت شد؛ آزمون جاری در صورت انتظار لغو می‌شود و به‌عنوان خرابی سرور شمرده نخواهد شد");
-            CountDownLatch activeAttempt = attemptSignal;
-            if (activeAttempt != null) activeAttempt.countDown();
-            attemptSignal = null;
-            setLampState("disconnected");
-            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                    .remove("auto_current_endpoint")
-                    .remove("auto_current_started_at")
-                    .remove("auto_current_protocol")
-                    .putString("auto_current_wait_state", "CANCELLED_BY_STOP_OR_SERVICE")
-                    .putString("session_start_result",
-                            "اتصال به درخواست کاربر متوقف شد؛ برای شروع دوباره اتصال هوشمند را بزنید.")
-                    .commit();
-            updateStatus("اتصال برقرار نیست؛ برای شروع، دکمه اتصال هوشمند را بزنید.");
-            try {
-                sessionExecutor.execute(() -> {
-                    synchronized (nativeSessionLock) {
-                        stopNativeSession();
-                    }
-                    closeTun();
-                    stopSelf(startId);
-                });
-            } catch (java.util.concurrent.RejectedExecutionException rejected) {
-                // onDestroy already owns native/TUN cleanup; a late stop
-                // command must not crash Android's service main thread.
-                appendAutoHistory("STOP_QUEUE_CLOSED",
-                        "درخواست توقف پس از بسته‌شدن صف سرویس دریافت شد؛ پاک‌سازی نهایی در حال انجام است");
-            }
-            return START_NOT_STICKY;
-        }
+        if (ACTION_STOP.equals(action)) return stopFromUser(startId);
         if (ACTION_START.equals(action)) {
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("service_start_received", new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(new java.util.Date()))
@@ -1499,6 +1518,7 @@ public final class RahYabVpnService extends VpnService {
     @Override
     public void onCreate() {
         super.onCreate();
+        liveService = new java.lang.ref.WeakReference<>(this);
         android.content.SharedPreferences diagnostics =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         String enteredAt = new java.text.SimpleDateFormat(
@@ -2091,6 +2111,7 @@ public final class RahYabVpnService extends VpnService {
 
     @Override
     public void onDestroy() {
+        if (liveService.get() == this) liveService = EMPTY_SERVICE;
         stopRequested.set(true);
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("service_on_destroy_at", new java.text.SimpleDateFormat(
@@ -2157,3 +2178,4 @@ public final class RahYabVpnService extends VpnService {
         super.onDestroy();
     }
 }
+

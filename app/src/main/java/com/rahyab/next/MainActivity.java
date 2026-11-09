@@ -56,6 +56,10 @@ public class MainActivity extends Activity {
     private volatile int smartSearchGeneration;
     private int pendingSmartSearchGeneration;
     private boolean smartSearchPending;
+    private boolean manualStopPending;
+    private boolean manualStopNeedsAck;
+    private boolean wireGuardStopFinished;
+    private long manualStopAt;
     private Button singBoxConnectButton;
     private Button discoveryButton;
     private TextView status;
@@ -219,6 +223,11 @@ public class MainActivity extends Activity {
             appendReportSection(report, "آخرین آزمون واقعی اینترنت", engine.getString("probe_result", ""));
             appendReportSection(report, "شبکه زیرین فعلی موتور", engine.getString("physical_network", ""));
             appendReportSection(report, "شبکه دریافت فهرست", prefs.getString("discovery_network", ""));
+            appendReportSection(report, "قطع در انتظار تأیید", Boolean.toString(prefs.getBoolean("manual_stop_pending", false)));
+            appendReportSection(report, "نتیجه تأیید قطع", prefs.getString("manual_stop_result", ""));
+            appendReportSection(report, "وجود تونل در موتور", Boolean.toString(engine.getBoolean("tun_open", false)));
+            appendReportSection(report, "وجود نشست در موتور", Boolean.toString(engine.getBoolean("engine_open", false)));
+            appendReportSection(report, "وجود شبکه VPN راه‌یاب در اندروید", Boolean.toString(hasOwnVpnNetwork()));
             appendReportSection(report, "نوبت بازیابی", engine.getInt("recovery_count", 0) + " از ۳");
             appendReportSection(report, "حل‌کننده HTTPS فعال", new String[]{"Cloudflare", "Google", "Quad9"}
                     [Math.floorMod(engine.getInt("resolver_index", 0), 3)]);
@@ -726,7 +735,9 @@ public class MainActivity extends Activity {
         if (eventTime == 0L || System.currentTimeMillis() - eventTime > 10 * 60 * 1000L) return;
         String event = prefs.getString("last_event", "");
         String detail = prefs.getString("last_detail", "");
-        if (!"STOPPED".equals(event) && !"ERROR".equals(event)
+        if (!event.endsWith("STOPPED") && !event.endsWith("FAILED")
+                && !event.endsWith("STOPPING") && !"ERROR".equals(event)
+                && !getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).getBoolean("manual_stop_pending", false)
                 && singBoxProcessExitedAfter(eventTime)) {
             setStatus("فرایند sing-box متوقف شد؛ گزارش عیب‌یابی را بررسی کنید");
             singBoxConnectButton.setEnabled(true);
@@ -1100,6 +1111,7 @@ public class MainActivity extends Activity {
     }
 
     private void requestSingBoxConnection() {
+        if (manualStopPending) return;
         if (pendingSingBoxJson == null) {
             setStatus("ابتدا فایل JSON سرور را وارد کنید");
             return;
@@ -1113,6 +1125,7 @@ public class MainActivity extends Activity {
     }
 
     private void startSingBox() {
+        if (manualStopPending) return;
         if (pendingSingBoxJson == null) return;
         try {
             getSharedPreferences("rahyab_singbox_status", MODE_PRIVATE).edit()
@@ -1126,10 +1139,13 @@ public class MainActivity extends Activity {
     }
 
     private void startWireGuard() {
+        if (manualStopPending) return;
         if (pendingWireGuardConfig == null) return;
         setStatus("در حال راه‌اندازی تونل WireGuard…");
         connectButton.setEnabled(false);
+        final int generation = smartSearchGeneration;
         worker.execute(() -> {
+            if (generation != smartSearchGeneration) return;
             try {
                 Tunnel.State actualState = wireGuardBackend.setState(
                         wireGuardTunnel, Tunnel.State.UP, pendingWireGuardConfig);
@@ -1137,6 +1153,7 @@ public class MainActivity extends Activity {
                     throw new IllegalStateException("موتور WireGuard تونل را روشن اعلام نکرد");
                 }
                 runOnUiThread(() -> {
+                    if (generation != smartSearchGeneration) return;
                     setStatus("تونل WireGuard روشن است؛ عبور واقعی اینترنت هنوز تأیید نشده است");
                     disconnectButton.setEnabled(true);
                     connectButton.setEnabled(true);
@@ -1344,6 +1361,7 @@ public class MainActivity extends Activity {
     }
 
     private void startAlternativeSearch() {
+        if (manualStopPending) return;
         if (smartSearchPending || alternativeButton == null || !alternativeButton.isEnabled()) return;
         final int generation = ++smartSearchGeneration;
         smartSearchPending = true;
@@ -1397,6 +1415,7 @@ public class MainActivity extends Activity {
     }
 
     private void startSmartOpenVpnSearch() {
+        if (manualStopPending) return;
         if (discoveryButton == null || !discoveryButton.isEnabled() || smartSearchPending) return;
         final int generation = ++smartSearchGeneration;
         smartSearchPending = true;
@@ -1557,22 +1576,76 @@ public class MainActivity extends Activity {
         // A manual stop must invalidate any not-yet-consumed start request.
         getSharedPreferences("rah_yab_pending_start", MODE_PRIVATE).edit()
                 .clear().commit();
-        publishDiscoveryStatus("در حال قطع همه موتورهای VPN…", "disconnected");
-        SingBoxVpnService.stop(getApplicationContext());
-        Intent stop = new Intent(this, RahYabVpnService.class);
-        stop.setAction(RahYabVpnService.ACTION_STOP);
-        try { startService(stop); } catch (RuntimeException ignored) { }
+        manualStopPending = true;
+        wireGuardStopFinished = false;
+        manualStopAt = System.currentTimeMillis();
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putBoolean("manual_stop_pending", true).putLong("manual_stop_at", manualStopAt).commit();
+        publishDiscoveryStatus("در حال قطع موتور و آزادکردن تونل VPN…", "stopping");
+        manualStopNeedsAck = SingBoxVpnService.stop(getApplicationContext());
+        discoveryButton.setEnabled(false);
+        alternativeButton.setEnabled(false);
+        connectButton.setEnabled(false);
+        singBoxConnectButton.setEnabled(false);
+        RahYabVpnService.requestStopIfRunning();
         worker.execute(() -> {
             try { wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null); }
             catch (Exception ignored) { }
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed() || generation != smartSearchGeneration) return;
-                disconnectButton.setEnabled(false);
-                discoveryButton.setEnabled(true);
-                if (alternativeButton != null) alternativeButton.setEnabled(true);
-                setStatus("درخواست قطع اتصال به همه موتورها ارسال شد");
+                wireGuardStopFinished = true;
+                refreshServiceStatusFromPreferences();
             });
         });
+    }
+
+    private boolean hasOwnVpnNetwork() {
+        android.net.ConnectivityManager cm = getSystemService(android.net.ConnectivityManager.class);
+        if (cm == null) return true; // An unavailable observer cannot confirm disconnection.
+        for (android.net.Network network : cm.getAllNetworks()) {
+            android.net.NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+            if (caps == null || !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) continue;
+            if (Build.VERSION.SDK_INT >= 30 && caps.getOwnerUid() >= 0
+                    && caps.getOwnerUid() != android.os.Process.myUid()) continue;
+            return true;
+        }
+        return false;
+    }
+
+    private void refreshManualStopStatus() {
+        Bundle engine = SingBoxVpnService.readStatus(this);
+        boolean acknowledged = engine.getString("last_event", "").endsWith("STOPPED")
+                && engine.getLong("last_event_time", 0L) >= manualStopAt
+                && !engine.getBoolean("tun_open", true) && !engine.getBoolean("engine_open", true);
+        boolean vpnPresent = hasOwnVpnNetwork();
+        boolean receiverGone = System.currentTimeMillis() - manualStopAt >= 5000L && !vpnPresent;
+        if (wireGuardStopFinished && !vpnPresent && (!manualStopNeedsAck || acknowledged || receiverGone)) {
+            manualStopPending = false;
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putBoolean("manual_stop_pending", false)
+                    .putString("manual_stop_result", acknowledged ? "ENGINE_ACK_AND_NO_VPN" : "NO_VPN_NETWORK")
+                    .putLong("manual_stop_confirmed_at", System.currentTimeMillis()).commit();
+            publishDiscoveryStatus("اتصال VPN کاملاً قطع شد؛ تونل فعال راه‌یاب در اندروید وجود ندارد", "disconnected");
+            discoveryButton.setEnabled(true);
+            alternativeButton.setEnabled(true);
+            connectButton.setEnabled(true);
+            singBoxConnectButton.setEnabled(true);
+            disconnectButton.setEnabled(false);
+            return;
+        }
+        String message = System.currentTimeMillis() - manualStopAt > 10000L
+                ? "قطع درخواست شده؛ منتظر تأیید آزادشدن تونل اندروید هستیم…"
+                : "در حال بستن موتور و آزادکردن تونل VPN…";
+        if (!message.equals(lastRenderedServiceStatus)) {
+            lastRenderedServiceStatus = message;
+            setStatus(message);
+        }
+        renderConnectionOrb("stopping", message);
+        discoveryButton.setEnabled(false);
+        alternativeButton.setEnabled(false);
+        connectButton.setEnabled(false);
+        singBoxConnectButton.setEnabled(false);
+        disconnectButton.setEnabled(false);
     }
 
     private String safeMessage(Exception e) {
@@ -1582,6 +1655,14 @@ public class MainActivity extends Activity {
 
     private void refreshServiceStatusFromPreferences() {
         if (status == null || smartSearchPending) return;
+        android.content.SharedPreferences stopPrefs = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        if (!manualStopPending && stopPrefs.getBoolean("manual_stop_pending", false)) {
+            manualStopPending = true;
+            manualStopAt = stopPrefs.getLong("manual_stop_at", 0L);
+            manualStopNeedsAck = true;
+            wireGuardStopFinished = true;
+        }
+        if (manualStopPending) { refreshManualStopStatus(); return; }
         Bundle alternative = SingBoxVpnService.readStatus(this);
         long eventAt = alternative.getLong("last_event_time", 0L);
         String event = alternative.getString("last_event", "");
@@ -1591,7 +1672,8 @@ public class MainActivity extends Activity {
                     .getLong("service_status_updated_at", 0L);
             if (eventAt > published) {
                 String lampValue = "AUTO_CONNECTED".equals(event) ? "connected"
-                        : "AUTO_SEARCHING".equals(event) ? "searching" : "disconnected";
+                        : "AUTO_SEARCHING".equals(event) ? "searching"
+                        : "AUTO_STOPPING".equals(event) ? "stopping" : "disconnected";
                 publishDiscoveryStatus(alternative.getString("last_detail", "اتصال جایگزین"), lampValue);
             }
         }
@@ -1639,10 +1721,11 @@ public class MainActivity extends Activity {
             setStatus(visibleStatus);
         }
         renderConnectionOrb(lamp, visibleStatus);
-        boolean active = connected || searching;
-        if (disconnectButton != null) disconnectButton.setEnabled(active);
-        if (discoveryButton != null) discoveryButton.setEnabled(!searching && !connected);
-        if (alternativeButton != null) alternativeButton.setEnabled(!searching && !connected);
+        boolean stoppingNow = "stopping".equals(lamp);
+        boolean active = connected || searching || stoppingNow;
+        if (disconnectButton != null) disconnectButton.setEnabled(active && !stoppingNow);
+        if (discoveryButton != null) discoveryButton.setEnabled(!active);
+        if (alternativeButton != null) alternativeButton.setEnabled(!active);
     }
 
     /**
@@ -1663,6 +1746,10 @@ public class MainActivity extends Activity {
             connectionOrb.setText(text.toString());
             connectionOrb.setTextSize(19);
             connectionOrb.setBackground(shape(Color.rgb(24, 139, 91), 100));
+        } else if ("stopping".equals(lamp)) {
+            connectionOrb.setText("◌\nدر حال قطع\nآزادسازی تونل");
+            connectionOrb.setTextSize(19);
+            connectionOrb.setBackground(shape(Color.rgb(190, 137, 35), 100));
         } else if ("searching".equals(lamp)) {
             connectionOrb.setText("◌\nدر حال جست‌وجو\nو اتصال");
             connectionOrb.setTextSize(19);
@@ -1721,5 +1808,6 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 }
+
 
 
