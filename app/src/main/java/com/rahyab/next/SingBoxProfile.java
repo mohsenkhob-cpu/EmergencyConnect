@@ -326,12 +326,13 @@ public final class SingBoxProfile {
     /** Upgrade previously saved link-generated profiles without touching custom DNS/routes. */
     static String prepareForLaunch(String json) throws JSONException {
         JSONObject root = new JSONObject(json);
-        if (root.length() != 4 || root.has("dns")) return json;
+        boolean hasDns = root.has("dns");
+        if (root.length() != (hasDns ? 5 : 4)) return json;
         JSONObject route = root.optJSONObject("route");
         JSONObject log = root.optJSONObject("log");
         JSONArray inbounds = root.optJSONArray("inbounds");
         JSONArray outbounds = root.optJSONArray("outbounds");
-        if (route == null || route.length() != 1 || !route.has("final")
+        if (route == null || route.length() != (hasDns ? 2 : 1) || !route.has("final")
                 || log == null || log.length() != 1 || !"info".equals(log.optString("level"))
                 || inbounds == null || inbounds.length() != 1
                 || outbounds == null || outbounds.length() != 2) return json;
@@ -356,8 +357,23 @@ public final class SingBoxProfile {
         String protocol = server.optString("type", "");
         if (!"vless".equals(protocol) && !"vmess".equals(protocol)
                 && !"trojan".equals(protocol)) return json;
-        addGeneratedProfileDns(root, name);
+        if (hasDns) {
+            JSONObject dns = root.optJSONObject("dns");
+            if (dns == null || !"rah-yab-dns".equals(dns.optString("final"))
+                    || !"rah-yab-bootstrap".equals(route.optString("default_domain_resolver"))
+                    || route.has("rules")) return json;
+            addTunDnsRoute(route);
+        } else {
+            addGeneratedProfileDns(root, name);
+        }
         return root.toString();
+    }
+
+    private static void addTunDnsRoute(JSONObject route) throws JSONException {
+        // Android sends ordinary DNS to the virtual resolver advertised by the TUN.
+        // Dispatch those packets to sing-box DNS instead of the default proxy outbound.
+        route.put("rules", new JSONArray().put(new JSONObject().put("inbound", "tun-in")
+                .put("port", 53).put("action", "hijack-dns")));
     }
 
     private static void addGeneratedProfileDns(JSONObject root, String name)
@@ -373,7 +389,9 @@ public final class SingBoxProfile {
                 .put("tag", "rah-yab-bootstrap").put("server", "1.1.1.1")
                 .put("path", "/dns-query").put("tls", new JSONObject().put("enabled", true)
                         .put("server_name", "cloudflare-dns.com"));
-        root.getJSONObject("route").put("default_domain_resolver", "rah-yab-bootstrap");
+        JSONObject route = root.getJSONObject("route");
+        route.put("default_domain_resolver", "rah-yab-bootstrap");
+        addTunDnsRoute(route);
         root.put("dns", new JSONObject().put("servers", new JSONArray().put(remote).put(bootstrap))
                 .put("final", "rah-yab-dns"));
     }
