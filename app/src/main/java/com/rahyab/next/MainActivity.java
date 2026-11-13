@@ -52,6 +52,7 @@ public class MainActivity extends Activity {
     private Button discoveryButton;
     private TextView status;
     private TextView connectionOrb;
+    private android.widget.ProgressBar connectionSpinner;
     private Button connectButton;
     private Button disconnectButton;
     private boolean singBoxReceiverRegistered = false;
@@ -499,14 +500,26 @@ public class MainActivity extends Activity {
         orbParams.gravity = Gravity.CENTER_HORIZONTAL;
         orbParams.topMargin = dp(32);
         orbParams.bottomMargin = dp(12);
-        page.addView(connectionOrb, orbParams);
+        android.widget.FrameLayout orbFrame = new android.widget.FrameLayout(this);
+        page.addView(orbFrame, orbParams);
+        android.widget.FrameLayout.LayoutParams circleParams =
+                new android.widget.FrameLayout.LayoutParams(dp(140), dp(140), Gravity.CENTER);
+        orbFrame.addView(connectionOrb, circleParams);
+        connectionSpinner = new android.widget.ProgressBar(this);
+        connectionSpinner.setIndeterminate(true);
+        connectionSpinner.setIndeterminateTintList(
+                android.content.res.ColorStateList.valueOf(Color.rgb(255, 205, 103)));
+        connectionSpinner.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        connectionSpinner.setVisibility(View.GONE);
+        orbFrame.addView(connectionSpinner, new android.widget.FrameLayout.LayoutParams(
+                -1, -1, Gravity.CENTER));
 
         TextView helper = label("یافتن خودکار سرورهای عمومی رایگان؛ کیفیت و حریم خصوصی آن‌ها تضمین‌شده نیست", 14,
                 Color.rgb(164, 181, 205), false);
         page.addView(helper);
 
         discoveryButton = new Button(this);
-        discoveryButton.setText("اتصال هوشمند");
+        discoveryButton.setText("اتصال هوشمند • OpenVPN");
         discoveryButton.setTextSize(17);
         discoveryButton.setTextColor(Color.WHITE);
         discoveryButton.setAllCaps(false);
@@ -1400,6 +1413,7 @@ public class MainActivity extends Activity {
     private void renderConnectionOrb(String lamp, String serviceMessage) {
         if (connectionOrb == null) return;
 
+        connectionSpinner.setVisibility("searching".equals(lamp) ? View.VISIBLE : View.GONE);
         if ("connected".equals(lamp)) {
             StringBuilder text = new StringBuilder("●\nمتصل");
             java.util.regex.Matcher latency = java.util.regex.Pattern
