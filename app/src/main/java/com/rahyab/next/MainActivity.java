@@ -162,16 +162,21 @@ public class MainActivity extends Activity {
         appendAppDiagnostic("وضعیت", value);
     }
 
+    private static String redactProfileLinks(String text) {
+        return text.replaceAll("(?i)(?:trojan|vmess|vless|ss|ssr|hysteria2|tuic|wireguard)://[^\\s]+",
+                "[لینک پروفایل حذف شد]");
+    }
+
     /** Keep a bounded, local diagnostic history; never store imported VPN credentials here. */
     private void appendAppDiagnostic(String category, String message) {
         try {
             android.content.SharedPreferences prefs =
                     getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
-            String old = prefs.getString("app_event_history", "");
+            String old = redactProfileLinks(prefs.getString("app_event_history", ""));
             String stamp = new java.text.SimpleDateFormat(
                     "yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
                     .format(new java.util.Date());
-            String safe = message == null ? "" : message.replace('\n', ' ').replace('\r', ' ');
+            String safe = message == null ? "" : redactProfileLinks(message.replace('\n', ' ').replace('\r', ' '));
             String next = old.isEmpty() ? stamp + " | " + category + " | " + safe
                     : old + "\n" + stamp + " | " + category + " | " + safe;
             String[] lines = next.split("\n");
@@ -247,7 +252,7 @@ public class MainActivity extends Activity {
         appendReportSection(report, "نتیجه آزمون پروفایل‌های WireGuard",
                 prefs.getString("wireguard_attempt_results", ""));
         appendReportSection(report, "رویدادهای برنامه",
-                prefs.getString("app_event_history", ""));
+                redactProfileLinks(prefs.getString("app_event_history", "")));
         appendReportSection(report, "زمان آغاز آخرین جست‌وجوی هوشمند",
                 prefs.getString("discovery_attempt_started_at", ""));
         appendReportSection(report, "نتیجه آخرین جست‌وجوی هوشمند",

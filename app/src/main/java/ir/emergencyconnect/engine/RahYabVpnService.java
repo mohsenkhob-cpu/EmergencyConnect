@@ -52,6 +52,7 @@ public final class RahYabVpnService extends VpnService {
     // Allow 22 seconds before abandoning a candidate, while keeping every
     // candidate bounded and preserving the 12-candidate per-request limit.
     private static final long AUTO_ATTEMPT_TIMEOUT_SECONDS = 22;
+    private static final long MANUAL_ATTEMPT_TIMEOUT_SECONDS = 60;
     // Connected-session quality supervision. A single bad sample never triggers a switch.
     private static final long AUTO_MONITOR_INTERVAL_SECONDS = 45L;
     private static final long AUTO_MONITOR_LATENCY_LIMIT_MS = 1500L;
@@ -461,6 +462,8 @@ public final class RahYabVpnService extends VpnService {
                         : "IP خروجی پیش از تونل ثبت شد");
 
 
+        long attemptTimeout = fileOnly ? MANUAL_ATTEMPT_TIMEOUT_SECONDS : AUTO_ATTEMPT_TIMEOUT_SECONDS;
+        String fileFailure = "موتور OpenVPN نتوانست اتصال را شروع کند.";
         for (int offset = 0; offset < candidatesToMeasure; offset++) {
             int i = (begin + offset) % count;
             if (isSessionCancelled()) return;
@@ -473,7 +476,7 @@ public final class RahYabVpnService extends VpnService {
             attemptConnected = false;
             String progress = "در حال آزمایش سرور " + (offset + 1) + " از "
                     + candidatesToMeasure + (endpoint.isEmpty() ? "" : " — " + endpoint)
-                    + "؛ بررسی اتصال و کیفیت";
+                    + (fileOnly ? "؛ انتظار برای اتصال تا ۶۰ ثانیه" : "؛ بررسی اتصال و کیفیت");
             updateStatus(progress);
             setServerTestStatus(endpoint, "testing");
             setLampState("searching");
@@ -521,7 +524,7 @@ public final class RahYabVpnService extends VpnService {
                     .commit();
             final boolean callbackReceived;
             try {
-                callbackReceived = signal.await(AUTO_ATTEMPT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                callbackReceived = signal.await(attemptTimeout, TimeUnit.SECONDS);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 attemptSignal = null;
@@ -564,6 +567,13 @@ public final class RahYabVpnService extends VpnService {
                             + "؛ رویداد اتصال " + attemptConnected
                             + "؛ دریافت callback " + callbackReceived);
 
+            if (fileOnly) {
+                fileFailure = attemptConnected
+                        ? "تونل OpenVPN ساخته شد، اما آزمون عبور پایدار اینترنت ناموفق بود."
+                        : callbackReceived
+                        ? "موتور OpenVPN پیش از ساخت تونل متوقف شد؛ جزئیات در گزارش موتور است."
+                        : "مهلت ۶۰ ثانیه‌ای اتصال OpenVPN تمام شد؛ تونل ساخته نشد.";
+            }
             if (attemptConnected) {
                 updateStatus("تونل برقرار شد؛ بررسی عبور اینترنت و اندازه‌گیری تأخیر…");
                 boolean trafficVerified = verifyTunnelTraffic(baselineExitIp);
@@ -610,7 +620,7 @@ public final class RahYabVpnService extends VpnService {
         if (fileOnly) {
             autoSearchEnabled = false;
             autoConnected = false;
-            String message = "عبور پایدار اینترنت با فایل OpenVPN تأیید نشد.";
+            String message = fileFailure;
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("session_start_result", message).apply();
             finishFailedSearch(message);
