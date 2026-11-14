@@ -83,7 +83,12 @@ class SingBoxVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            enqueueLifecycle { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf(startId) }
+            stopping = true
+            closeTunnel()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            sendEvent(EVENT_STOPPED)
+            enqueueLifecycle { stopEngine() }
+            stopSelf(startId)
             return START_NOT_STICKY
         }
         val requestedProfile = intent?.getStringExtra(EXTRA_PROFILE)
@@ -463,6 +468,16 @@ class SingBoxVpnService : VpnService() {
         fun start(context: Context, profile: String) {
             val intent = Intent(context, SingBoxVpnService::class.java).putExtra(EXTRA_PROFILE, profile)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+        }
+
+        @JvmStatic
+        fun requestDisconnect(context: Context) {
+            val intent = Intent(context, SingBoxVpnService::class.java).setAction(ACTION_STOP)
+            try {
+                context.startService(intent)
+            } catch (_: IllegalStateException) {
+                stop(context)
+            }
         }
 
         @JvmStatic

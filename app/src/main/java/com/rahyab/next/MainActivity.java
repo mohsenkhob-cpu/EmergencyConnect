@@ -792,8 +792,7 @@ public class MainActivity extends Activity {
                         if (verificationAttempt != smartAttempt || !smartBusy) return;
                         boolean verified = !engineExited && result.verified;
                         if (!verified) {
-                            getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
-                            SingBoxVpnService.stop(this);
+                            SingBoxVpnService.requestDisconnect(this);
                         }
                         completeSmartAttempt(verified ? "عبور اینترنت با sing-box تأیید شد"
                                 : "عبور اینترنت با sing-box تأیید نشد: " + result.message, verified);
@@ -1510,7 +1509,7 @@ public class MainActivity extends Activity {
     }
 
     private void disconnectAllEngines() {
-        getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "").apply();
+        String selectedEngine = getPreferences(MODE_PRIVATE).getString("selected_engine", "");
         ++smartAttempt;
         smartBusy = false;
         publishDiscoveryStatus("در حال قطع اتصال…", "disconnected");
@@ -1518,10 +1517,14 @@ public class MainActivity extends Activity {
         getSharedPreferences("rah_yab_pending_start", MODE_PRIVATE).edit()
                 .clear().commit();
         setStatus("در حال قطع همه موتورهای VPN…");
-        SingBoxVpnService.stop(getApplicationContext());
-        Intent stop = new Intent(this, RahYabVpnService.class);
-        stop.setAction(RahYabVpnService.ACTION_STOP);
-        try { startService(stop); } catch (RuntimeException ignored) { }
+        if ("sing-box".equals(selectedEngine)) {
+            SingBoxVpnService.requestDisconnect(getApplicationContext());
+        } else {
+            SingBoxVpnService.stop(getApplicationContext());
+            Intent stop = new Intent(this, RahYabVpnService.class);
+            stop.setAction(RahYabVpnService.ACTION_STOP);
+            try { startService(stop); } catch (RuntimeException ignored) { }
+        }
         worker.execute(() -> {
             try { wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null); }
             catch (Exception ignored) { }
