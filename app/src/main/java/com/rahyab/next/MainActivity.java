@@ -1376,7 +1376,7 @@ public class MainActivity extends Activity {
     }
 
     private void sampleLiveTunnelSpeed() {
-        long[] current = OpenVpn3Bridge.tunnelBytes();
+        long[] current = ir.emergencyconnect.engine.OpenVpn3Bridge.tunnelBytes();
         long now = android.os.SystemClock.elapsedRealtime();
         long elapsed = now - previousTunnelSampleAt;
         if (current != null && previousTunnelBytes != null && elapsed > 0
