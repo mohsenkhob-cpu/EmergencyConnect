@@ -638,8 +638,7 @@ public final class RahYabVpnService extends VpnService {
             updateStatus("فهرست فعلی تمام شد؛ در حال دریافت سرورهای تازه…");
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("session_start_result",
-                            "تعداد گزینه‌های دارای آزمون کیفیت: " + measuredRelays.size()
-                                    + "؛ دریافت فهرست تازه…")
+                            "اتصال تأیید نشد؛ دریافت فهرست تازه…")
                     .apply();
             nextProfiles = fetchFreshProfiles(40);
         } else {
