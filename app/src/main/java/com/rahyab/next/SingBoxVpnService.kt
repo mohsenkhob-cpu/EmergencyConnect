@@ -54,6 +54,7 @@ class SingBoxVpnService : VpnService() {
     @Volatile private var lastEvent: String? = null
     private var server: CommandServer? = null
     private var tunnel: ParcelFileDescriptor? = null
+    @Volatile private var stopping = false
     @Volatile private var profile: String? = null
     private val lifecycle: ExecutorService = Executors.newSingleThreadExecutor { task ->
         Thread(task, "RahYab-singbox-lifecycle").apply { isDaemon = true }
@@ -124,6 +125,7 @@ class SingBoxVpnService : VpnService() {
                     server = created
                     created = null
                 }
+                if (stopping) return@enqueueLifecycle
                 Log.i(TAG, "libbox accepted the profile and started/reloaded its service")
                 updateNotification("موتور VPN راه‌اندازی شد؛ وضعیت مسیر اینترنت در حال بررسی است")
                 sendEvent(EVENT_ENGINE_STARTED, transportCheck)
@@ -265,6 +267,7 @@ class SingBoxVpnService : VpnService() {
 
     @Synchronized
     private fun openTun(options: TunOptions): Int {
+        check(!stopping) { "VPN is stopping" }
         if (VpnService.prepare(this) != null) error("مجوز VPN صادر نشده است")
         val builder = Builder().setSession("راه‌یاب").setMtu(options.mtu)
         if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
@@ -361,15 +364,18 @@ class SingBoxVpnService : VpnService() {
         else -> null
     }
 
+    @Synchronized
+    private fun closeTunnel() {
+        runCatching { tunnel?.close() }
+        tunnel = null
+    }
+
     private fun stopEngine() {
+        closeTunnel()
         runCatching { server?.closeService() }.onFailure { Log.w(TAG, "closeService", it) }
         runCatching { server?.close() }.onFailure { Log.w(TAG, "close", it) }
         server = null
-        synchronized(this) {
-            runCatching { tunnel?.close() }
-            tunnel = null
-        }
-        if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE) else @Suppress("DEPRECATION") stopForeground(true)
+        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     private fun sendEvent(event: String, detail: String? = null) {
@@ -410,10 +416,11 @@ class SingBoxVpnService : VpnService() {
         super.onRevoke()
     }
     override fun onDestroy() {
-        enqueueLifecycle {
-            stopEngine()
-            if (lastEvent != EVENT_ERROR && lastEvent != EVENT_STOPPED) sendEvent(EVENT_STOPPED)
-        }
+        stopping = true
+        closeTunnel()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        if (lastEvent != EVENT_ERROR && lastEvent != EVENT_STOPPED) sendEvent(EVENT_STOPPED)
+        enqueueLifecycle { stopEngine() }
         lifecycle.shutdown()
         super.onDestroy()
     }

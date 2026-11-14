@@ -87,7 +87,8 @@ public class MainActivity extends Activity {
 
     private final BroadcastReceiver singBoxReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
-            if (intent == null || !SingBoxVpnService.ACTION_EVENT.equals(intent.getAction())) return;
+            if (intent == null || !SingBoxVpnService.ACTION_EVENT.equals(intent.getAction())
+                    || !"sing-box".equals(getPreferences(MODE_PRIVATE).getString("selected_engine", ""))) return;
             String event = intent.getStringExtra(SingBoxVpnService.EXTRA_EVENT);
             String detail = intent.getStringExtra(SingBoxVpnService.EXTRA_DETAIL);
             if ("STARTING".equals(event)) {
@@ -714,6 +715,7 @@ public class MainActivity extends Activity {
     }
 
     private void restoreSingBoxStatus() {
+        if (!"sing-box".equals(getPreferences(MODE_PRIVATE).getString("selected_engine", ""))) return;
         Bundle prefs = SingBoxVpnService.readStatus(this);
         long eventTime = prefs.getLong("last_event_time", 0L);
         if (eventTime == 0L || System.currentTimeMillis() - eventTime > 10 * 60 * 1000L) return;
@@ -783,11 +785,16 @@ public class MainActivity extends Activity {
                                     : result.verified ? "PROBE_VERIFIED" : "PROBE_FAILED").commit();
                 }
                 runOnUiThread(() -> {
-                    if (isFinishing() || isDestroyed()) return;
+                    if (isFinishing() || isDestroyed() || verificationAttempt != smartAttempt
+                            || ("sing-box".equals(engineName) && !"sing-box".equals(
+                                    getPreferences(MODE_PRIVATE).getString("selected_engine", "")))) return;
                     if (smartVerification) {
                         if (verificationAttempt != smartAttempt || !smartBusy) return;
                         boolean verified = !engineExited && result.verified;
-                        if (!verified) SingBoxVpnService.stop(this);
+                        if (!verified) {
+                            getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
+                            SingBoxVpnService.stop(this);
+                        }
                         completeSmartAttempt(verified ? "عبور اینترنت با sing-box تأیید شد"
                                 : "عبور اینترنت با sing-box تأیید نشد: " + result.message, verified);
                         return;
@@ -1130,6 +1137,7 @@ public class MainActivity extends Activity {
     }
 
     private void startSingBox() {
+        getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "sing-box").apply();
         if (pendingSingBoxJson == null) return;
         try {
             getSharedPreferences("rahyab_singbox_status", MODE_PRIVATE).edit()
@@ -1404,6 +1412,7 @@ public class MainActivity extends Activity {
     }
 
     private void startOpenVpnService() {
+        getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "OpenVPN").apply();
         if (pendingOpenVpnProfiles == null || pendingOpenVpnProfiles.isEmpty()) {
             setStatus("فهرست سرورها آماده نیست؛ دوباره اتصال هوشمند را بزنید");
             return;
@@ -1501,6 +1510,7 @@ public class MainActivity extends Activity {
     }
 
     private void disconnectAllEngines() {
+        getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "").apply();
         ++smartAttempt;
         smartBusy = false;
         publishDiscoveryStatus("در حال قطع اتصال…", "disconnected");
