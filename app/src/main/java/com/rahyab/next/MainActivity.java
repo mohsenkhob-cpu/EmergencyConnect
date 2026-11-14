@@ -48,6 +48,9 @@ public class MainActivity extends Activity {
     private final ArrayList<Config> smartWireGuardProfiles = new ArrayList<>();
     private volatile int smartAttempt;
     private boolean smartBusy;
+    private static final int REQUEST_SSTP_PERMISSION = 4109;
+    private Button sstpButton;
+    private ArrayList<String> pendingSstpHosts;
     private Button smartSingBoxButton;
     private Button smartWireGuardButton;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -598,6 +601,11 @@ public class MainActivity extends Activity {
             startActivityForResult(files, REQUEST_SMART_WIREGUARD);
         });
 
+        sstpButton = new Button(this);
+        sstpButton.setText("اتصال هوشمند • SSTP");
+        page.addView(sstpButton);
+        sstpButton.setOnClickListener(v -> discoverSstp());
+
         LinearLayout advancedPanel = new LinearLayout(this);
         advancedPanel.setOrientation(LinearLayout.VERTICAL);
         advancedPanel.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
@@ -922,6 +930,14 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_SSTP_PERMISSION) {
+            if (resultCode == RESULT_OK) launchSstp();
+            else if (smartBusy && pendingSstpHosts != null) {
+                pendingSstpHosts = null;
+                completeSmartAttempt("مجوز اتصال SSTP صادر نشد", false);
+            }
+            return;
+        }
         if (requestCode == REQUEST_OPENVPN_VPN_PERMISSION && resultCode != RESULT_OK) {
             pendingOpenVpnProfiles = null;
             if (discoveryButton != null) discoveryButton.setEnabled(true);
@@ -1615,17 +1631,63 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void discoverSstp() {
+        beginSmartAttempt("در حال دریافت فهرست سرورهای VPN Gate برای SSTP…");
+        getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "SSTP").apply();
+        int attempt = smartAttempt;
+        worker.execute(() -> {
+            try {
+                java.util.LinkedHashSet<String> hosts = new java.util.LinkedHashSet<>();
+                for (VpnGateProvider.Server server : VpnGateProvider.fetch().servers) {
+                    if (server.hostName.matches("(?i)[a-z0-9-]+\\.opengw\\.net"))
+                        hosts.add(server.hostName);
+                    if (hosts.size() == 4) break;
+                }
+                if (hosts.isEmpty()) throw new java.io.IOException("نام میزبان مناسب پیدا نشد");
+                runOnUiThread(() -> {
+                    if (attempt != smartAttempt || isDestroyed()) return;
+                    pendingSstpHosts = new ArrayList<>(hosts);
+                    Intent permission = VpnService.prepare(this);
+                    if (permission == null) launchSstp();
+                    else startActivityForResult(permission, REQUEST_SSTP_PERMISSION);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (attempt == smartAttempt && !isDestroyed())
+                        completeSmartAttempt("دریافت فهرست SSTP ناموفق بود", false);
+                });
+            }
+        });
+    }
+
+    private void launchSstp() {
+        if (!smartBusy || pendingSstpHosts == null) return;
+        Intent intent = new Intent(this, kittoku.osc.service.SstpVpnService.class)
+                .setAction("sstp.start").putStringArrayListExtra("hosts", pendingSstpHosts);
+        pendingSstpHosts = null;
+        smartBusy = false;
+        publishDiscoveryStatus("در حال آماده‌سازی اتصال SSTP…", "searching");
+        try {
+            startForegroundService(intent);
+        } catch (RuntimeException error) {
+            completeSmartAttempt("شروع SSTP ناموفق بود", false);
+        }
+    }
+
     private void disconnectAllEngines() {
         String selectedEngine = getPreferences(MODE_PRIVATE).getString("selected_engine", "");
         ++smartAttempt;
         pendingOpenVpnProfiles = null;
+        pendingSstpHosts = null;
         smartBusy = false;
         publishDiscoveryStatus("در حال قطع اتصال…", "disconnected");
         // A manual stop must invalidate any not-yet-consumed start request.
         getSharedPreferences("rah_yab_pending_start", MODE_PRIVATE).edit()
                 .clear().commit();
         setStatus("در حال قطع همه موتورهای VPN…");
-        if ("sing-box".equals(selectedEngine)) {
+        if ("SSTP".equals(selectedEngine)) {
+            stopService(new Intent(this, kittoku.osc.service.SstpVpnService.class));
+        } else if ("sing-box".equals(selectedEngine)) {
             SingBoxVpnService.requestDisconnect(getApplicationContext());
         } else {
             SingBoxVpnService.stop(getApplicationContext());
@@ -1717,6 +1779,7 @@ public class MainActivity extends Activity {
             connectionOrb.setBackground(shape(Color.rgb(190, 137, 35), 100));
         }
         boolean active = connected || searching || smartBusy || vpnPresent;
+        if (sstpButton != null) sstpButton.setEnabled(!active);
         if (smartSingBoxButton != null) smartSingBoxButton.setEnabled(!active);
         if (smartWireGuardButton != null) smartWireGuardButton.setEnabled(!active);
         if (disconnectButton != null) disconnectButton.setEnabled(active);
