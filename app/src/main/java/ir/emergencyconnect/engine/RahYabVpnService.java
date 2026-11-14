@@ -35,6 +35,8 @@ public final class RahYabVpnService extends VpnService {
     public static final String ACTION_START = "ir.emergencyconnect.engine.START_VPN";
     public static final String ACTION_STOP = "ir.emergencyconnect.engine.STOP_VPN";
     public static final String EXTRA_PROFILE = "ir.emergencyconnect.engine.PROFILE";
+    public static final String EXTRA_FILE_ONLY = "ir.emergencyconnect.engine.FILE_ONLY";
+    private volatile boolean fileOnly;
     public static final String EXTRA_PROFILES = "ir.emergencyconnect.engine.PROFILES";
     public static final String EXTRA_REQUEST_ID = "ir.emergencyconnect.engine.REQUEST_ID";
     private static final String PENDING_START_PREFS = "rah_yab_pending_start";
@@ -350,6 +352,7 @@ public final class RahYabVpnService extends VpnService {
                     .remove("native_event_history")
                     .putString("session_start_result", "درخواست شروع نشست در حال آماده‌سازی است…")
                     .apply();
+            fileOnly = intent.getBooleanExtra(EXTRA_FILE_ONLY, false);
             final String profile = intent.getStringExtra(EXTRA_PROFILE);
             final ArrayList<String> profiles = intent.getStringArrayListExtra(EXTRA_PROFILES);
             if ((profile == null || profile.trim().isEmpty())
@@ -578,12 +581,12 @@ public final class RahYabVpnService extends VpnService {
                                 .putString("session_start_result",
                                         "عبور اینترنت و پایداری اولین سرور قابل استفاده تأیید شد.")
                                 .apply();
-                        rememberVerifiedRelay(profile, endpoint);
+                        if (!fileOnly) rememberVerifiedRelay(profile, endpoint);
                         appendAutoHistory("AUTO_FIRST_VERIFIED", "اتصال به " + endpoint
                                 + "؛ پایداری HTTPS: " + stableProbes + "/5");
                         updateStatus("اتصال هوشمند برقرار است — " + endpoint
                                 + "؛ پایداری " + stableProbes + "/5", "connected");
-                        startQualityMonitor();
+                        if (!fileOnly) startQualityMonitor();
                         return;
                     } else {
                         appendAutoHistory("AUTO_STABILITY_FAILED",
@@ -604,6 +607,15 @@ public final class RahYabVpnService extends VpnService {
         }
 
         if (isSessionCancelled()) return;
+        if (fileOnly) {
+            autoSearchEnabled = false;
+            autoConnected = false;
+            String message = "عبور پایدار اینترنت با فایل OpenVPN تأیید نشد.";
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("session_start_result", message).apply();
+            finishFailedSearch(message);
+            return;
+        }
         if (autoCandidatesTried >= AUTO_MAX_CANDIDATES_PER_REQUEST) {
             autoSearchEnabled = false;
             autoConnected = false;
@@ -1380,6 +1392,12 @@ public final class RahYabVpnService extends VpnService {
 
     private void scheduleAutoFailover() {
         if (!autoSearchEnabled || !autoConnected) return;
+        if (fileOnly) {
+            autoConnected = false;
+            autoSearchEnabled = false;
+            finishFailedSearch("اتصال سرور فایل OpenVPN قطع شد.");
+            return;
+        }
         requestAutoFailover("قطع غیرمنتظره نشست VPN");
     }
 
@@ -1510,6 +1528,7 @@ public final class RahYabVpnService extends VpnService {
                 replay.setAction(ACTION_START);
                 replay.putExtra(EXTRA_REQUEST_ID, requestId);
                 replay.putStringArrayListExtra(EXTRA_PROFILES, profiles);
+                replay.putExtra(EXTRA_FILE_ONLY, pending.getBoolean("file_only", false));
                 diagnosticsNow.edit()
                         .putString("service_start_recovery", "onCreate delayed replay; explicit request still valid")
                         .putString("service_start_recovery_request_id", requestId)

@@ -54,7 +54,9 @@ public class MainActivity extends Activity {
     private GoBackend wireGuardBackend;
     private Config pendingWireGuardConfig;
     private String pendingSingBoxJson;
+    private static final int REQUEST_OPENVPN_FILE = 4108;
     private ArrayList<String> pendingOpenVpnProfiles;
+    private boolean pendingOpenVpnFile;
     private Button singBoxConnectButton;
     private Button discoveryButton;
     private TextView status;
@@ -703,6 +705,19 @@ public class MainActivity extends Activity {
         advancedPanel.addView(savedServersButton, savedParams);
         savedServersButton.setOnClickListener(v -> showSavedServers());
 
+        Button openVpnFile = new Button(this);
+        openVpnFile.setText("وارد کردن فایل OpenVPN (.ovpn)");
+        advancedPanel.addView(openVpnFile);
+        openVpnFile.setOnClickListener(v -> {
+            if (!discoveryButton.isEnabled()) {
+                Toast.makeText(this, "اول اتصال یا آزمون فعلی را قطع کنید", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Intent file = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("*/*");
+            startActivityForResult(file, REQUEST_OPENVPN_FILE);
+        });
+
         TextView note = label("پروفایل‌های WireGuard، sing-box، VLESS، VMess و Trojan قابل وارد کردن هستند. پشتیبانی هر قالب به ساختار لینک یا فایل بستگی دارد.",
                 12, Color.rgb(235, 190, 115), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
@@ -952,6 +967,42 @@ public class MainActivity extends Activity {
             return;
         }
         if (data == null) return;
+        if (requestCode == REQUEST_OPENVPN_FILE) {
+            Uri uri = data.getData();
+            if (uri == null || !discoveryButton.isEnabled()) return;
+            try (InputStream input = getContentResolver().openInputStream(uri);
+                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                if (input == null) throw new java.io.IOException("فایل خوانده نشد");
+                byte[] buffer = new byte[4096];
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    if (output.size() + count > 128 * 1024)
+                        throw new java.io.IOException("حجم فایل بیشتر از ۱۲۸ کیلوبایت است");
+                    output.write(buffer, 0, count);
+                }
+                String profile = new String(output.toByteArray(), StandardCharsets.UTF_8);
+                if (profile.startsWith("\uFEFF")) profile = profile.substring(1);
+                if (profile.indexOf(0) >= 0 || !java.util.regex.Pattern
+                        .compile("(?m)^\\s*remote[ \\t]+\\S+").matcher(profile).find())
+                    throw new java.io.IOException("فایل، نشانی سرور OpenVPN ندارد");
+                final String selectedProfile = profile;
+                new AlertDialog.Builder(this).setTitle("آزمون فایل OpenVPN")
+                        .setMessage("فقط سرور همین فایل بررسی می‌شود.")
+                        .setNegativeButton("لغو", null)
+                        .setPositiveButton("آزمون اتصال", (dialog, which) -> {
+                            beginFreshDiscoveryDiagnostics();
+                            recordAttemptNetwork("openvpn");
+                            pendingOpenVpnFile = true;
+                            ArrayList<String> profiles = new ArrayList<>();
+                            profiles.add(selectedProfile);
+                            prepareSmartProfiles(profiles, "فایل OpenVPN آماده آزمون است", ++smartAttempt);
+                        }).show();
+            } catch (Exception error) {
+                Toast.makeText(this, "خواندن فایل OpenVPN ناموفق بود: " + safeMessage(error),
+                        Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
         if (requestCode == REQUEST_SINGBOX_PROFILE) {
             Uri uri = data.getData();
             if (uri == null) return;
@@ -1420,6 +1471,7 @@ public class MainActivity extends Activity {
 
     private void startSmartOpenVpnSearch() {
         if (discoveryButton == null || !discoveryButton.isEnabled()) return;
+        pendingOpenVpnFile = false;
         int attempt = ++smartAttempt;
         discoveryButton.setEnabled(false);
         beginFreshDiscoveryDiagnostics();
@@ -1466,6 +1518,9 @@ public class MainActivity extends Activity {
             setStatus("فهرست سرورها آماده نیست؛ دوباره اتصال هوشمند را بزنید");
             return;
         }
+        final int attempt = smartAttempt;
+        final boolean fileOnly = pendingOpenVpnFile;
+        final ArrayList<String> launchProfiles = new ArrayList<>(pendingOpenVpnProfiles);
         setStatus("در حال آماده‌سازی OpenVPN 3 و آزمون سرورها؛ اتصال تا تأیید اینترنت قطعی اعلام نمی‌شود…");
         discoveryButton.setEnabled(false);
         disconnectButton.setEnabled(true);
@@ -1480,9 +1535,10 @@ public class MainActivity extends Activity {
                 if (isFinishing() || isDestroyed()) return;
                 Intent service = new Intent(this, RahYabVpnService.class);
                 service.setAction(RahYabVpnService.ACTION_START);
-                ArrayList<String> launchProfiles = new ArrayList<>(pendingOpenVpnProfiles);
+                if (attempt != smartAttempt) return;
                 String requestId = "rah-" + System.currentTimeMillis();
                 service.putStringArrayListExtra(RahYabVpnService.EXTRA_PROFILES, launchProfiles);
+                service.putExtra(RahYabVpnService.EXTRA_FILE_ONLY, fileOnly);
                 service.putExtra(RahYabVpnService.EXTRA_REQUEST_ID, requestId);
                 try {
                     // Start a fresh diagnostic attempt so old service/JNI events
@@ -1494,6 +1550,7 @@ public class MainActivity extends Activity {
                     getSharedPreferences("rah_yab_pending_start", MODE_PRIVATE).edit()
                             .putString("request_id", requestId)
                             .putLong("created_at_ms", System.currentTimeMillis())
+                            .putBoolean("file_only", fileOnly)
                             .putString("profiles_json", pendingJson.toString())
                             .commit();
                     diagnostics.edit()
