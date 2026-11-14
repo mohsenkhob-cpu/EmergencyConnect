@@ -1240,7 +1240,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     discoveryButton.setEnabled(true);
                     if (!isFinishing() && !isDestroyed())
-                        publishDiscoveryStatus("جستجوی هوشمند ناموفق بود: " + safeMessage(error), "disconnected");
+                        publishDiscoveryStatus("جستجوی هوشمند ناموفق بود: " + safeMessage(error), "failed");
                 });
             }
         });
@@ -1392,7 +1392,7 @@ public class MainActivity extends Activity {
             lamp = "disconnected";
         }
 
-        String visibleStatus = (connected || searching)
+        String visibleStatus = (connected || searching || "failed".equals(lamp))
                 && savedStatus != null && !savedStatus.trim().isEmpty()
                 ? savedStatus
                 : "اتصال برقرار نیست؛ برای شروع، دکمه اتصال هوشمند را بزنید.";
@@ -1430,9 +1430,7 @@ public class MainActivity extends Activity {
             connectionOrb.setTextSize(19);
             connectionOrb.setBackground(shape(Color.rgb(190, 137, 35), 100));
         } else {
-            boolean hasFailure = serviceMessage != null
-                    && (serviceMessage.contains("خطا")
-                    || serviceMessage.contains("ناموفق"));
+            boolean hasFailure = "failed".equals(lamp);
             connectionOrb.setText(hasFailure ? "×\nاتصال ناموفق" : "⏻\nآماده اتصال");
             connectionOrb.setTextSize(20);
             connectionOrb.setBackground(shape(

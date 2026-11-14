@@ -676,7 +676,6 @@ public final class RahYabVpnService extends VpnService {
         if (autoCandidatesTried >= AUTO_MAX_CANDIDATES_PER_REQUEST) {
             autoSearchEnabled = false;
             autoConnected = false;
-            setLampState("disconnected");
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("session_start_result",
                             "۱۲ سرور در این نوبت بررسی شدند؛ اتصال واقعی تأیید نشد.")
@@ -687,7 +686,7 @@ public final class RahYabVpnService extends VpnService {
                     .commit();
             appendAutoHistory("AUTO_SEARCH_LIMIT_REACHED",
                     "سقف ۱۲ سرور برای این درخواست کاربر تکمیل شد؛ جست‌وجوی خودکار متوقف شد");
-            updateStatus("۱۲ سرور بررسی شدند اما اتصال پایدار تأیید نشد؛ برای شروع یک نوبت تازه، اتصال هوشمند را بزنید.");
+            updateStatus("۱۲ سرور بررسی شدند اما اتصال پایدار تأیید نشد؛ برای شروع یک نوبت تازه، اتصال هوشمند را بزنید.", "failed");
             return;
         }
         // Prefer the untested profiles already downloaded for this explicit
@@ -1739,12 +1738,18 @@ public final class RahYabVpnService extends VpnService {
     }
 
     private void updateStatus(String message) {
+        updateStatus(message, null);
+    }
+
+    private void updateStatus(String message, String lampState) {
         // Persist the latest service state so the activity can display it when
         // it is visible again; notification updates remain foreground-only.
-        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                .putString("service_status_message", message)
-                .putLong("service_status_updated_at", System.currentTimeMillis())
-                .apply();
+        android.content.SharedPreferences.Editor status =
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("service_status_message", message)
+                        .putLong("service_status_updated_at", System.currentTimeMillis());
+        if (lampState != null) status.putString("connection_lamp_state", lampState);
+        status.apply();
         if (!foregroundStarted) return;
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) manager.notify(NOTIFICATION_ID, buildStatusNotification(message));
@@ -1891,13 +1896,12 @@ public final class RahYabVpnService extends VpnService {
                 || "DISCONNECTED".equals(name) || "EXITING".equals(name))) {
             scheduleAutoFailover();
         }
-        if (!lifecycleStopEvent) {
+        // The automatic-search worker owns the lamp for the entire request.
+        // An individual candidate's timeout or teardown must not end the search UI.
+        if (autoProfiles == null && !stopRequested.get() && !serviceDestroyed
+                && !lifecycleStopEvent) {
             if ("CONNECTED".equals(name) && !error && !fatal) {
-                // OpenVPN's CONNECTED event is not proof of working internet.
-                // The automatic-search worker sets the connected lamp only
-                // after an unprotected HTTP probe succeeds through Android VPN.
-                if (autoSearchEnabled) setLampState("searching");
-                else setLampState("connected");
+                setLampState("connected");
             } else if (error || fatal || disconnectEvent) {
                 setLampState("disconnected");
             } else if ("CONNECTING".equals(name) || "WAIT".equals(name)) {
