@@ -1356,10 +1356,9 @@ public class MainActivity extends Activity {
         return profiles;
     }
 
-    private void prepareSmartProfiles(ArrayList<String> profiles, String status) {
+    private void prepareSmartProfiles(ArrayList<String> profiles, String status, int attempt) {
         runOnUiThread(() -> {
-            if (isFinishing() || isDestroyed()) return;
-            discoveryButton.setEnabled(true);
+            if (attempt != smartAttempt || isFinishing() || isDestroyed()) return;
             pendingOpenVpnProfiles = profiles;
             publishDiscoveryStatus(status, "searching");
             Intent permission = VpnService.prepare(this);
@@ -1373,6 +1372,7 @@ public class MainActivity extends Activity {
 
     private void startSmartOpenVpnSearch() {
         if (discoveryButton == null || !discoveryButton.isEnabled()) return;
+        int attempt = ++smartAttempt;
         discoveryButton.setEnabled(false);
         beginFreshDiscoveryDiagnostics();
         publishDiscoveryStatus("در حال جستجوی سرورهای رایگان و آماده‌سازی آزمون اتصال…", "searching");
@@ -1391,17 +1391,18 @@ public class MainActivity extends Activity {
                 if (profiles.isEmpty()) throw new IllegalStateException("پروفایل قابل استفاده‌ای پیدا نشد");
                 cacheSmartProfiles(profiles);
                 prepareSmartProfiles(profiles,
-                        profiles.size() + " پروفایل دریافت شد؛ برای اجازه VPN آماده‌اید");
+                        profiles.size() + " پروفایل دریافت شد؛ برای اجازه VPN آماده‌اید", attempt);
             } catch (Exception error) {
                 ArrayList<String> cachedProfiles = loadRecentSmartProfiles();
                 if (!cachedProfiles.isEmpty()) {
                     prepareSmartProfiles(cachedProfiles,
                             "دریافت فهرست تازه ناموفق بود؛ آزمون "
                                     + cachedProfiles.size() + " پروفایل ذخیره‌شده؛ "
-                                    + safeMessage(error));
+                                    + safeMessage(error), attempt);
                     return;
                 }
                 runOnUiThread(() -> {
+                    if (attempt != smartAttempt) return;
                     discoveryButton.setEnabled(true);
                     if (!isFinishing() && !isDestroyed())
                         publishDiscoveryStatus("جستجوی هوشمند ناموفق بود: " + safeMessage(error), "failed");
@@ -1511,6 +1512,7 @@ public class MainActivity extends Activity {
     private void disconnectAllEngines() {
         String selectedEngine = getPreferences(MODE_PRIVATE).getString("selected_engine", "");
         ++smartAttempt;
+        pendingOpenVpnProfiles = null;
         smartBusy = false;
         publishDiscoveryStatus("در حال قطع اتصال…", "disconnected");
         // A manual stop must invalidate any not-yet-consumed start request.

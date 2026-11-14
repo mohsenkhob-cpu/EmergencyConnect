@@ -99,7 +99,8 @@ public final class RahYabVpnService extends VpnService {
     private volatile int monitorSampleCount;
     private volatile int autoFailoversThisSession;
     private volatile long lastAutoFailoverAtMs;
-    private volatile int autoStartId;
+    private static final long RECENT_RELAY_MAX_AGE_MS = 6 * 60 * 60 * 1000L;
+    private volatile long searchNetworkHandle;
     private final AtomicBoolean failoverQueued = new AtomicBoolean(false);
     private final java.util.Set<String> triedServerEndpoints = new java.util.HashSet<>();
     private static final String VPN_GATE_API = "https://www.vpngate.net/api/iphone/";
@@ -383,6 +384,8 @@ public final class RahYabVpnService extends VpnService {
                 }
                 if (profiles != null && !profiles.isEmpty()) {
                     synchronized (triedServerEndpoints) { triedServerEndpoints.clear(); }
+                    searchNetworkHandle = activePhysicalNetworkHandle();
+                    prioritizeRecentRelay(profiles);
                     runAutoSearch(profiles, 0, startId);
                 } else {
                     startSingleProfile(profile);
@@ -431,7 +434,6 @@ public final class RahYabVpnService extends VpnService {
         if (profiles == null || profiles.isEmpty() || serviceDestroyed) return;
         autoSearchEnabled = true;
         autoProfiles = new ArrayList<>(profiles);
-        autoStartId = startId;
         autoConnected = false;
         int count = autoProfiles.size();
         int begin = Math.max(0, Math.min(startIndex, count - 1));
@@ -576,6 +578,7 @@ public final class RahYabVpnService extends VpnService {
                                 .putString("session_start_result",
                                         "عبور اینترنت و پایداری اولین سرور قابل استفاده تأیید شد.")
                                 .apply();
+                        rememberVerifiedRelay(profile, endpoint);
                         appendAutoHistory("AUTO_FIRST_VERIFIED", "اتصال به " + endpoint
                                 + "؛ پایداری HTTPS: " + stableProbes + "/5");
                         updateStatus("اتصال هوشمند برقرار است — " + endpoint
@@ -927,6 +930,46 @@ public final class RahYabVpnService extends VpnService {
                             + error.getClass().getSimpleName());
         }
         return profiles;
+    }
+
+    private long activePhysicalNetworkHandle() {
+        android.net.ConnectivityManager manager = getSystemService(android.net.ConnectivityManager.class);
+        if (manager == null) return 0L;
+        android.net.Network network = manager.getActiveNetwork();
+        android.net.NetworkCapabilities capabilities =
+                network == null ? null : manager.getNetworkCapabilities(network);
+        return capabilities != null && !capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
+                ? network.getNetworkHandle() : 0L;
+    }
+
+    private void rememberVerifiedRelay(String profile, String endpoint) {
+        if (searchNetworkHandle == 0 || endpoint.isEmpty()) return;
+        getSharedPreferences("rah_yab_recent_relay", MODE_PRIVATE).edit()
+                .putLong("network", searchNetworkHandle)
+                .putLong("saved_at", android.os.SystemClock.elapsedRealtime())
+                .putString("endpoint", endpoint)
+                .putString("protocol", profileProtocol(profile))
+                .apply();
+    }
+
+    private void prioritizeRecentRelay(ArrayList<String> profiles) {
+        if (searchNetworkHandle == 0) return;
+        android.content.SharedPreferences recent =
+                getSharedPreferences("rah_yab_recent_relay", MODE_PRIVATE);
+        if (recent.getLong("network", 0L) != searchNetworkHandle) return;
+        long age = android.os.SystemClock.elapsedRealtime() - recent.getLong("saved_at", 0L);
+        if (age < 0 || age >= RECENT_RELAY_MAX_AGE_MS) return;
+        String endpoint = recent.getString("endpoint", "");
+        String protocol = recent.getString("protocol", "");
+        for (int i = 0; i < profiles.size(); i++) {
+            String profile = profiles.get(i);
+            if (endpoint.equals(profileEndpoint(profile)) && protocol.equals(profileProtocol(profile))) {
+                if (i > 0) profiles.add(0, profiles.remove(i));
+                appendAutoHistory("AUTO_RECENT_RELAY_FIRST",
+                        "آزمون دوباره سرور موفق قبلی روی همین اتصال شبکه");
+                return;
+            }
+        }
     }
 
     private String profileEndpoint(String profile) {
