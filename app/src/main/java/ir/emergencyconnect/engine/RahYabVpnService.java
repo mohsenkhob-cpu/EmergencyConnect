@@ -815,6 +815,28 @@ public final class RahYabVpnService extends VpnService {
                     "IP پیش از اتصال ثبت نشده؛ برای جلوگیری از تأیید اشتباه، این سرور پذیرفته نشد");
             return false;
         }
+        android.net.ConnectivityManager manager = getSystemService(android.net.ConnectivityManager.class);
+        android.net.Network vpn = null;
+        long deadline = android.os.SystemClock.elapsedRealtime() + 3000L;
+        while (manager != null && !isSessionCancelled()) {
+            android.net.Network active = manager.getActiveNetwork();
+            android.net.NetworkCapabilities caps = active == null ? null : manager.getNetworkCapabilities(active);
+            if (caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) {
+                vpn = active;
+                break;
+            }
+            if (android.os.SystemClock.elapsedRealtime() >= deadline) break;
+            try {
+                Thread.sleep(150L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        if (vpn == null) {
+            appendAutoHistory("AUTO_TUNNEL_ROUTE_MISSING", "اندروید مسیر VPN را برای آزمون فعال نکرد");
+            return false;
+        }
         String[] probes = new String[] {
                 "https://connectivitycheck.gstatic.com/generate_204",
                 "https://cp.cloudflare.com/generate_204"
@@ -823,7 +845,7 @@ public final class RahYabVpnService extends VpnService {
         for (String probe : probes) {
             HttpURLConnection connection = null;
             try {
-                connection = (HttpURLConnection) new URL(probe).openConnection();
+                connection = (HttpURLConnection) vpn.openConnection(new URL(probe), java.net.Proxy.NO_PROXY);
                 connection.setInstanceFollowRedirects(false);
                 connection.setConnectTimeout(5000);
                 connection.setReadTimeout(5000);
@@ -847,7 +869,7 @@ public final class RahYabVpnService extends VpnService {
         }
         if (!httpsTrafficOk) return false;
 
-        String tunnelExitIp = fetchPublicIp();
+        String tunnelExitIp = fetchPublicIp(vpn);
         if (tunnelExitIp == null || tunnelExitIp.isEmpty()) {
             appendAutoHistory("AUTO_EXIT_IP_UNVERIFIED",
                     "IP خروجی در زمان تونل قابل دریافت نبود؛ اتصال تأیید نشد");
@@ -858,6 +880,10 @@ public final class RahYabVpnService extends VpnService {
                     "IP خروجی با IP پیش از تونل تفاوت نداشت؛ احتمال عبور نکردن ترافیک از رله");
             return false;
         }
+        if (!vpn.equals(manager.getActiveNetwork()) || isSessionCancelled()) {
+            appendAutoHistory("AUTO_TUNNEL_ROUTE_CHANGED", "مسیر شبکه هنگام تأیید تونل تغییر کرد");
+            return false;
+        }
         activeTunnelExitIp = tunnelExitIp;
         appendAutoHistory("AUTO_EXIT_IP_CHANGED",
                 "IP خروجی در زمان تونل با IP پیش از اتصال متفاوت است");
@@ -866,6 +892,10 @@ public final class RahYabVpnService extends VpnService {
 
     /** Fetch a literal public IP over ordinary, unprotected HTTPS traffic. */
     private String fetchPublicIp() {
+        return fetchPublicIp(null);
+    }
+
+    private String fetchPublicIp(android.net.Network network) {
         String[] endpoints = new String[] {
                 "https://api.ipify.org",
                 "https://icanhazip.com"
@@ -873,7 +903,11 @@ public final class RahYabVpnService extends VpnService {
         for (String endpoint : endpoints) {
             HttpURLConnection connection = null;
             try {
-                connection = (HttpURLConnection) new URL(endpoint).openConnection();
+                URL url = new URL(endpoint);
+                connection = (HttpURLConnection) (network == null
+                        ? url.openConnection(java.net.Proxy.NO_PROXY)
+                        : network.openConnection(url, java.net.Proxy.NO_PROXY));
+                connection.setInstanceFollowRedirects(false);
                 connection.setConnectTimeout(4500);
                 connection.setReadTimeout(4500);
                 connection.setUseCaches(false);

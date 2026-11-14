@@ -184,6 +184,29 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void recordAttemptNetwork(String engine) {
+        android.net.ConnectivityManager manager = getSystemService(android.net.ConnectivityManager.class);
+        android.net.Network network = manager == null ? null : manager.getActiveNetwork();
+        android.net.NetworkCapabilities caps = network == null ? null : manager.getNetworkCapabilities(network);
+        String networkType = "نامشخص";
+        if (caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) {
+            networkType = "Wi-Fi";
+        } else if (caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)) {
+            networkType = "دیتای موبایل";
+            try {
+                android.telephony.TelephonyManager phone = getSystemService(android.telephony.TelephonyManager.class);
+                if (phone != null) {
+                    String operator = phone.createForSubscriptionId(android.telephony.SubscriptionManager
+                            .getDefaultDataSubscriptionId()).getNetworkOperatorName();
+                    if (operator != null && !operator.trim().isEmpty()) networkType += " — " + operator;
+                }
+            } catch (RuntimeException ignored) { }
+        }
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("attempt_network_" + engine, networkType)
+                .apply();
+    }
+
     private String buildDiagnosticReport() {
         android.content.SharedPreferences prefs =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
@@ -210,6 +233,14 @@ public class MainActivity extends Activity {
         }
         report.append('\n');
 
+        appendReportSection(report, "شبکه آخرین آزمون OpenVPN",
+                prefs.getString("attempt_network_openvpn", ""));
+        appendReportSection(report, "شبکه آخرین آزمون sing-box",
+                prefs.getString("attempt_network_singbox", ""));
+        appendReportSection(report, "شبکه آخرین آزمون WireGuard",
+                prefs.getString("attempt_network_wireguard", ""));
+        appendReportSection(report, "نتیجه آزمون پروفایل‌های WireGuard",
+                prefs.getString("wireguard_attempt_results", ""));
         appendReportSection(report, "رویدادهای برنامه",
                 prefs.getString("app_event_history", ""));
         appendReportSection(report, "زمان آغاز آخرین جست‌وجوی هوشمند",
@@ -1164,6 +1195,7 @@ public class MainActivity extends Activity {
     }
 
     private void startSmartSingBox() {
+        recordAttemptNetwork("singbox");
         beginSmartAttempt("در حال دریافت فهرست VLESS و Trojan…");
         int attempt = smartAttempt;
         worker.execute(() -> {
@@ -1195,25 +1227,38 @@ public class MainActivity extends Activity {
 
     private void connectSmartWireGuard() {
         if (smartWireGuardProfiles.isEmpty()) return;
+        recordAttemptNetwork("wireguard");
         beginSmartAttempt("در حال آزمون پروفایل‌های WireGuard…");
         int attempt = smartAttempt;
         ArrayList<Config> profiles = new ArrayList<>(smartWireGuardProfiles);
         worker.execute(() -> {
             Config best = null;
             long fastest = Long.MAX_VALUE;
-            for (Config profile : profiles) {
+            StringBuilder results = new StringBuilder();
+            for (int i = 0; i < profiles.size(); i++) {
+                Config profile = profiles.get(i);
                 if (attempt != smartAttempt) break;
                 try {
                     wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
-                    wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.UP, profile);
+                    if (wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.UP, profile) != Tunnel.State.UP) {
+                        results.append(i + 1).append(" — تونل شروع نشد\n");
+                        continue;
+                    }
                     long start = android.os.SystemClock.elapsedRealtime();
                     TunnelVerifier.Result result = TunnelVerifier.verify(this);
+                    results.append(i + 1).append(" — ").append(result.verified
+                            ? "HTTPS تأیید شد"
+                            : result.message.contains("UnknownHostException") ? "خطای DNS"
+                            : result.message.contains("مسیر VPN") ? "مسیر VPN در اندروید فعال نشد"
+                            : "آزمون HTTPS ناموفق").append('\n');
                     long duration = android.os.SystemClock.elapsedRealtime() - start;
                     if (result.verified && duration < fastest) {
                         best = profile;
                         fastest = duration;
                     }
-                } catch (Exception ignored) { }
+                } catch (Exception error) {
+                    results.append(i + 1).append(" — ").append(error.getClass().getSimpleName()).append('\n');
+                }
             }
             boolean verified = false;
             try {
@@ -1230,9 +1275,12 @@ public class MainActivity extends Activity {
             }
             final boolean connected = verified;
             runOnUiThread(() -> {
-                if (attempt == smartAttempt && !isDestroyed())
+                if (attempt == smartAttempt && !isDestroyed()) {
+                    getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                            .putString("wireguard_attempt_results", results.toString()).apply();
                     completeSmartAttempt(connected ? "عبور اینترنت با WireGuard تأیید شد"
                             : "اتصال WireGuard تأیید نشد", connected);
+                }
             });
         });
     }
@@ -1375,6 +1423,7 @@ public class MainActivity extends Activity {
         int attempt = ++smartAttempt;
         discoveryButton.setEnabled(false);
         beginFreshDiscoveryDiagnostics();
+        recordAttemptNetwork("openvpn");
         publishDiscoveryStatus("در حال جستجوی سرورهای رایگان و آماده‌سازی آزمون اتصال…", "searching");
         worker.execute(() -> {
             try {
