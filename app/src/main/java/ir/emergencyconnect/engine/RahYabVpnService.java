@@ -64,6 +64,7 @@ public final class RahYabVpnService extends VpnService {
     private volatile boolean nativeCallbacksBound;
     private String nativeBindDiagnostic = "NOT_INITIALIZED";
     private volatile boolean foregroundStarted;
+    private volatile boolean terminalFailure;
     private final ExecutorService sessionExecutor = Executors.newSingleThreadExecutor();
     private final java.util.concurrent.ScheduledExecutorService qualityMonitorExecutor =
             Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -238,6 +239,7 @@ public final class RahYabVpnService extends VpnService {
         if (ACTION_START.equals(action)) {
             cancelQualityMonitor();
             stopRequested.set(false);
+            terminalFailure = false;
             autoCandidatesTried = 0;
             autoConnected = false;
             autoSearchEnabled = false;
@@ -280,6 +282,7 @@ public final class RahYabVpnService extends VpnService {
         }
 
         if (ACTION_STOP.equals(action)) {
+            terminalFailure = false;
             android.content.SharedPreferences pending =
                     getSharedPreferences(PENDING_START_PREFS, MODE_PRIVATE);
             String cancelledRequestId = pending.getString(PENDING_START_ID, null);
@@ -461,7 +464,7 @@ public final class RahYabVpnService extends VpnService {
             autoSearchEnabled = false;
             autoConnected = false;
             setLampState("disconnected");
-            updateStatus("این نوبت جست‌وجو به سقف ۱۲ سرور رسید و اتصال تأیید نشد؛ برای تلاش تازه، اتصال هوشمند را دوباره بزنید.");
+            finishFailedSearch("این نوبت جست‌وجو به سقف ۱۲ سرور رسید و اتصال تأیید نشد؛ برای تلاش تازه، اتصال هوشمند را دوباره بزنید.");
             return;
         }
         String baselineExitIp = fetchPublicIp();
@@ -686,7 +689,7 @@ public final class RahYabVpnService extends VpnService {
                     .commit();
             appendAutoHistory("AUTO_SEARCH_LIMIT_REACHED",
                     "سقف ۱۲ سرور برای این درخواست کاربر تکمیل شد؛ جست‌وجوی خودکار متوقف شد");
-            updateStatus("۱۲ سرور بررسی شدند اما اتصال پایدار تأیید نشد؛ برای شروع یک نوبت تازه، اتصال هوشمند را بزنید.", "failed");
+            finishFailedSearch("۱۲ سرور بررسی شدند اما اتصال پایدار تأیید نشد؛ برای شروع یک نوبت تازه، اتصال هوشمند را بزنید.");
             return;
         }
         // Prefer the untested profiles already downloaded for this explicit
@@ -729,7 +732,7 @@ public final class RahYabVpnService extends VpnService {
                     .putString("session_start_result",
                             "سرور آزمایش‌نشده یا تازه‌ای در دسترس نیست؛ بعداً دوباره تلاش کنید.")
                     .apply();
-            updateStatus("فهرست فعلی تمام شده و منبع دریافت سرور تازه پاسخ‌گو نیست؛ بعداً دوباره تلاش کنید.");
+            finishFailedSearch("فهرست فعلی تمام شده و منبع دریافت سرور تازه پاسخ‌گو نیست؛ بعداً دوباره تلاش کنید.");
             appendAutoHistory("AUTO_REFRESH_EMPTY",
                     "هیچ پروفایل آزمایش‌نشده یا تازه‌ای برای ادامه وجود ندارد");
             return;
@@ -756,7 +759,7 @@ public final class RahYabVpnService extends VpnService {
             setLampState("disconnected");
             appendAutoHistory("AUTO_REFRESH_QUEUE_FAILED",
                     "صف اجرای جست‌وجوی بعدی در دسترس نبود؛ جست‌وجو متوقف شد");
-            updateStatus("ادامه جست‌وجوی خودکار ممکن نشد؛ دوباره اتصال هوشمند را بزنید.");
+            finishFailedSearch("ادامه جست‌وجوی خودکار ممکن نشد؛ دوباره اتصال هوشمند را بزنید.");
         }
     }
 
@@ -1148,7 +1151,7 @@ public final class RahYabVpnService extends VpnService {
                 autoConnected = false;
                 autoSearchEnabled = false;
                 setLampState("disconnected");
-                updateStatus("اتصال VPN قطع شد و سقف تعویض خودکار این نشست تکمیل شده است؛ برای تلاش تازه، اتصال هوشمند را بزنید.");
+                finishFailedSearch("اتصال VPN قطع شد و سقف تعویض خودکار این نشست تکمیل شده است؛ برای تلاش تازه، اتصال هوشمند را بزنید.");
             } else {
                 updateStatus("کیفیت اتصال پایین است؛ سقف تعویض خودکار این نشست تکمیل شد و اتصال فعلی حفظ می‌شود.");
             }
@@ -1254,7 +1257,7 @@ public final class RahYabVpnService extends VpnService {
             setLampState("disconnected");
             appendAutoHistory("AUTO_FAILOVER_NO_ROLLBACK",
                     "پروفایل اتصال قبلی برای بازیابی در دسترس نیست؛ تعویض خودکار انجام نشد");
-            updateStatus("پروفایل قبلی برای بازیابی در دسترس نیست؛ برای اتصال دوباره، اتصال هوشمند را بزنید.");
+            finishFailedSearch("پروفایل قبلی برای بازیابی در دسترس نیست؛ برای اتصال دوباره، اتصال هوشمند را بزنید.");
             return;
         }
         autoFailoversThisSession++;
@@ -1370,7 +1373,7 @@ public final class RahYabVpnService extends VpnService {
             setLampState("disconnected");
             appendAutoHistory("AUTO_FAILOVER_ROLLBACK_FAILED",
                     "بازیابی سرور قبلی نیز تأیید نشد؛ برای جلوگیری از تلاش بی‌پایان، نشست متوقف شد");
-            updateStatus("تعویض سرور موفق نبود و اتصال قبلی هم بازیابی نشد؛ برای تلاش تازه، اتصال هوشمند را بزنید.");
+            finishFailedSearch("تعویض سرور موفق نبود و اتصال قبلی هم بازیابی نشد؛ برای تلاش تازه، اتصال هوشمند را بزنید.");
         }
     }
 
@@ -1732,6 +1735,15 @@ public final class RahYabVpnService extends VpnService {
         }
     }
 
+    private void finishFailedSearch(String message) {
+        if (stopRequested.get() || serviceDestroyed) return;
+        terminalFailure = true;
+        updateStatus(message, "failed");
+        // Android calls onDestroy, which removes the foreground notification
+        // and performs the native stop, TUN close, and callback unbind.
+        stopSelf(autoStartId);
+    }
+
     private void setLampState(String state) {
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("connection_lamp_state", state).apply();
@@ -2007,7 +2019,7 @@ public final class RahYabVpnService extends VpnService {
         attemptSignal = null;
         sessionExecutor.shutdownNow();
         qualityMonitorExecutor.shutdownNow();
-        setLampState("disconnected");
+        if (!terminalFailure) setLampState("disconnected");
 
         // OpenVPN's native stop() joins its worker and can take noticeable
         // time. Never perform that join on Android's main/service thread.
