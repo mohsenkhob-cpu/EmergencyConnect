@@ -33,6 +33,17 @@ public final class OpenVpn3Bridge {
     private static native String nativeValidateProfile(String profile);
     private static native String nativeStartSession(String profile);
     private static native void nativeStopSession();
+    private static native long[] nativeTunnelBytes();
+
+    /** Receive and send byte totals for the current OpenVPN tunnel. */
+    public static long[] tunnelBytes() {
+        if (!LIBRARY_LOADED) return null;
+        try {
+            return nativeTunnelBytes();
+        } catch (UnsatisfiedLinkError | SecurityException ignored) {
+            return null;
+        }
+    }
 
     /** Start one autologin-only native OpenVPN session on its managed worker. */
     public static String startSession(String profile) {

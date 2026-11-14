@@ -1741,7 +1741,11 @@ public final class RahYabVpnService extends VpnService {
         updateStatus(message, "failed");
         // Android calls onDestroy, which removes the foreground notification
         // and performs the native stop, TUN close, and callback unbind.
-        stopSelf(autoStartId);
+        new android.os.Handler(getMainLooper()).post(() -> {
+            // A duplicate recovery START can advance Android's start ID even
+            // though it did not replace the running session.
+            if (terminalFailure && !stopRequested.get() && !serviceDestroyed) stopSelf();
+        });
     }
 
     private void setLampState(String state) {

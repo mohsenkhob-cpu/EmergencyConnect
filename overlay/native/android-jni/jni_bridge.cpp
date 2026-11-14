@@ -742,6 +742,17 @@ Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession(
     }
 }
 
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeTunnelBytes(JNIEnv *env, jclass) {
+    std::lock_guard<std::mutex> lock(g_session_mutex);
+    if (!g_session || g_session_stopping || g_session->finished.load()) return nullptr;
+    const auto stats = g_session->client->tun_stats();
+    const jlong values[] = {stats.bytesIn, stats.bytesOut};
+    jlongArray snapshot = env->NewLongArray(2);
+    if (snapshot) env->SetLongArrayRegion(snapshot, 0, 2, values);
+    return snapshot;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStopSession(
         JNIEnv *, jclass) {

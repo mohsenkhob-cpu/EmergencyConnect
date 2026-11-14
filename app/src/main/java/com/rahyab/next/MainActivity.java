@@ -52,6 +52,9 @@ public class MainActivity extends Activity {
     private Button discoveryButton;
     private TextView status;
     private TextView connectionOrb;
+    private TextView liveTunnelSpeed;
+    private long[] previousTunnelBytes;
+    private long previousTunnelSampleAt;
     private android.widget.ProgressBar connectionSpinner;
     private Button connectButton;
     private Button disconnectButton;
@@ -67,6 +70,7 @@ public class MainActivity extends Activity {
         @Override public void run() {
             if (status == null || isFinishing() || isDestroyed()) return;
             refreshServiceStatusFromPreferences();
+            sampleLiveTunnelSpeed();
             statusRefreshHandler.postDelayed(this, 1000L);
         }
     };
@@ -513,6 +517,9 @@ public class MainActivity extends Activity {
         connectionSpinner.setVisibility(View.GONE);
         orbFrame.addView(connectionSpinner, new android.widget.FrameLayout.LayoutParams(
                 -1, -1, Gravity.CENTER));
+
+        liveTunnelSpeed = label("سرعت لحظه‌ای OpenVPN —", 14, Color.WHITE, false);
+        page.addView(liveTunnelSpeed);
 
         TextView helper = label("یافتن خودکار سرورهای عمومی رایگان؛ کیفیت و حریم خصوصی آن‌ها تضمین‌شده نیست", 14,
                 Color.rgb(164, 181, 205), false);
@@ -1368,6 +1375,24 @@ public class MainActivity extends Activity {
         return message == null || message.trim().isEmpty() ? e.getClass().getSimpleName() : message;
     }
 
+    private void sampleLiveTunnelSpeed() {
+        long[] current = OpenVpn3Bridge.tunnelBytes();
+        long now = android.os.SystemClock.elapsedRealtime();
+        long elapsed = now - previousTunnelSampleAt;
+        if (current != null && previousTunnelBytes != null && elapsed > 0
+                && current[0] >= previousTunnelBytes[0] && current[1] >= previousTunnelBytes[1]) {
+            liveTunnelSpeed.setText("دریافت "
+                    + Math.round((current[0] - previousTunnelBytes[0]) * 8.0 / elapsed)
+                    + " kbps  |  ارسال "
+                    + Math.round((current[1] - previousTunnelBytes[1]) * 8.0 / elapsed)
+                    + " kbps");
+        } else {
+            liveTunnelSpeed.setText("سرعت لحظه‌ای OpenVPN —");
+        }
+        previousTunnelBytes = current;
+        previousTunnelSampleAt = now;
+    }
+
     private void refreshServiceStatusFromPreferences() {
         if (status == null) return;
         android.content.SharedPreferences diagnostics = statusPreferences != null
@@ -1463,6 +1488,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onPause() {
+        previousTunnelBytes = null;
         statusRefreshHandler.removeCallbacks(statusRefreshRunnable);
         if (statusPreferences != null && statusPreferenceListener != null) {
             statusPreferences.unregisterOnSharedPreferenceChangeListener(statusPreferenceListener);
