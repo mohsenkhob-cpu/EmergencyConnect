@@ -133,31 +133,34 @@ public final class VpnGateProvider {
 
     /** Must be called from a worker thread, never from Android's main thread. */
     public static Result fetch() throws IOException {
-        IOException officialFailure;
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        var results = new java.util.concurrent.ExecutorCompletionService<Result>(executor);
+        results.submit(VpnGateProvider::fetchOfficial);
+        results.submit(VpnGateProvider::fetchMirror);
+        IOException failure = new IOException("منبع رسمی و آینهٔ VPN Gate در دسترس نبودند");
         try {
-            byte[] body = fetchBytes(OFFICIAL_API, MAX_RESPONSE_BYTES, CONNECT_TIMEOUT_MS,
-                    READ_TIMEOUT_MS, true);
-            List<Server> parsed = parse(new String(body, StandardCharsets.UTF_8),
-                    "VPN Gate رسمی");
-            if (parsed.isEmpty()) {
-                throw new IOException("منبع رسمی پاسخ داد، اما پروفایل OpenVPN معتبری پیدا نشد");
+            for (int checked = 0; checked < 2; checked++) {
+                try {
+                    return results.take().get();
+                } catch (java.util.concurrent.ExecutionException error) {
+                    failure.addSuppressed(error.getCause());
+                }
             }
-            return new Result(parsed, body.length, OFFICIAL_API);
-        } catch (IOException error) {
-            officialFailure = error;
+            throw failure;
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new java.io.InterruptedIOException("جست‌وجوی VPN Gate لغو شد");
+        } finally {
+            executor.shutdownNow();
         }
+    }
 
-        try {
-            return fetchMirror();
-        } catch (IOException mirrorFailure) {
-            IOException combined = new IOException(
-                    "دریافت فهرست از VPN Gate رسمی و آینه HTTPS جایگزین ناموفق بود؛ "
-                    + "خطای منبع رسمی: " + safeMessage(officialFailure)
-                    + "؛ خطای آینه: " + safeMessage(mirrorFailure));
-            combined.addSuppressed(officialFailure);
-            combined.addSuppressed(mirrorFailure);
-            throw combined;
-        }
+    private static Result fetchOfficial() throws IOException {
+        byte[] body = fetchBytes(OFFICIAL_API, MAX_RESPONSE_BYTES, CONNECT_TIMEOUT_MS,
+                READ_TIMEOUT_MS, true);
+        List<Server> parsed = parse(new String(body, StandardCharsets.UTF_8), "VPN Gate رسمی");
+        if (parsed.isEmpty()) throw new IOException("VPN Gate پروفایل سازگار نداد");
+        return new Result(parsed, body.length, OFFICIAL_API);
     }
 
     private static Result fetchMirror() throws IOException {

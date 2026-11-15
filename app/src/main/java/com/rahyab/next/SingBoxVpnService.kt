@@ -84,7 +84,7 @@ class SingBoxVpnService : VpnService() {
         currentInstance = this
         if (Build.VERSION.SDK_INT >= 26) {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
-                NotificationChannel(channel, "وضعیت راه‌یاب", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(channel, "وضعیت فیلتر محسن", NotificationManager.IMPORTANCE_LOW)
             )
         }
     }
@@ -386,7 +386,7 @@ class SingBoxVpnService : VpnService() {
     private fun openTun(options: TunOptions): Int {
         check(!stopping) { "VPN is stopping" }
         if (VpnService.prepare(this) != null) error("مجوز VPN صادر نشده است")
-        val builder = Builder().setSession("راه‌یاب").setMtu(options.mtu)
+        val builder = Builder().setSession("فیلتر محسن").setMtu(options.mtu)
         if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
 
         val v4 = options.inet4Address
@@ -521,7 +521,7 @@ class SingBoxVpnService : VpnService() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }.setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setContentTitle("راه‌یاب VPN")
+            .setContentTitle("فیلتر محسن VPN")
             .setContentText(message)
             .setContentIntent(pending)
             .setOngoing(true)

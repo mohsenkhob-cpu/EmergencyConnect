@@ -40,9 +40,9 @@ class SstpVpnService : VpnService() {
             return START_NOT_STICKY
         }
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel("sstp", "راه‌یاب SSTP", NotificationManager.IMPORTANCE_LOW))
+        manager.createNotificationChannel(NotificationChannel("sstp", "فیلتر محسن SSTP", NotificationManager.IMPORTANCE_LOW))
         startForeground(7510, Notification.Builder(this, "sstp")
-            .setSmallIcon(android.R.drawable.stat_sys_warning).setContentTitle("راه‌یاب SSTP")
+            .setSmallIcon(android.R.drawable.stat_sys_warning).setContentTitle("فیلتر محسن SSTP")
             .setContentText("در حال آزمون اتصال SSTP").setOngoing(true).build())
         diagnostics.edit().remove("sstp_attempt_results").apply()
         candidates = ArrayDeque(hosts)

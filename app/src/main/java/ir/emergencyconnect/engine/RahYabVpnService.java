@@ -113,7 +113,7 @@ public final class RahYabVpnService extends VpnService {
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null && manager.getNotificationChannel(CHANNEL_ID) == null) {
                 NotificationChannel channel = new NotificationChannel(
-                        CHANNEL_ID, "وضعیت راه‌یاب VPN",
+                        CHANNEL_ID, "وضعیت فیلتر محسن VPN",
                         NotificationManager.IMPORTANCE_LOW);
                 channel.setDescription("اعلان دائمی هنگام فعالیت سرویس VPN");
                 manager.createNotificationChannel(channel);
@@ -131,7 +131,7 @@ public final class RahYabVpnService extends VpnService {
                 ? new Notification.Builder(this, CHANNEL_ID)
                 : new Notification.Builder(this);
         return builder.setSmallIcon(android.R.drawable.stat_sys_warning)
-                .setContentTitle("راه‌یاب VPN")
+                .setContentTitle("فیلتر محسن VPN")
                 .setContentText(message)
                 .setOngoing(true)
                 .setCategory(Notification.CATEGORY_SERVICE)

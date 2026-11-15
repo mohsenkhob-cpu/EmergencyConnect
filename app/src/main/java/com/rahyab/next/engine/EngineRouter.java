@@ -27,7 +27,7 @@ public final class EngineRouter {
             case "ovpn":
             case "openvpn":
                 throw new UnsupportedOperationException(
-                        "موتور داخلی OpenVPN هنوز به ماژول اجرایی راه‌یاب متصل نشده است");
+                        "موتور داخلی OpenVPN هنوز به ماژول اجرایی فیلتر محسن متصل نشده است");
             default:
                 throw new IllegalArgumentException("پروتکل این فایل هنوز پشتیبانی نمی‌شود: " + scheme);
         }

@@ -28,39 +28,52 @@ public final class PublicProxyProvider {
         }
     }
     public static Result fetch(Connections connections, BooleanSupplier cancelled) throws Exception {
-        List<String> failures = new ArrayList<>();
-        List<String> sources = new ArrayList<>();
-        List<List<JSONObject>> feeds = new ArrayList<>();
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
         try {
-            feeds.add(sanitize(new JSONObject(read(
+            var radar = executor.submit(() -> sanitize(new JSONObject(read(
                     connections, NODES_RADAR, MAX_FEED_BYTES, cancelled)), cancelled));
-            sources.add("Free Nodes Radar");
-        } catch (InterruptedException stop) {
-            throw stop;
-        } catch (Exception error) {
-            failures.add("Free Nodes Radar: " + error.getClass().getSimpleName());
+            var radikal = executor.submit(() -> fetchRaydikalx(connections, cancelled));
+            List<String> sources = new ArrayList<>();
+            List<List<JSONObject>> feeds = new ArrayList<>();
+            List<java.util.concurrent.Future<List<JSONObject>>> requests = List.of(radar, radikal);
+            List<String> names = List.of("Free Nodes Radar", "Raydikalx");
+            IOException failure = new IOException("دریافت فهرست sing-box از هر دو منبع ناموفق بود");
+            for (int i = 0; i < requests.size(); i++) {
+                check(cancelled);
+                try {
+                    feeds.add(requests.get(i).get());
+                    sources.add(names.get(i));
+                } catch (java.util.concurrent.ExecutionException error) {
+                    if (error.getCause() instanceof InterruptedException stop) throw stop;
+                    failure.addSuppressed(error.getCause());
+                }
+            }
+            check(cancelled);
+            if (feeds.isEmpty()) throw failure;
+            JSONArray nodes = mergeFeeds(feeds);
+            return new Result(buildProfile(nodes), nodes.length(), String.join(" + ", sources));
+        } finally {
+            executor.shutdownNow();
         }
+    }
+
+    private static List<JSONObject> fetchRaydikalx(Connections connections, BooleanSupplier cancelled)
+            throws Exception {
+        IOException failure = new IOException("فهرست Raydikalx در دسترس نبود");
         for (String base : RAYDIKALX_MIRRORS) {
             check(cancelled);
             try {
                 JSONObject index = new JSONObject(read(connections, base + "index.json", 65536, cancelled));
                 validateFreshness(index.getString("updated_at"), System.currentTimeMillis());
-                feeds.add(sanitize(new JSONObject(read(connections,
-                        base + "secure/singbox.json", MAX_FEED_BYTES, cancelled)), cancelled));
-                sources.add("Raydikalx");
-                break;
+                return sanitize(new JSONObject(read(connections,
+                        base + "secure/singbox.json", MAX_FEED_BYTES, cancelled)), cancelled);
             } catch (InterruptedException stop) {
                 throw stop;
             } catch (Exception error) {
-                failures.add(new URL(base).getHost() + ": " + error.getClass().getSimpleName());
+                failure.addSuppressed(error);
             }
         }
-        check(cancelled);
-        if (feeds.isEmpty()) {
-            throw new IOException("دریافت فهرست ناموفق بود؛ " + String.join("؛ ", failures));
-        }
-        JSONArray nodes = mergeFeeds(feeds);
-        return new Result(buildProfile(nodes), nodes.length(), String.join(" + ", sources));
+        throw failure;
     }
 
     static void validateFreshness(String timestamp, long now) throws IOException {
