@@ -595,15 +595,10 @@ public class MainActivity extends Activity {
         smartWireGuardButton.setText("اتصال هوشمند • WireGuard");
         page.addView(smartWireGuardButton);
         smartWireGuardButton.setOnClickListener(v -> {
-            if (!smartWireGuardProfiles.isEmpty()) {
-                requestSmartWireGuard();
-                return;
-            }
-            Intent files = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            files.addCategory(Intent.CATEGORY_OPENABLE);
-            files.setType("*/*");
-            files.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-            startActivityForResult(files, REQUEST_SMART_WIREGUARD);
+            String links = getPreferences(MODE_PRIVATE).getString("wireguard_sources", "");
+            if (!links.isEmpty()) fetchWireGuardProfiles(links);
+            else if (!smartWireGuardProfiles.isEmpty()) requestSmartWireGuard();
+            else showWireGuardSources();
         });
 
         sstpButton = new Button(this);
@@ -628,6 +623,13 @@ public class MainActivity extends Activity {
         buttonParams.topMargin = dp(24);
         advancedPanel.addView(connectButton, buttonParams);
         connectButton.setOnClickListener(v -> chooseWireGuardFile());
+
+        Button wireGuardSources = new Button(this);
+        wireGuardSources.setText("منابع آنلاین WireGuard");
+        advancedPanel.addView(wireGuardSources);
+        wireGuardSources.setOnClickListener(v -> {
+            if (smartWireGuardButton.isEnabled()) showWireGuardSources();
+        });
 
         disconnectButton = new Button(this);
         disconnectButton.setText("قطع اتصال");
@@ -954,12 +956,14 @@ public class MainActivity extends Activity {
             completeSmartAttempt("مجوز VPN داده نشد", false);
             return;
         }
-        if (resultCode != RESULT_OK) return;
         if (requestCode == REQUEST_SMART_WIREGUARD_PERMISSION) {
-            connectSmartWireGuard();
+            if (resultCode == RESULT_OK) connectSmartWireGuard();
+            else if (smartBusy) completeSmartAttempt("مجوز اتصال WireGuard صادر نشد", false);
             return;
         }
+        if (resultCode != RESULT_OK) return;
         if (requestCode == REQUEST_SMART_WIREGUARD && data != null) {
+            smartWireGuardProfiles.clear();
             android.content.ClipData selected = data.getClipData();
             int count = selected == null ? 1 : Math.min(selected.getItemCount(), 6);
             for (int i = 0; i < count; i++) {
@@ -1289,6 +1293,87 @@ public class MainActivity extends Activity {
                 });
             }
         });
+    }
+
+    private void showWireGuardSources() {
+        EditText links = new EditText(this);
+        links.setHint("در هر خط یک لینک مستقیم HTTPS فایل .conf");
+        links.setText(getPreferences(MODE_PRIVATE).getString("wireguard_sources", ""));
+        new AlertDialog.Builder(this).setTitle("منابع WireGuard")
+                .setView(links)
+                .setNegativeButton("بستن", null)
+                .setNeutralButton("انتخاب فایل از گوشی", (dialog, which) -> {
+                    Intent files = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                            .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                    startActivityForResult(files, REQUEST_SMART_WIREGUARD);
+                })
+                .setPositiveButton("ذخیره و دریافت", (dialog, which) -> {
+                    String sources = links.getText().toString().trim();
+                    getPreferences(MODE_PRIVATE).edit().putString("wireguard_sources", sources).apply();
+                    if (!sources.isEmpty()) fetchWireGuardProfiles(sources);
+                }).show();
+    }
+
+    private void fetchWireGuardProfiles(String sources) {
+        beginSmartAttempt("در حال دریافت پروفایل‌های WireGuard…");
+        int attempt = smartAttempt;
+        worker.execute(() -> {
+            ArrayList<Config> downloaded = new ArrayList<>();
+            int checked = 0;
+            for (String line : sources.split("\\R")) {
+                if (attempt != smartAttempt || checked == 6) break;
+                String address = line.trim();
+                if (address.isEmpty()) continue;
+                checked++;
+                try {
+                    downloaded.add(fetchWireGuardProfile(address));
+                } catch (java.io.IOException | RuntimeException | com.wireguard.config.BadConfigException ignored) {
+                    // URLs and profile content may contain credentials.
+                }
+            }
+            runOnUiThread(() -> {
+                if (attempt != smartAttempt || isDestroyed() || isFinishing()) return;
+                smartWireGuardProfiles.clear();
+                smartWireGuardProfiles.addAll(downloaded);
+                if (downloaded.isEmpty()) {
+                    completeSmartAttempt("هیچ پروفایل معتبری از لینک‌های WireGuard دریافت نشد", false);
+                    return;
+                }
+                requestSmartWireGuard();
+            });
+        });
+    }
+
+    private Config fetchWireGuardProfile(String address)
+            throws java.io.IOException, com.wireguard.config.BadConfigException {
+        java.net.URL url = new java.net.URL(address);
+        if (!"https".equalsIgnoreCase(url.getProtocol()) || url.getHost().isEmpty()
+                || url.getUserInfo() != null)
+            throw new java.io.IOException("HTTPS required");
+        javax.net.ssl.HttpsURLConnection connection =
+                (javax.net.ssl.HttpsURLConnection) url.openConnection(java.net.Proxy.NO_PROXY);
+        try {
+            connection.setInstanceFollowRedirects(false);
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(5000);
+            if (connection.getResponseCode() != 200) throw new java.io.IOException("HTTP error");
+            try (InputStream input = connection.getInputStream();
+                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[4096];
+                int count;
+                long deadline = android.os.SystemClock.elapsedRealtime() + 8000L;
+                while ((count = input.read(buffer)) != -1) {
+                    if (output.size() + count > 64 * 1024
+                            || android.os.SystemClock.elapsedRealtime() >= deadline)
+                        throw new java.io.IOException("Profile download limit");
+                    output.write(buffer, 0, count);
+                }
+                return Config.parse(new java.io.ByteArrayInputStream(output.toByteArray()));
+            }
+        } finally {
+            connection.disconnect();
+        }
     }
 
     private void requestSmartWireGuard() {
