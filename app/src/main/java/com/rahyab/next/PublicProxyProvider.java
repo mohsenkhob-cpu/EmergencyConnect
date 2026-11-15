@@ -11,7 +11,10 @@ import java.util.function.BooleanSupplier;
 
 /** Public third-party relay discovery. Never execute a downloaded root configuration. */
 public final class PublicProxyProvider {
-    private static final String[] BASES = {
+    private static final int MAX_FEED_BYTES = 4 * 1024 * 1024;
+    private static final int MAX_RELAYS = 40;
+    private static final String NODES_RADAR = "https://radarhub.top/sing-box.json";
+    private static final String[] RAYDIKALX_MIRRORS = {
         "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/",
         "https://cdn.jsdelivr.net/gh/0xRadikal/Free-v2ray-Configs@main/"
     };
@@ -26,21 +29,40 @@ public final class PublicProxyProvider {
     }
     public static Result fetch(Connections connections, BooleanSupplier cancelled) throws Exception {
         List<String> failures = new ArrayList<>();
-        for (String base : BASES) {
+        List<String> sources = new ArrayList<>();
+        List<List<JSONObject>> feeds = new ArrayList<>();
+        try {
+            feeds.add(sanitize(new JSONObject(read(
+                    connections, NODES_RADAR, MAX_FEED_BYTES, cancelled)), cancelled));
+            sources.add("Free Nodes Radar");
+        } catch (InterruptedException stop) {
+            throw stop;
+        } catch (Exception error) {
+            failures.add("Free Nodes Radar: " + error.getClass().getSimpleName());
+        }
+        for (String base : RAYDIKALX_MIRRORS) {
             check(cancelled);
             try {
                 JSONObject index = new JSONObject(read(connections, base + "index.json", 65536, cancelled));
                 validateFreshness(index.getString("updated_at"), System.currentTimeMillis());
-                // Fixed path, never a URL supplied by the subscription.
-                JSONArray nodes = sanitize(new JSONObject(read(connections,
-                        base + "secure/singbox.json", 4 * 1024 * 1024, cancelled)));
-                check(cancelled);
-                return new Result(buildProfile(nodes), nodes.length(), new URL(base).getHost());
-            } catch (InterruptedException stop) { throw stop; }
-            catch (Exception error) { failures.add(new URL(base).getHost() + ": " + error.getClass().getSimpleName()); }
+                feeds.add(sanitize(new JSONObject(read(connections,
+                        base + "secure/singbox.json", MAX_FEED_BYTES, cancelled)), cancelled));
+                sources.add("Raydikalx");
+                break;
+            } catch (InterruptedException stop) {
+                throw stop;
+            } catch (Exception error) {
+                failures.add(new URL(base).getHost() + ": " + error.getClass().getSimpleName());
+            }
         }
-        throw new IOException("دریافت فهرست جایگزین ناموفق بود؛ " + String.join("؛ ", failures));
+        check(cancelled);
+        if (feeds.isEmpty()) {
+            throw new IOException("دریافت فهرست ناموفق بود؛ " + String.join("؛ ", failures));
+        }
+        JSONArray nodes = mergeFeeds(feeds);
+        return new Result(buildProfile(nodes), nodes.length(), String.join(" + ", sources));
     }
+
     static void validateFreshness(String timestamp, long now) throws IOException {
         try {
             long age = now - Instant.parse(timestamp).toEpochMilli();
@@ -70,28 +92,49 @@ public final class PublicProxyProvider {
             }
         } finally { connection.disconnect(); }
     }
-    static JSONArray sanitize(JSONObject root) throws Exception {
+    private static List<JSONObject> sanitize(JSONObject root, BooleanSupplier cancelled) throws Exception {
         JSONArray input = root.getJSONArray("outbounds");
-        List<JSONObject> accepted = new ArrayList<>(); Set<String> seen = new HashSet<>();
+        List<JSONObject> accepted = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
         for (int i = 0; i < input.length(); i++) {
+            check(cancelled);
             JSONObject node = input.optJSONObject(i);
             if (node == null) continue;
             try {
                 JSONObject clean = sanitizeNode(node);
-                String key = clean.getString("server") + ":" + clean.getInt("server_port");
-                if (seen.add(key)) accepted.add(clean);
+                if (seen.add(relayAddress(clean))) accepted.add(clean);
             } catch (Exception ignored) { /* Unsupported or unsafe nodes are not imported. */ }
         }
         if (accepted.isEmpty()) throw new IOException("No compatible TLS relay");
-        // Rotate the bounded pool instead of always retesting the same first rows.
         Collections.shuffle(accepted);
+        return accepted;
+    }
+
+    private static String relayAddress(JSONObject node) throws Exception {
+        return node.getString("server").toLowerCase(Locale.ROOT) + ":" + node.getInt("server_port");
+    }
+
+    private static JSONArray mergeFeeds(List<List<JSONObject>> feeds) throws Exception {
+        List<Iterator<JSONObject>> candidates = new ArrayList<>();
+        for (List<JSONObject> feed : feeds) candidates.add(feed.iterator());
+        Set<String> seen = new HashSet<>();
         JSONArray result = new JSONArray();
-        for (JSONObject node : accepted) {
-            if (result.length() == 40) break;
-            node.put("tag", "relay-" + (result.length() + 1)); result.put(node);
+        while (!candidates.isEmpty() && result.length() < MAX_RELAYS) {
+            Iterator<Iterator<JSONObject>> round = candidates.iterator();
+            while (round.hasNext() && result.length() < MAX_RELAYS) {
+                Iterator<JSONObject> feed = round.next();
+                if (!feed.hasNext()) {
+                    round.remove();
+                    continue;
+                }
+                JSONObject node = feed.next();
+                if (!seen.add(relayAddress(node))) continue;
+                result.put(node.put("tag", "relay-" + (result.length() + 1)));
+            }
         }
         return result;
     }
+
     private static JSONObject sanitizeNode(JSONObject node) throws Exception {
         String type = node.getString("type");
         if (!"vless".equals(type) && !"trojan".equals(type)) throw new IOException("Unsupported protocol");

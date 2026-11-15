@@ -1297,6 +1297,8 @@ public class MainActivity extends Activity {
                     smartSingBoxBatches.clear();
                     smartSingBoxBatches.addAll(batches);
                     smartSingBoxBatch = 0;
+                    appendAppDiagnostic("sing-box", "منابع: " + result.source
+                            + " | سرورهای قابل آزمون: " + result.count);
                     launchSingBoxBatch();
                 });
             } catch (Exception error) {
