@@ -105,6 +105,9 @@ internal class SSLTerminal(private val bridge: SharedBridge) {
         bridge.service.stage(bridge.token, "باز کردن TCP")
         val transport = Socket()
         socket = transport
+        // Android may allocate the native descriptor lazily. Bind locally
+        // before protecting it, then connect only after protection succeeds.
+        transport.bind(java.net.InetSocketAddress(0))
         if (!bridge.service.protect(transport)) {
             bridge.service.notifyError(bridge.token, "اندروید نتوانست سوکت را از VPN جدا کند")
             throw java.io.IOException("VPN socket protection failed")
@@ -264,7 +267,6 @@ internal class SSLTerminal(private val bridge: SharedBridge) {
 
 
         socket!!.soTimeout = 1_000
-        bridge.service.protect(socket)
         return true
     }
 
