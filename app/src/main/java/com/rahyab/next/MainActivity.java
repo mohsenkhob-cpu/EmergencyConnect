@@ -584,7 +584,6 @@ public class MainActivity extends Activity {
         discoveryButton.setBackground(shape(Color.rgb(31, 151, 137), 18));
         LinearLayout.LayoutParams discoveryParams = new LinearLayout.LayoutParams(-1, dp(58));
         discoveryParams.topMargin = dp(16);
-        page.addView(discoveryButton, discoveryParams);
         discoveryButton.setOnClickListener(v -> startSmartOpenVpnSearch());
 
         smartSingBoxButton = new Button(this);
@@ -612,6 +611,8 @@ public class MainActivity extends Activity {
         advancedPanel.setPadding(dp(12), dp(8), dp(12), dp(12));
         advancedPanel.setBackground(shape(Color.rgb(17, 29, 48), 18));
         advancedPanel.setVisibility(View.GONE);
+
+        advancedPanel.addView(discoveryButton, discoveryParams);
 
         connectButton = new Button(this);
         connectButton.setText("انتخاب فایل WireGuard");
@@ -1729,8 +1730,9 @@ public class MainActivity extends Activity {
             try {
                 java.util.LinkedHashSet<String> hosts = new java.util.LinkedHashSet<>();
                 for (VpnGateProvider.Server server : VpnGateProvider.fetch().servers) {
-                    if (server.hostName.matches("(?i)[a-z0-9-]+\\.opengw\\.net"))
-                        hosts.add(server.hostName);
+                    String host = server.hostName.trim();
+                    if (host.matches("(?i)public-vpn-[0-9]+")) host += ".opengw.net";
+                    if (host.matches("(?i)[a-z0-9-]+\\.opengw\\.net")) hosts.add(host);
                     if (hosts.size() == 4) break;
                 }
                 if (hosts.isEmpty()) throw new java.io.IOException("نام میزبان مناسب پیدا نشد");
@@ -1744,7 +1746,7 @@ public class MainActivity extends Activity {
             } catch (Exception error) {
                 runOnUiThread(() -> {
                     if (attempt == smartAttempt && !isDestroyed())
-                        completeSmartAttempt("دریافت فهرست SSTP ناموفق بود", false);
+                        completeSmartAttempt("آماده‌سازی فهرست SSTP ناموفق بود: " + safeMessage(error), false);
                 });
             }
         });
@@ -1857,7 +1859,7 @@ public class MainActivity extends Activity {
         String visibleStatus = (connected || searching || "failed".equals(lamp))
                 && savedStatus != null && !savedStatus.trim().isEmpty()
                 ? savedStatus
-                : "اتصال برقرار نیست؛ برای شروع، دکمه اتصال هوشمند را بزنید.";
+                : "اتصال برقرار نیست؛ یکی از دکمه‌های اتصال را بزنید.";
         if (!visibleStatus.equals(lastRenderedServiceStatus)) {
             lastRenderedServiceStatus = visibleStatus;
             setStatus(visibleStatus);
