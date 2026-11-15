@@ -251,6 +251,8 @@ public class MainActivity extends Activity {
                 prefs.getString("attempt_network_wireguard", ""));
         appendReportSection(report, "نتیجه آزمون پروفایل‌های WireGuard",
                 prefs.getString("wireguard_attempt_results", ""));
+        appendReportSection(report, "نتیجه آزمون میزبان‌های SSTP",
+                prefs.getString("sstp_attempt_results", ""));
         appendReportSection(report, "رویدادهای برنامه",
                 redactProfileLinks(prefs.getString("app_event_history", "")));
         appendReportSection(report, "زمان آغاز آخرین جست‌وجوی هوشمند",

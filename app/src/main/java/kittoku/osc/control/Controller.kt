@@ -63,8 +63,8 @@ internal class Controller(internal val bridge: SharedBridge) {
     private fun attachHandler() {
         bridge.handler = CoroutineExceptionHandler { _, throwable ->
             kill(isReconnectionEnabled) {
-                val header = "OSC: ERR_UNEXPECTED"
-                bridge.service.notifyError(header)
+                val header = "خطای داخلی: ${throwable.javaClass.simpleName}"
+                bridge.service.notifyError(bridge.token, header)
             }
         }
     }
@@ -189,6 +189,7 @@ internal class Controller(internal val bridge: SharedBridge) {
             }
 
 
+            bridge.service.stage(bridge.token, "ساخت تونل اندروید")
             bridge.ipTerminal!!.initialize()
             if (!expectProceeded(Where.IP, null)) {
                 return@launch
@@ -243,7 +244,7 @@ internal class Controller(internal val bridge: SharedBridge) {
                 log += "\n${received.supplement}"
             }
 
-            bridge.service.notifyError(header)
+            bridge.service.notifyError(bridge.token, header)
         }
 
         return false

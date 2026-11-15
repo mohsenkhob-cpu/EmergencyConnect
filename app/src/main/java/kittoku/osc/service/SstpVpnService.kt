@@ -18,6 +18,9 @@ class SstpVpnService : VpnService() {
     private var candidates = ArrayDeque<String>()
     @Volatile private var generation = 0
     private var active = false
+    private var currentHost = ""
+    private var currentStage = ""
+    private val diagnostics by lazy { getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action != "sstp.start" || active) {
@@ -35,6 +38,7 @@ class SstpVpnService : VpnService() {
         startForeground(7510, Notification.Builder(this, "sstp")
             .setSmallIcon(android.R.drawable.stat_sys_warning).setContentTitle("راه‌یاب SSTP")
             .setContentText("در حال آزمون اتصال SSTP").setOngoing(true).build())
+        diagnostics.edit().remove("sstp_attempt_results").apply()
         candidates = ArrayDeque(hosts)
         active = true
         tryNext()
@@ -52,11 +56,13 @@ class SstpVpnService : VpnService() {
         val host = candidates.removeFirstOrNull()
         if (host == null) {
             active = false
-            publish("هیچ سرور SSTP آزمون اینترنت را پاس نکرد", "failed")
+            publish("اتصال SSTP تأیید نشد؛ نتیجه هر میزبان در گزارش است", "failed")
             stopSelf()
             return
         }
         val token = ++generation
+        currentHost = host
+        currentStage = "آماده‌سازی موتور"
         getSharedPreferences("sstp_engine", MODE_PRIVATE).edit().clear()
             .putString(OscPrefKey.HOME_HOSTNAME.name, host)
             .putString(OscPrefKey.HOME_USERNAME.name, "vpn")
@@ -67,24 +73,41 @@ class SstpVpnService : VpnService() {
             if (token == generation && active &&
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
                     .getString("connection_lamp_state", "") == "searching") {
+                recordResult("مهلت آزمون تمام شد")
                 controller?.kill(false, null)
             }
         }, 28_000L)
     }
 
     internal fun verifyTunnel(token: Int) {
+        stage(token, "آزمون اینترنت")
         scope.launch {
             val result = TunnelVerifier.verify(this@SstpVpnService)
             main.post {
                 if (!active || token != generation) return@post
-                if (result.verified) publish("عبور اینترنت با SSTP تأیید شد", "connected")
-                else controller?.kill(false, null)
+                if (result.verified) {
+                    recordResult("عبور اینترنت تأیید شد")
+                    publish("عبور اینترنت با SSTP تأیید شد", "connected")
+                } else {
+                    recordResult(result.message)
+                    controller?.kill(false, null)
+                }
             }
         }
     }
 
-    internal fun notifyError(message: String) {
-        android.util.Log.w("RahYabSSTP", message)
+    private fun recordResult(message: String) {
+        val prior = diagnostics.getString("sstp_attempt_results", "").orEmpty()
+        diagnostics.edit().putString("sstp_attempt_results",
+            (prior + "$currentHost — $currentStage — $message\n").takeLast(4096)).apply()
+    }
+
+    internal fun stage(token: Int, label: String) {
+        main.post { if (active && token == generation) currentStage = label }
+    }
+
+    internal fun notifyError(token: Int, message: String) {
+        main.post { if (active && token == generation) recordResult(message) }
     }
 
     internal fun close(token: Int) {

@@ -70,6 +70,7 @@ internal class SSLTerminal(private val bridge: SharedBridge) {
         jobInitialize = bridge.service.scope.launch(bridge.handler) {
             if (!establishSSL()) return@launch
 
+            bridge.service.stage(bridge.token, "درخواست SSTP")
             if (!establishHttp()) return@launch
 
             bridge.controlMailbox.send(ControlMessage(Where.SSL, Result.PROCEEDED))
@@ -101,9 +102,13 @@ internal class SSLTerminal(private val bridge: SharedBridge) {
 
         val socketHostname = if (doUseProxy) getStringPrefValue(OscPrefKey.PROXY_HOSTNAME, bridge.prefs) else sslHostname
         val socketPort = if (doUseProxy) getIntPrefValue(OscPrefKey.PROXY_PORT, bridge.prefs) else sslPort
+        bridge.service.stage(bridge.token, "باز کردن TCP")
         val transport = Socket()
         socket = transport
-        check(bridge.service.protect(transport))
+        if (!bridge.service.protect(transport)) {
+            bridge.service.notifyError(bridge.token, "اندروید نتوانست سوکت را از VPN جدا کند")
+            throw java.io.IOException("VPN socket protection failed")
+        }
         transport.soTimeout = 8000
         transport.connect(java.net.InetSocketAddress(socketHostname, socketPort), 5000)
         socketInputStream = transport.getInputStream()
@@ -119,6 +124,7 @@ internal class SSLTerminal(private val bridge: SharedBridge) {
         outboundBuffer = ByteBuffer.allocate(engine.session.packetBufferSize)
 
         try {
+            bridge.service.stage(bridge.token, "مذاکره TLS")
             startSSLHandshake()
         } catch (e: CertificateException) {
             val cause = e.cause
