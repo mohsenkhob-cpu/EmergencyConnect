@@ -1319,7 +1319,7 @@ public class MainActivity extends Activity {
         if (++smartSingBoxBatch < smartSingBoxBatches.size()) {
             launchSingBoxBatch();
         } else {
-            SingBoxVpnService.stop(this);
+            SingBoxVpnService.requestDisconnect(this);
             completeSmartAttempt("عبور اینترنت با sing-box تأیید نشد: " + failure, false);
         }
     }
@@ -1808,7 +1808,8 @@ public class MainActivity extends Activity {
         } else {
             stopService(stopSstp);
         }
-        SingBoxVpnService.stop(getApplicationContext());
+        if ("sing-box".equals(selectedEngine)) SingBoxVpnService.requestDisconnect(this);
+        else SingBoxVpnService.stop(this);
         if ("OpenVPN".equals(selectedEngine)) {
             Intent stop = new Intent(this, RahYabVpnService.class);
             stop.setAction(RahYabVpnService.ACTION_STOP);

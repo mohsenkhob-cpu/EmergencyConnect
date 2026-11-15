@@ -65,6 +65,7 @@ class SingBoxVpnService : VpnService() {
     private val lifecycle: ExecutorService = Executors.newSingleThreadExecutor { task ->
         Thread(task, "RahYab-singbox-lifecycle").apply { isDaemon = true }
     }
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val channel = "rahyab-singbox"
     private val notificationId = 7301
 
@@ -80,6 +81,7 @@ class SingBoxVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        currentInstance = this
         if (Build.VERSION.SDK_INT >= 26) {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
                 NotificationChannel(channel, "وضعیت راه‌یاب", NotificationManager.IMPORTANCE_LOW)
@@ -89,17 +91,14 @@ class SingBoxVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            stopping = true
-            closeTunnel()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            sendEvent(EVENT_STOPPED)
-            enqueueLifecycle { stopEngine() }
-            stopSelf(startId)
+            beginStop(startId)
             return START_NOT_STICKY
         }
         val requestedProfile = intent?.getStringExtra(EXTRA_PROFILE)
-        if (requestedProfile.isNullOrBlank()) { stopSelf(startId); return START_NOT_STICKY }
-        stopping = false
+        if (requestedProfile.isNullOrBlank() || stopping) {
+            if (!stopping) stopSelf(startId)
+            return START_NOT_STICKY
+        }
         profile = requestedProfile
         try {
             startForeground(notificationId, notification("در حال راه‌اندازی موتور VPN…"))
@@ -111,6 +110,7 @@ class SingBoxVpnService : VpnService() {
         }
         sendEvent(EVENT_STARTING)
         enqueueLifecycle {
+            if (stopping) return@enqueueLifecycle
             var created: CommandServer? = null
             try {
                 val setup = SetupOptions().apply {
@@ -146,10 +146,12 @@ class SingBoxVpnService : VpnService() {
                 Log.e(TAG, "sing-box startup failed", e)
                 runCatching { created?.closeService() }
                 runCatching { created?.close() }
-                updateNotification("خطای راه‌اندازی: " + (e.message ?: e.javaClass.simpleName))
-                stopEngine()
-                sendEvent(EVENT_ERROR, e.message ?: e.javaClass.simpleName)
-                stopSelf(startId)
+                if (!stopping) {
+                    updateNotification("خطای راه‌اندازی: " + (e.message ?: e.javaClass.simpleName))
+                    stopEngine()
+                    sendEvent(EVENT_ERROR, e.message ?: e.javaClass.simpleName)
+                    stopSelf(startId)
+                }
             }
         }
         return START_NOT_STICKY
@@ -487,11 +489,12 @@ class SingBoxVpnService : VpnService() {
 
     private fun stopEngine() {
         closeTunnel()
+        // libbox duplicates the TUN descriptor, so close its service before optional cleanup.
+        runCatching { server?.closeService() }.onFailure { Log.w(TAG, "closeService", it) }
         runCatching { trafficClient?.disconnect() }
         trafficClient = null
         trafficPath(this).delete()
         closeInterfaceMonitor()
-        runCatching { server?.closeService() }.onFailure { Log.w(TAG, "closeService", it) }
         runCatching { server?.close() }.onFailure { Log.w(TAG, "close", it) }
         server = null
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -529,22 +532,45 @@ class SingBoxVpnService : VpnService() {
         getSystemService(NotificationManager::class.java).notify(notificationId, notification(message))
     }
 
+    private fun beginStop(startId: Int? = null) {
+        if (stopping) return
+        stopping = true
+        val deadline = Runnable {
+            if (currentInstance !== this) return@Runnable
+            sendEvent(EVENT_STOPPED, "مهلت توقف موتور تمام شد؛ فرایند جداگانه sing-box بسته شد")
+            // Only this service uses the dedicated :singbox process. Closing the process
+            // releases libbox's duplicated TUN descriptor if native cleanup is stuck.
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }
+        mainHandler.postDelayed(deadline, 4_000L)
+        closeTunnel()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        enqueueLifecycle {
+            stopEngine()
+            mainHandler.post {
+                if (currentInstance !== this) return@post
+                mainHandler.removeCallbacks(deadline)
+                sendEvent(EVENT_STOPPED)
+                currentInstance = null
+                if (startId != null && stopSelfResult(startId)) return@post
+                stopSelf()
+            }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = super.onBind(intent)
     override fun onRevoke() {
-        enqueueLifecycle { stopEngine(); sendEvent(EVENT_STOPPED); stopSelf() }
+        mainHandler.post { beginStop() }
         super.onRevoke()
     }
     override fun onDestroy() {
-        stopping = true
-        closeTunnel()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        if (lastEvent != EVENT_ERROR && lastEvent != EVENT_STOPPED) sendEvent(EVENT_STOPPED)
-        enqueueLifecycle { stopEngine() }
+        if (!stopping && lastEvent != EVENT_ERROR) beginStop()
         lifecycle.shutdown()
         super.onDestroy()
     }
 
     companion object {
+        private var currentInstance: SingBoxVpnService? = null
         private const val TAG = "RahYabSingBox"
         private const val KEY_LAST_EVENT = "last_event"
         private const val KEY_LAST_DETAIL = "last_detail"
