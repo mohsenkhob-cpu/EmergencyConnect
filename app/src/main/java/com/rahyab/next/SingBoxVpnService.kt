@@ -296,7 +296,7 @@ class SingBoxVpnService : VpnService() {
             }
         } as CommandClientHandler
         runCatching {
-            val client = Libbox.newCommandClient(handler, options)
+            val client = CommandClient(handler, options)
             try {
                 client.connect()
                 trafficClient = client
