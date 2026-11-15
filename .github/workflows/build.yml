@@ -166,7 +166,7 @@ jobs:
           gradle --no-daemon :app:signingReport | tee signing-report.txt
           echo "Signing report saved for diagnosis."
       - name: Build debug APK
-        run: gradle --no-daemon -PciVersionCode=1 testDebugUnitTest assembleDebug
+        run: gradle --no-daemon -PciVersionCode=2 testDebugUnitTest assembleDebug
       - name: Verify APK signature, package, ABI, alignment and checksum
         run: |
           set -euo pipefail
@@ -205,8 +205,8 @@ jobs:
       - name: Publish public download release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: filter-mohsen-1.0.0-${{ github.run_id }}
-          name: Filter Mohsen 1.0.0
+          tag_name: filter-mohsen-1.0.1-${{ github.run_id }}
+          name: Filter Mohsen 1.0.1
           prerelease: true
           generate_release_notes: false
           body: |

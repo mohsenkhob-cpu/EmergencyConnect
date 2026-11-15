@@ -39,7 +39,6 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_CONFIG = 4101;
-    private static final int REQUEST_VPN_PERMISSION = 4102;
     private static final int REQUEST_SINGBOX_PROFILE = 4103;
     private static final int REQUEST_SINGBOX_VPN_PERMISSION = 4104;
     private static final int REQUEST_OPENVPN_VPN_PERMISSION = 4105;
@@ -55,7 +54,9 @@ public class MainActivity extends Activity {
     private Button smartWireGuardButton;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private GoBackend wireGuardBackend;
-    private Config pendingWireGuardConfig;
+    private final Object wireGuardStateLock = new Object();
+    private final ExecutorService wireGuardStopWorker = Executors.newSingleThreadExecutor();
+    private boolean wireGuardStopPending;
     private String pendingSingBoxJson;
     private static final int REQUEST_OPENVPN_FILE = 4108;
     private ArrayList<String> pendingOpenVpnProfiles;
@@ -138,18 +139,7 @@ public class MainActivity extends Activity {
 
     private final Tunnel wireGuardTunnel = new Tunnel() {
         @Override public String getName() { return "RahYab-WireGuard"; }
-        @Override public void onStateChange(State state) {
-            runOnUiThread(() -> {
-                if (smartBusy) return;
-                if (state == State.UP) {
-                    disconnectButton.setEnabled(true);
-                    verifyTunnel("WireGuard");
-                } else {
-                    setStatus("تونل WireGuard خاموش شد");
-                    disconnectButton.setEnabled(false);
-                }
-            });
-        }
+        @Override public void onStateChange(State state) { }
     };
 
     private int dp(float value) {
@@ -782,7 +772,7 @@ public class MainActivity extends Activity {
     }
 
     private void startQuickConnection() {
-        if (quickConnect || smartBusy || hasActiveAndroidVpn()) return;
+        if (quickConnect || smartBusy || wireGuardStopPending || hasActiveAndroidVpn()) return;
         quickConnect = true;
         quickWaitingForStop = false;
         remainingEngines.clear();
@@ -822,7 +812,7 @@ public class MainActivity extends Activity {
         boolean activeVpn = hasActiveAndroidVpn();
         long now = android.os.SystemClock.elapsedRealtime();
         if (quickWaitingForStop) {
-            if (!activeVpn && now >= quickAttemptDeadline) {
+            if (!activeVpn && !wireGuardStopPending && now >= quickAttemptDeadline) {
                 quickWaitingForStop = false;
                 tryNextQuickEngine();
             } else if (now >= quickAttemptDeadline + 5_000L) {
@@ -1046,7 +1036,14 @@ public class MainActivity extends Activity {
         });
     }
 
+    private boolean canImportWireGuard() {
+        if (!smartBusy && !quickConnect && !wireGuardStopPending && !hasActiveAndroidVpn()) return true;
+        Toast.makeText(this, "برای آزمون فایل، اول اتصال فعلی را قطع کن", Toast.LENGTH_SHORT).show();
+        return false;
+    }
+
     private void chooseWireGuardFile() {
+        if (!canImportWireGuard()) return;
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
@@ -1093,6 +1090,7 @@ public class MainActivity extends Activity {
         }
         if (resultCode != RESULT_OK) return;
         if (requestCode == REQUEST_SMART_WIREGUARD && data != null) {
+            if (!canImportWireGuard()) return;
             smartWireGuardProfiles.clear();
             android.content.ClipData selected = data.getClipData();
             int count = selected == null ? 1 : Math.min(selected.getItemCount(), 6);
@@ -1107,10 +1105,6 @@ public class MainActivity extends Activity {
             }
             if (smartWireGuardProfiles.isEmpty()) setStatus("هیچ فایل WireGuard معتبری انتخاب نشد");
             else requestSmartWireGuard();
-            return;
-        }
-        if (requestCode == REQUEST_VPN_PERMISSION) {
-            startWireGuard();
             return;
         }
         if (requestCode == REQUEST_SINGBOX_VPN_PERMISSION) {
@@ -1186,29 +1180,15 @@ public class MainActivity extends Activity {
             }
         } else if (requestCode == REQUEST_CONFIG) {
             Uri uri = data.getData();
-            if (uri == null) return;
-            try {
-                // Some document providers grant temporary read access but do not support
-                // persistable permissions. The profile is parsed immediately, so persistence
-                // is optional and must not prevent importing the file.
-                try {
-                    getContentResolver().takePersistableUriPermission(uri,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                } catch (SecurityException ignored) {
-                    // Continue with the temporary permission returned by ACTION_OPEN_DOCUMENT.
-                }
-                try (InputStream in = getContentResolver().openInputStream(uri)) {
-                    if (in == null) throw new IllegalStateException("فایل قابل خواندن نیست");
-                    pendingWireGuardConfig = Config.parse(in);
-                }
-                Intent permission = VpnService.prepare(this);
-                if (permission != null) {
-                    startActivityForResult(permission, REQUEST_VPN_PERMISSION);
-                } else {
-                    startWireGuard();
-                }
-            } catch (Exception e) {
-                setStatus("خطا در خواندن فایل WireGuard: " + safeMessage(e));
+            if (uri == null || !canImportWireGuard()) return;
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                if (input == null) throw new IllegalStateException("فایل قابل خواندن نیست");
+                Config profile = Config.parse(input);
+                smartWireGuardProfiles.clear();
+                smartWireGuardProfiles.add(profile);
+                requestSmartWireGuard();
+            } catch (Exception error) {
+                setStatus("خواندن فایل WireGuard ناموفق بود: " + error.getClass().getSimpleName());
             }
         }
     }
@@ -1407,7 +1387,7 @@ public class MainActivity extends Activity {
         int attempt = smartAttempt;
         worker.execute(() -> {
             try {
-                wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
+                stopWireGuardTunnel();
                 PublicProxyProvider.Result result = PublicProxyProvider.fetch(
                         url -> url.openConnection(java.net.Proxy.NO_PROXY),
                         () -> attempt != smartAttempt);
@@ -1471,7 +1451,7 @@ public class MainActivity extends Activity {
         int attempt = smartAttempt;
         worker.execute(() -> {
             ArrayList<Config> downloaded = new ArrayList<>();
-            try { wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null); }
+            try { stopWireGuardTunnel(); }
             catch (Exception ignored) { }
             int checked = 0;
             for (String line : sources.split("\\R")) {
@@ -1552,12 +1532,16 @@ public class MainActivity extends Activity {
                 Config profile = profiles.get(i);
                 if (attempt != smartAttempt) break;
                 try {
-                    wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
-                    if (wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.UP, profile) != Tunnel.State.UP) {
-                        results.append(i + 1).append(" — تونل شروع نشد\n");
-                        continue;
+                    stopWireGuardTunnel();
+                    synchronized (wireGuardStateLock) {
+                        if (attempt != smartAttempt) break;
+                        if (wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.UP, profile) != Tunnel.State.UP) {
+                            results.append(i + 1).append(" — تونل شروع نشد\n");
+                            continue;
+                        }
                     }
                     TunnelVerifier.Result result = TunnelVerifier.verify(this);
+                    if (attempt != smartAttempt) break;
                     results.append(i + 1).append(" — ").append(result.verified
                             ? "HTTPS تأیید شد"
                             : wireGuardHandshakeStatus() + "؛ " + result.message).append('\n');
@@ -1570,7 +1554,7 @@ public class MainActivity extends Activity {
                 }
             }
             if (!verified || attempt != smartAttempt) {
-                try { wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null); }
+                try { stopWireGuardTunnel(); }
                 catch (Exception ignored) { }
             }
             final boolean connected = verified;
@@ -1585,43 +1569,10 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void startWireGuard() {
-        if (pendingWireGuardConfig == null) return;
-        getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "WireGuard").apply();
-        setStatus("در حال راه‌اندازی تونل WireGuard…");
-        connectButton.setEnabled(false);
-        worker.execute(() -> {
-            try {
-                Tunnel.State actualState = wireGuardBackend.setState(
-                        wireGuardTunnel, Tunnel.State.UP, pendingWireGuardConfig);
-                if (actualState != Tunnel.State.UP) {
-                    throw new IllegalStateException("موتور WireGuard تونل را روشن اعلام نکرد");
-                }
-                runOnUiThread(() -> {
-                    setStatus("تونل WireGuard روشن است؛ عبور واقعی اینترنت هنوز تأیید نشده است");
-                    disconnectButton.setEnabled(true);
-                    connectButton.setEnabled(true);
-                });
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    setStatus("اتصال ناموفق: " + safeMessage(e));
-                    connectButton.setEnabled(true);
-                });
-            }
-        });
-    }
-
-    private void disconnectWireGuard() {
-        setStatus("در حال قطع اتصال…");
-        SingBoxVpnService.stop(getApplicationContext());
-        worker.execute(() -> {
-            try {
-                wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
-                runOnUiThread(() -> disconnectButton.setEnabled(false));
-            } catch (Exception e) {
-                runOnUiThread(() -> setStatus("خطا در قطع اتصال: " + safeMessage(e)));
-            }
-        });
+    private void stopWireGuardTunnel() throws Exception {
+        synchronized (wireGuardStateLock) {
+            wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
+        }
     }
 
     /**
@@ -1779,7 +1730,7 @@ public class MainActivity extends Activity {
         SingBoxVpnService.stop(getApplicationContext());
         worker.execute(() -> {
             try {
-                wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
+                stopWireGuardTunnel();
             } catch (Exception ignored) { }
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
@@ -1912,6 +1863,9 @@ public class MainActivity extends Activity {
 
     private void disconnectAllEngines() {
         quickConnect = false;
+        if (wireGuardStopPending) return;
+        wireGuardStopPending = true;
+        disconnectButton.setEnabled(false);
         String selectedEngine = getPreferences(MODE_PRIVATE).getString("selected_engine", "");
         final int stopAttempt = ++smartAttempt;
         getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
@@ -1937,13 +1891,17 @@ public class MainActivity extends Activity {
             stop.setAction(RahYabVpnService.ACTION_STOP);
             try { startService(stop); } catch (RuntimeException ignored) { }
         }
-        worker.execute(() -> {
-            try { wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null); }
-            catch (Exception ignored) { }
-            runOnUiThread(() -> {
-                if (stopAttempt != smartAttempt || isDestroyed()) return;
-                refreshServiceStatusFromPreferences();
-            });
+        wireGuardStopWorker.execute(() -> {
+            try {
+                stopWireGuardTunnel();
+            } catch (Exception error) {
+                runOnUiThread(() -> appendAppDiagnostic("توقف WireGuard", error.getClass().getSimpleName()));
+            } finally {
+                runOnUiThread(() -> {
+                    wireGuardStopPending = false;
+                    if (stopAttempt == smartAttempt && !isDestroyed()) refreshServiceStatusFromPreferences();
+                });
+            }
         });
     }
 
@@ -2073,11 +2031,12 @@ public class MainActivity extends Activity {
             connectionOrb.setBackground(shape(Color.rgb(190, 137, 35), 100));
         }
         boolean active = connected || searching || smartBusy || vpnPresent || quickConnect;
-        if (sstpButton != null) sstpButton.setEnabled(!active);
-        if (smartSingBoxButton != null) smartSingBoxButton.setEnabled(!active);
-        if (smartWireGuardButton != null) smartWireGuardButton.setEnabled(!active);
-        if (disconnectButton != null) disconnectButton.setEnabled(active);
-        if (discoveryButton != null) discoveryButton.setEnabled(!active);
+        if (connectButton != null) connectButton.setEnabled(!active && !wireGuardStopPending);
+        if (sstpButton != null) sstpButton.setEnabled(!active && !wireGuardStopPending);
+        if (smartSingBoxButton != null) smartSingBoxButton.setEnabled(!active && !wireGuardStopPending);
+        if (smartWireGuardButton != null) smartWireGuardButton.setEnabled(!active && !wireGuardStopPending);
+        if (disconnectButton != null) disconnectButton.setEnabled(active && !wireGuardStopPending);
+        if (discoveryButton != null) discoveryButton.setEnabled(!active && !wireGuardStopPending);
     }
 
     /**
@@ -2152,6 +2111,7 @@ public class MainActivity extends Activity {
             statusPreferences.unregisterOnSharedPreferenceChangeListener(statusPreferenceListener);
         }
         worker.shutdown();
+        wireGuardStopWorker.shutdown();
         super.onDestroy();
     }
 }
