@@ -9,6 +9,7 @@ import kittoku.osc.unit.ppp.PPP_PROTOCOL_IP
 import kittoku.osc.unit.ppp.PPP_PROTOCOL_IPv6
 import kittoku.osc.unit.sstp.SSTP_PACKET_TYPE_DATA
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -60,15 +61,13 @@ internal class OutgoingManager(private val bridge: SharedBridge) {
             var isBlockingAlpha = true
 
             while (isActive) {
-                isBlockingAlpha = if (isBlockingAlpha) {
-                    bridge.ipTerminal!!.readPacket(bufferAlpha)
-                    channel.send(bufferAlpha)
-                    false
-                } else {
-                    bridge.ipTerminal!!.readPacket(bufferBeta)
-                    channel.send(bufferBeta)
-                    true
+                val buffer = if (isBlockingAlpha) bufferAlpha else bufferBeta
+                if (!bridge.ipTerminal!!.readPacket(buffer)) {
+                    delay(10)
+                    continue
                 }
+                channel.send(buffer)
+                isBlockingAlpha = !isBlockingAlpha
             }
         }
     }

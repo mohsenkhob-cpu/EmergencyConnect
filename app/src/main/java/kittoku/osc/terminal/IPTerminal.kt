@@ -10,8 +10,9 @@ import kittoku.osc.preference.LIST_TYPE_ALLOWED
 import kittoku.osc.preference.OscPrefKey
 import kittoku.osc.preference.accessor.getBooleanPrefValue
 import kittoku.osc.preference.accessor.getStringPrefValue
-import java.io.FileInputStream
-import java.io.FileOutputStream
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import java.net.InetAddress
 import java.nio.ByteBuffer
 
@@ -19,8 +20,7 @@ import java.nio.ByteBuffer
 internal class IPTerminal(private val bridge: SharedBridge) {
     private var fd: ParcelFileDescriptor? = null
 
-    private var inputStream: FileInputStream? = null
-    private var outputStream: FileOutputStream? = null
+    private var closed = false
 
     private val doEnableAppBasedRule = getBooleanPrefValue(OscPrefKey.ROUTE_DO_ENABLE_APP_BASED_RULE, bridge.prefs)
     private val isAllowedList = getStringPrefValue(OscPrefKey.ROUTE_APP_LIST_TYPE, bridge.prefs) == LIST_TYPE_ALLOWED
@@ -74,12 +74,8 @@ internal class IPTerminal(private val bridge: SharedBridge) {
         }
 
         bridge.builder.setMtu(bridge.PPP_MTU)
-        bridge.builder.setBlocking(true)
-
-        fd = bridge.builder.establish()!!.also {
-            inputStream = FileInputStream(it.fileDescriptor)
-            outputStream = FileOutputStream(it.fileDescriptor)
-        }
+        bridge.builder.setBlocking(false)
+        establish()
 
         bridge.controlMailbox.send(ControlMessage(Where.IP, Result.PROCEEDED))
     }
@@ -132,19 +128,44 @@ internal class IPTerminal(private val bridge: SharedBridge) {
         return true
     }
 
+    @Synchronized
+    private fun establish() {
+        check(!closed)
+        fd = bridge.builder.establish() ?: error("Android could not establish the SSTP tunnel")
+    }
+
+    @Synchronized
     internal fun writePacket(start: Int, size: Int, buffer: ByteBuffer) {
-        // nothing will be written until initialized
-        // the position won't be changed
-        outputStream?.write(buffer.array(), start, size)
+        val descriptor = fd?.fileDescriptor ?: return
+        try {
+            val written = Os.write(descriptor, buffer.array(), start, size)
+            bridge.service.countReceived(bridge.token, written)
+        } catch (error: ErrnoException) {
+            if (error.errno != OsConstants.EAGAIN) throw error
+        }
     }
 
-    internal fun readPacket(buffer: ByteBuffer) {
+    @Synchronized
+    internal fun readPacket(buffer: ByteBuffer): Boolean {
+        val descriptor = fd?.fileDescriptor ?: return false
+        val count = try {
+            Os.read(descriptor, buffer.array(), 0, bridge.PPP_MTU)
+        } catch (error: ErrnoException) {
+            if (error.errno != OsConstants.EAGAIN) throw error
+            return false
+        }
+        if (count <= 0) return false
         buffer.clear()
-        buffer.position(inputStream?.read(buffer.array(), 0, bridge.PPP_MTU) ?: buffer.position())
-        buffer.flip()
+        buffer.limit(count)
+        bridge.service.countSent(bridge.token, count)
+        return true
     }
 
+    @Synchronized
     internal fun close() {
-        fd?.close()
+        closed = true
+        val descriptor = fd
+        fd = null
+        descriptor?.close()
     }
 }

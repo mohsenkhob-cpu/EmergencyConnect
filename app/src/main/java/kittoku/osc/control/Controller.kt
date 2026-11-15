@@ -72,11 +72,9 @@ internal class Controller(internal val bridge: SharedBridge) {
     internal fun launchJobMain() {
         attachHandler()
 
+        bridge.attachSSLTerminal()
+        bridge.attachIPTerminal()
         jobMain = bridge.service.scope.launch(bridge.handler) {
-            bridge.attachSSLTerminal()
-            bridge.attachIPTerminal()
-
-
             bridge.sslTerminal!!.initialize()
             if (!expectProceeded(Where.SSL, SSL_REQUEST_INTERVAL)) {
                 return@launch
@@ -260,16 +258,17 @@ internal class Controller(internal val bridge: SharedBridge) {
         if (!mutex.tryLock()) return
 
         bridge.service.scope.launch {
-            observer?.close()
+            runCatching { observer?.close() }
 
             jobMain?.cancel()
             cancelClients()
 
-            cleanup?.invoke()
-
-            closeTerminals()
-
-            bridge.service.close(bridge.token)
+            try {
+                cleanup?.invoke()
+            } finally {
+                closeTerminals()
+                bridge.service.close(bridge.token)
+            }
         }
     }
 
@@ -287,7 +286,12 @@ internal class Controller(internal val bridge: SharedBridge) {
     }
 
     internal fun closeTerminals() {
-        runCatching { bridge.sslTerminal?.close() }
         runCatching { bridge.ipTerminal?.close() }
+        runCatching { bridge.sslTerminal?.close() }
+    }
+
+    internal fun shutdown() {
+        closeTerminals()
+        runCatching { observer?.close() }
     }
 }

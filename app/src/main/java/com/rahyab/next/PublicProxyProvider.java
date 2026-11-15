@@ -181,6 +181,19 @@ public final class PublicProxyProvider {
         return root.toString();
     }
 
+    static ArrayList<String> buildBatches(String profile) throws Exception {
+        JSONArray outbounds = new JSONObject(profile).getJSONArray("outbounds");
+        ArrayList<String> batches = new ArrayList<>();
+        for (int first = 1; first < outbounds.length(); first += 8) {
+            JSONArray nodes = new JSONArray();
+            for (int i = first; i < Math.min(first + 8, outbounds.length()); i++) {
+                nodes.put(outbounds.getJSONObject(i));
+            }
+            batches.add(withResolver(buildProfile(nodes), batches.size()));
+        }
+        return batches;
+    }
+
     static String buildProfile(JSONArray nodes) throws Exception {
         JSONArray tags = new JSONArray();
         for (int i = 0; i < nodes.length(); i++) tags.put(nodes.getJSONObject(i).getString("tag"));

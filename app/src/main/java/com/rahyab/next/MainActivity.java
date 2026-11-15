@@ -67,6 +67,10 @@ public class MainActivity extends Activity {
     private TextView liveTunnelSpeed;
     private long[] previousTunnelBytes;
     private long previousTunnelSampleAt;
+    private String previousSpeedEngine;
+    private final ArrayList<String> smartSingBoxBatches = new ArrayList<>();
+    private int smartSingBoxBatch;
+    private long lastSingBoxVerificationEvent;
     private android.widget.ProgressBar connectionSpinner;
     private Button connectButton;
     private Button disconnectButton;
@@ -111,7 +115,7 @@ public class MainActivity extends Activity {
                 // sing-box may be stopped intentionally while another VPN engine starts.
                 // Do not overwrite the shared VPN status or disable its disconnect control here.
             } else if ("ERROR".equals(event)) {
-                if (smartBusy) completeSmartAttempt("راه‌اندازی sing-box ناموفق بود", false);
+                if (smartBusy) advanceSmartSingBox("راه‌اندازی موتور ناموفق بود");
                 else setStatus("خطای sing-box: " + (detail == null ? "نامشخص" : detail));
                 singBoxConnectButton.setEnabled(true);
                 disconnectButton.setEnabled(false);
@@ -571,7 +575,8 @@ public class MainActivity extends Activity {
         orbFrame.addView(connectionSpinner, new android.widget.FrameLayout.LayoutParams(
                 -1, -1, Gravity.CENTER));
 
-        liveTunnelSpeed = label("سرعت لحظه‌ای OpenVPN —", 14, Color.WHITE, false);
+        liveTunnelSpeed = label("", 14, Color.WHITE, false);
+        liveTunnelSpeed.setVisibility(View.GONE);
         page.addView(liveTunnelSpeed);
 
         TextView helper = label("یافتن خودکار سرورهای عمومی رایگان؛ کیفیت و حریم خصوصی آن‌ها تضمین‌شده نیست", 14,
@@ -833,6 +838,10 @@ public class MainActivity extends Activity {
         int verificationAttempt = smartAttempt;
         long eventTime = "sing-box".equals(engineName)
                 ? SingBoxVpnService.readStatus(this).getLong("last_event_time", 0L) : 0L;
+        if ("sing-box".equals(engineName) && eventTime > 0) {
+            if (eventTime == lastSingBoxVerificationEvent) return;
+            lastSingBoxVerificationEvent = eventTime;
+        }
         setStatus("تونل " + engineName + " آماده شد؛ در حال بررسی عبور واقعی اینترنت…");
         try {
             worker.execute(() -> {
@@ -855,18 +864,16 @@ public class MainActivity extends Activity {
                     if (smartVerification) {
                         if (verificationAttempt != smartAttempt || !smartBusy) return;
                         boolean verified = !engineExited && result.verified;
-                        if (!verified) {
-                            SingBoxVpnService.requestDisconnect(this);
-                        }
-                        completeSmartAttempt(verified ? "عبور اینترنت با sing-box تأیید شد"
-                                : "عبور اینترنت با sing-box تأیید نشد: " + result.message, verified);
+                        if (verified) completeSmartAttempt("عبور اینترنت با sing-box تأیید شد", true);
+                        else advanceSmartSingBox(result.message);
                         return;
                     }
                     if (engineExited) {
                         setStatus("فرایند sing-box متوقف شد؛ گزارش عیب‌یابی را بررسی کنید");
                         disconnectButton.setEnabled(false);
                     } else if (result.verified) {
-                        setStatus("اتصال " + engineName + " تأیید شد • IP خروجی: " + result.exitIp);
+                        publishDiscoveryStatus("اتصال " + engineName + " تأیید شد • IP خروجی: "
+                                + result.exitIp, "connected");
                     } else {
                         setStatus("اتصال " + engineName + " هنوز تأیید نشده: " + result.message);
                     }
@@ -960,7 +967,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (requestCode == REQUEST_SMART_WIREGUARD_PERMISSION) {
-            if (resultCode == RESULT_OK) connectSmartWireGuard();
+            if (resultCode == RESULT_OK && smartBusy) connectSmartWireGuard();
             else if (smartBusy) completeSmartAttempt("مجوز اتصال WireGuard صادر نشد", false);
             return;
         }
@@ -1264,6 +1271,7 @@ public class MainActivity extends Activity {
         smartBusy = true;
         ++smartAttempt;
         stopService(new Intent(this, RahYabVpnService.class));
+        stopService(new Intent(this, kittoku.osc.service.SstpVpnService.class));
         SingBoxVpnService.stop(this);
         publishDiscoveryStatus(message, "searching");
     }
@@ -1282,12 +1290,14 @@ public class MainActivity extends Activity {
                 wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
                 PublicProxyProvider.Result result = PublicProxyProvider.fetch(
                         url -> url.openConnection(java.net.Proxy.NO_PROXY),
-                        () -> Thread.currentThread().isInterrupted());
+                        () -> attempt != smartAttempt);
+                ArrayList<String> batches = PublicProxyProvider.buildBatches(result.profile);
                 runOnUiThread(() -> {
                     if (attempt != smartAttempt || isDestroyed()) return;
-                    pendingSingBoxJson = result.profile;
-                    publishDiscoveryStatus(result.count + " سرور sing-box آماده آزمون شدند", "searching");
-                    requestSingBoxConnection();
+                    smartSingBoxBatches.clear();
+                    smartSingBoxBatches.addAll(batches);
+                    smartSingBoxBatch = 0;
+                    launchSingBoxBatch();
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
@@ -1296,6 +1306,22 @@ public class MainActivity extends Activity {
                 });
             }
         });
+    }
+
+    private void launchSingBoxBatch() {
+        pendingSingBoxJson = smartSingBoxBatches.get(smartSingBoxBatch);
+        publishDiscoveryStatus("آزمون گروه " + (smartSingBoxBatch + 1) + " از "
+                + smartSingBoxBatches.size() + " sing-box", "searching");
+        requestSingBoxConnection();
+    }
+
+    private void advanceSmartSingBox(String failure) {
+        if (++smartSingBoxBatch < smartSingBoxBatches.size()) {
+            launchSingBoxBatch();
+        } else {
+            SingBoxVpnService.stop(this);
+            completeSmartAttempt("عبور اینترنت با sing-box تأیید نشد: " + failure, false);
+        }
     }
 
     private void showWireGuardSources() {
@@ -1323,6 +1349,8 @@ public class MainActivity extends Activity {
         int attempt = smartAttempt;
         worker.execute(() -> {
             ArrayList<Config> downloaded = new ArrayList<>();
+            try { wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null); }
+            catch (Exception ignored) { }
             int checked = 0;
             for (String line : sources.split("\\R")) {
                 if (attempt != smartAttempt || checked == 6) break;
@@ -1337,13 +1365,15 @@ public class MainActivity extends Activity {
             }
             runOnUiThread(() -> {
                 if (attempt != smartAttempt || isDestroyed() || isFinishing()) return;
-                smartWireGuardProfiles.clear();
-                smartWireGuardProfiles.addAll(downloaded);
-                if (downloaded.isEmpty()) {
-                    completeSmartAttempt("هیچ پروفایل معتبری از لینک‌های WireGuard دریافت نشد", false);
-                    return;
+                if (!downloaded.isEmpty()) {
+                    smartWireGuardProfiles.clear();
+                    smartWireGuardProfiles.addAll(downloaded);
                 }
-                requestSmartWireGuard();
+                if (smartWireGuardProfiles.isEmpty()) {
+                    completeSmartAttempt("هیچ پروفایل معتبری از لینک‌های WireGuard دریافت نشد", false);
+                } else {
+                    requestSmartWireGuard();
+                }
             });
         });
     }
@@ -1381,6 +1411,7 @@ public class MainActivity extends Activity {
 
     private void requestSmartWireGuard() {
         Intent permission = VpnService.prepare(this);
+        if (!smartBusy) beginSmartAttempt("در حال آماده‌سازی WireGuard…");
         if (permission != null) startActivityForResult(permission, REQUEST_SMART_WIREGUARD_PERMISSION);
         else connectSmartWireGuard();
     }
@@ -1388,12 +1419,12 @@ public class MainActivity extends Activity {
     private void connectSmartWireGuard() {
         if (smartWireGuardProfiles.isEmpty()) return;
         recordAttemptNetwork("wireguard");
+        getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "WireGuard").apply();
         beginSmartAttempt("در حال آزمون پروفایل‌های WireGuard…");
         int attempt = smartAttempt;
         ArrayList<Config> profiles = new ArrayList<>(smartWireGuardProfiles);
         worker.execute(() -> {
-            Config best = null;
-            long fastest = Long.MAX_VALUE;
+            boolean verified = false;
             StringBuilder results = new StringBuilder();
             for (int i = 0; i < profiles.size(); i++) {
                 Config profile = profiles.get(i);
@@ -1404,34 +1435,23 @@ public class MainActivity extends Activity {
                         results.append(i + 1).append(" — تونل شروع نشد\n");
                         continue;
                     }
-                    long start = android.os.SystemClock.elapsedRealtime();
                     TunnelVerifier.Result result = TunnelVerifier.verify(this);
                     results.append(i + 1).append(" — ").append(result.verified
                             ? "HTTPS تأیید شد"
                             : result.message.contains("UnknownHostException") ? "خطای DNS"
                             : result.message.contains("مسیر VPN") ? "مسیر VPN در اندروید فعال نشد"
                             : "آزمون HTTPS ناموفق").append('\n');
-                    long duration = android.os.SystemClock.elapsedRealtime() - start;
-                    if (result.verified && duration < fastest) {
-                        best = profile;
-                        fastest = duration;
+                    if (result.verified) {
+                        verified = true;
+                        break;
                     }
                 } catch (Exception error) {
                     results.append(i + 1).append(" — ").append(error.getClass().getSimpleName()).append('\n');
                 }
             }
-            boolean verified = false;
-            try {
-                wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
-                if (best != null && attempt == smartAttempt) {
-                    wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.UP, best);
-                    verified = TunnelVerifier.verify(this).verified;
-                }
-                if (!verified || attempt != smartAttempt)
-                    wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null);
-            } catch (Exception ignored) {
+            if (!verified || attempt != smartAttempt) {
                 try { wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null); }
-                catch (Exception ignoredStop) { }
+                catch (Exception ignored) { }
             }
             final boolean connected = verified;
             runOnUiThread(() -> {
@@ -1447,6 +1467,7 @@ public class MainActivity extends Activity {
 
     private void startWireGuard() {
         if (pendingWireGuardConfig == null) return;
+        getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "WireGuard").apply();
         setStatus("در حال راه‌اندازی تونل WireGuard…");
         connectButton.setEnabled(false);
         worker.execute(() -> {
@@ -1770,7 +1791,8 @@ public class MainActivity extends Activity {
 
     private void disconnectAllEngines() {
         String selectedEngine = getPreferences(MODE_PRIVATE).getString("selected_engine", "");
-        ++smartAttempt;
+        final int stopAttempt = ++smartAttempt;
+        getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
         pendingOpenVpnProfiles = null;
         pendingSstpHosts = null;
         smartBusy = false;
@@ -1779,12 +1801,15 @@ public class MainActivity extends Activity {
         getSharedPreferences("rah_yab_pending_start", MODE_PRIVATE).edit()
                 .clear().commit();
         setStatus("در حال قطع همه موتورهای VPN…");
+        Intent stopSstp = new Intent(this, kittoku.osc.service.SstpVpnService.class);
         if ("SSTP".equals(selectedEngine)) {
-            stopService(new Intent(this, kittoku.osc.service.SstpVpnService.class));
-        } else if ("sing-box".equals(selectedEngine)) {
-            SingBoxVpnService.requestDisconnect(getApplicationContext());
+            try { startService(stopSstp.setAction("sstp.stop")); }
+            catch (RuntimeException ignored) { stopService(stopSstp); }
         } else {
-            SingBoxVpnService.stop(getApplicationContext());
+            stopService(stopSstp);
+        }
+        SingBoxVpnService.stop(getApplicationContext());
+        if ("OpenVPN".equals(selectedEngine)) {
             Intent stop = new Intent(this, RahYabVpnService.class);
             stop.setAction(RahYabVpnService.ACTION_STOP);
             try { startService(stop); } catch (RuntimeException ignored) { }
@@ -1793,9 +1818,8 @@ public class MainActivity extends Activity {
             try { wireGuardBackend.setState(wireGuardTunnel, Tunnel.State.DOWN, null); }
             catch (Exception ignored) { }
             runOnUiThread(() -> {
-                disconnectButton.setEnabled(false);
-                discoveryButton.setEnabled(true);
-                setStatus("درخواست قطع اتصال به همه موتورها ارسال شد");
+                if (stopAttempt != smartAttempt || isDestroyed()) return;
+                refreshServiceStatusFromPreferences();
             });
         });
     }
@@ -1817,7 +1841,25 @@ public class MainActivity extends Activity {
     }
 
     private void sampleLiveTunnelSpeed() {
-        long[] current = ir.emergencyconnect.engine.OpenVpn3Bridge.tunnelBytes();
+        String engine = getPreferences(MODE_PRIVATE).getString("selected_engine", "");
+        boolean connected = statusPreferences != null && "connected".equals(
+                statusPreferences.getString("connection_lamp_state", "")) && hasActiveAndroidVpn();
+        if (!connected) {
+            liveTunnelSpeed.setVisibility(View.GONE);
+            previousTunnelBytes = null;
+            previousSpeedEngine = null;
+            return;
+        }
+        liveTunnelSpeed.setVisibility(View.VISIBLE);
+        if (!engine.equals(previousSpeedEngine)) previousTunnelBytes = null;
+        previousSpeedEngine = engine;
+        long[] current = switch (engine) {
+            case "SSTP" -> kittoku.osc.service.SstpVpnService.tunnelBytes();
+            case "WireGuard" -> wireGuardTunnelBytes();
+            case "sing-box" -> SingBoxVpnService.tunnelBytes(this);
+            case "OpenVPN" -> ir.emergencyconnect.engine.OpenVpn3Bridge.tunnelBytes();
+            default -> null;
+        };
         long now = android.os.SystemClock.elapsedRealtime();
         long elapsed = now - previousTunnelSampleAt;
         if (current != null && previousTunnelBytes != null && elapsed > 0
@@ -1828,10 +1870,20 @@ public class MainActivity extends Activity {
                     + Math.round((current[1] - previousTunnelBytes[1]) * 8.0 / elapsed)
                     + " kbps");
         } else {
-            liveTunnelSpeed.setText("سرعت لحظه‌ای OpenVPN —");
+            liveTunnelSpeed.setText("سرعت لحظه‌ای —");
         }
         previousTunnelBytes = current;
         previousTunnelSampleAt = now;
+    }
+
+    private long[] wireGuardTunnelBytes() {
+        try {
+            com.wireguard.android.backend.Statistics statistics =
+                    wireGuardBackend.getStatistics(wireGuardTunnel);
+            return new long[] { statistics.totalRx(), statistics.totalTx() };
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private void refreshServiceStatusFromPreferences() {

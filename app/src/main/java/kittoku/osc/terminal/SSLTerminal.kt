@@ -51,6 +51,7 @@ internal class SSLTerminal(private val bridge: SharedBridge) {
     private val mutex = Mutex()
 
     private var socket: Socket? = null
+    private var closed = false
     private lateinit var socketInputStream: InputStream
     private lateinit var socketOutputStream: OutputStream
     private lateinit var inboundBuffer: ByteBuffer
@@ -103,8 +104,7 @@ internal class SSLTerminal(private val bridge: SharedBridge) {
         val socketHostname = if (doUseProxy) getStringPrefValue(OscPrefKey.PROXY_HOSTNAME, bridge.prefs) else sslHostname
         val socketPort = if (doUseProxy) getIntPrefValue(OscPrefKey.PROXY_PORT, bridge.prefs) else sslPort
         bridge.service.stage(bridge.token, "باز کردن TCP")
-        val transport = Socket()
-        socket = transport
+        val transport = createSocket()
         // Android may allocate the native descriptor lazily. Bind locally
         // before protecting it, then connect only after protection succeeds.
         transport.bind(java.net.InetSocketAddress(0))
@@ -394,7 +394,15 @@ internal class SSLTerminal(private val bridge: SharedBridge) {
         }
     }
 
+    @Synchronized
+    private fun createSocket(): Socket {
+        check(!closed)
+        return Socket().also { socket = it }
+    }
+
+    @Synchronized
     internal fun close() {
+        closed = true
         jobInitialize?.cancel()
         socket?.close()
     }

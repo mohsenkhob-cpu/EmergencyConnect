@@ -18,11 +18,17 @@ class SstpVpnService : VpnService() {
     private var candidates = ArrayDeque<String>()
     @Volatile private var generation = 0
     private var active = false
+    private var verified = false
     private var currentHost = ""
     private var currentStage = ""
     private val diagnostics by lazy { getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "sstp.stop") {
+            shutdown()
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         if (intent?.action != "sstp.start" || active) {
             if (!active) stopSelf(startId)
             return START_NOT_STICKY
@@ -61,6 +67,8 @@ class SstpVpnService : VpnService() {
             return
         }
         val token = ++generation
+        verified = false
+        traffic = Traffic(token)
         currentHost = host
         currentStage = "آماده‌سازی موتور"
         getSharedPreferences("sstp_engine", MODE_PRIVATE).edit().clear()
@@ -70,9 +78,7 @@ class SstpVpnService : VpnService() {
         publish("در حال آزمایش SSTP — $host", "searching")
         controller = Controller(SharedBridge(this, token)).also { it.launchJobMain() }
         main.postDelayed({
-            if (token == generation && active &&
-                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
-                    .getString("connection_lamp_state", "") == "searching") {
+            if (token == generation && active && !verified) {
                 recordResult("مهلت آزمون تمام شد")
                 controller?.kill(false, null)
             }
@@ -86,6 +92,7 @@ class SstpVpnService : VpnService() {
             main.post {
                 if (!active || token != generation) return@post
                 if (result.verified) {
+                    verified = true
                     recordResult("عبور اینترنت تأیید شد")
                     publish("عبور اینترنت با SSTP تأیید شد", "connected")
                 } else {
@@ -124,14 +131,43 @@ class SstpVpnService : VpnService() {
         super.onRevoke()
     }
 
-    override fun onDestroy() {
-        if (active) publish("اتصال SSTP قطع شد", "disconnected")
+    private fun shutdown() {
+        val wasActive = active
         active = false
+        verified = false
         generation++
-        scope.cancel()
+        traffic = null
+        candidates.clear()
         main.removeCallbacksAndMessages(null)
-        controller?.closeTerminals()
+        scope.cancel()
+        controller?.shutdown()
+        controller = null
         stopForeground(STOP_FOREGROUND_REMOVE)
+        if (wasActive) publish("اتصال SSTP قطع شد", "disconnected")
+    }
+
+    override fun onDestroy() {
+        shutdown()
         super.onDestroy()
+    }
+
+    internal fun countReceived(token: Int, bytes: Int) {
+        traffic?.takeIf { it.token == token }?.received?.addAndGet(bytes.toLong())
+    }
+
+    internal fun countSent(token: Int, bytes: Int) {
+        traffic?.takeIf { it.token == token }?.sent?.addAndGet(bytes.toLong())
+    }
+
+    private class Traffic(val token: Int) {
+        val received = java.util.concurrent.atomic.AtomicLong()
+        val sent = java.util.concurrent.atomic.AtomicLong()
+    }
+
+    companion object {
+        @Volatile private var traffic: Traffic? = null
+
+        @JvmStatic fun tunnelBytes(): LongArray? =
+            traffic?.let { longArrayOf(it.received.get(), it.sent.get()) }
     }
 }

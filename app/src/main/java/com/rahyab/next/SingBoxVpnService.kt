@@ -7,6 +7,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -53,6 +57,8 @@ class SingBoxVpnService : VpnService() {
 
     @Volatile private var lastEvent: String? = null
     private var server: CommandServer? = null
+    private var trafficClient: CommandClient? = null
+    @Volatile private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var tunnel: ParcelFileDescriptor? = null
     @Volatile private var stopping = false
     @Volatile private var profile: String? = null
@@ -93,6 +99,7 @@ class SingBoxVpnService : VpnService() {
         }
         val requestedProfile = intent?.getStringExtra(EXTRA_PROFILE)
         if (requestedProfile.isNullOrBlank()) { stopSelf(startId); return START_NOT_STICKY }
+        stopping = false
         profile = requestedProfile
         try {
             startForeground(notificationId, notification("در حال راه‌اندازی موتور VPN…"))
@@ -131,6 +138,7 @@ class SingBoxVpnService : VpnService() {
                     created = null
                 }
                 if (stopping) return@enqueueLifecycle
+                startTrafficMonitor()
                 Log.i(TAG, "libbox accepted the profile and started/reloaded its service")
                 updateNotification("موتور VPN راه‌اندازی شد؛ وضعیت مسیر اینترنت در حال بررسی است")
                 sendEvent(EVENT_ENGINE_STARTED, transportCheck)
@@ -171,6 +179,7 @@ class SingBoxVpnService : VpnService() {
 
         val startedAt = android.os.SystemClock.elapsedRealtime()
         Socket().use { socket ->
+            socket.bind(InetSocketAddress(0))
             check(protect(socket)) { "آزمون TCP انجام نشد: اندروید سوکت آزمایشی را از VPN جدا نکرد" }
             try {
                 socket.connect(InetSocketAddress(address, port), 5000)
@@ -199,7 +208,14 @@ class SingBoxVpnService : VpnService() {
                 "findConnectionOwner" -> findConnectionOwner(
                     a[0] as Int, a[1] as String, a[2] as Int, a[3] as String, a[4] as Int
                 )
-                "startDefaultInterfaceMonitor", "closeDefaultInterfaceMonitor",
+                "startDefaultInterfaceMonitor" -> {
+                    startInterfaceMonitor(a[0] as InterfaceUpdateListener)
+                    null
+                }
+                "closeDefaultInterfaceMonitor" -> {
+                    closeInterfaceMonitor()
+                    null
+                }
                 "clearDNSCache", "startNeighborMonitor", "closeNeighborMonitor",
                 "registerMyInterface" -> null
                 "underNetworkExtension", "includeAllNetworks",
@@ -211,6 +227,100 @@ class SingBoxVpnService : VpnService() {
                 "equals" -> proxy === a.firstOrNull()
                 else -> primitiveDefault(method.returnType)
             }
+        }
+    }
+
+    private fun startInterfaceMonitor(listener: InterfaceUpdateListener) {
+        closeInterfaceMonitor()
+        val manager = getSystemService(ConnectivityManager::class.java)
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            private fun update() {
+                if (networkCallback !== this || stopping) return
+                val physical = (listOfNotNull(manager.activeNetwork) + manager.allNetworks)
+                    .distinct().mapNotNull { network ->
+                        val capabilities = manager.getNetworkCapabilities(network) ?: return@mapNotNull null
+                        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@mapNotNull null
+                        val name = manager.getLinkProperties(network)?.interfaceName ?: return@mapNotNull null
+                        val index = runCatching { JavaNetworkInterface.getByName(name)?.index }.getOrNull()
+                            ?: return@mapNotNull null
+                        Triple(name, index, capabilities)
+                    }.maxByOrNull { (_, _, capabilities) ->
+                        if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) 1 else 0
+                    }
+                if (physical == null) {
+                    listener.updateDefaultInterface("", -1, false, false)
+                } else {
+                    val (name, index, capabilities) = physical
+                    listener.updateDefaultInterface(name, index,
+                        !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED), false)
+                }
+            }
+
+            override fun onAvailable(network: Network) = update()
+            override fun onLost(network: Network) = update()
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) = update()
+            override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) = update()
+        }
+        networkCallback = callback
+        manager.registerNetworkCallback(NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build(), callback)
+    }
+
+    private fun closeInterfaceMonitor() {
+        val callback = networkCallback ?: return
+        networkCallback = null
+        runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) }
+    }
+
+    private fun startTrafficMonitor() {
+        if (trafficClient != null) return
+        val options = CommandClientOptions().apply {
+            addCommand(Libbox.CommandStatus)
+            statusInterval = 1_000_000_000L
+        }
+        val handler = Proxy.newProxyInstance(CommandClientHandler::class.java.classLoader,
+            arrayOf(CommandClientHandler::class.java)) { proxy, method, args ->
+            when (method.name) {
+                "writeStatus" -> {
+                    val status = args?.firstOrNull() as? StatusMessage
+                    if (status != null && status.trafficAvailable && !stopping) {
+                        runCatching { writeTraffic(status.downlinkTotal, status.uplinkTotal) }
+                    }
+                    null
+                }
+                "equals" -> proxy === args?.firstOrNull()
+                "hashCode" -> System.identityHashCode(proxy)
+                else -> null
+            }
+        } as CommandClientHandler
+        runCatching {
+            val client = Libbox.newCommandClient(handler, options)
+            try {
+                client.connect()
+                trafficClient = client
+            } catch (error: Exception) {
+                runCatching { client.disconnect() }
+                throw error
+            }
+        }.onFailure { Log.w(TAG, "Traffic monitor unavailable", it) }
+    }
+
+    private fun writeTraffic(received: Long, sent: Long) {
+        val file = AtomicFile(trafficPath(this))
+        val output = file.startWrite()
+        try {
+            java.io.DataOutputStream(output).apply {
+                writeLong(android.os.SystemClock.elapsedRealtime())
+                writeLong(received)
+                writeLong(sent)
+                flush()
+            }
+            file.finishWrite(output)
+        } catch (error: Exception) {
+            file.failWrite(output)
+            throw error
         }
     }
 
@@ -377,6 +487,10 @@ class SingBoxVpnService : VpnService() {
 
     private fun stopEngine() {
         closeTunnel()
+        runCatching { trafficClient?.disconnect() }
+        trafficClient = null
+        trafficPath(this).delete()
+        closeInterfaceMonitor()
         runCatching { server?.closeService() }.onFailure { Log.w(TAG, "closeService", it) }
         runCatching { server?.close() }.onFailure { Log.w(TAG, "close", it) }
         server = null
@@ -435,6 +549,16 @@ class SingBoxVpnService : VpnService() {
         private const val KEY_LAST_EVENT = "last_event"
         private const val KEY_LAST_DETAIL = "last_detail"
         private const val KEY_LAST_EVENT_TIME = "last_event_time"
+
+        private fun trafficPath(context: Context) = File(context.cacheDir, "singbox-traffic.bin")
+
+        @JvmStatic
+        fun tunnelBytes(context: Context): LongArray? = runCatching {
+            java.io.DataInputStream(trafficPath(context).inputStream()).use { stream ->
+                val age = android.os.SystemClock.elapsedRealtime() - stream.readLong()
+                if (age !in 0..3_000) null else longArrayOf(stream.readLong(), stream.readLong())
+            }
+        }.getOrNull()
 
         private fun statusPath(context: Context) = File(context.filesDir, "singbox-status.json")
 
