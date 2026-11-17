@@ -192,6 +192,7 @@ jobs:
           mkdir -p "$PROJECT/app/src/main/assets/xray-notices/golang.org/x/mobile"
           cp "$MOBILE/LICENSE" "$MOBILE/PATENTS" "$PROJECT/app/src/main/assets/xray-notices/golang.org/x/mobile/"
           gomobile init
+          (cd "$RUNNER_TEMP/xray-mobile" && go install ./cmd/gobind)
           gomobile bind -target=android/arm64 -androidapi 26 -trimpath \
             -ldflags='-checklinkname=0 -s -w -buildid= -extldflags=-Wl,-z,max-page-size=16384,--pack-dyn-relocs=android' \
             -o "$PROJECT/app/libs/libXray.aar" .

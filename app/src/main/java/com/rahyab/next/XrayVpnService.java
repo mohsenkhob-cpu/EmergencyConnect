@@ -29,6 +29,10 @@ public final class XrayVpnService extends VpnService {
     private final ExecutorService coreExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService verifier = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
+    // Xray appends process-global socket callbacks. Keep a single callback
+    // and let it refer to the current service instance after each restart.
+    private static volatile XrayVpnService socketOwner;
+    private static boolean dialerRegistered;
     private ParcelFileDescriptor tun;
     private boolean starting;
     private volatile boolean stopping;
@@ -93,17 +97,8 @@ public final class XrayVpnService extends VpnService {
         coreExecutor.execute(() -> {
             if (stopping) return;
             try {
-                LibXray.registerDialerController(value -> {
-                    boolean protectedSocket = !stopping && value >= 0 && value <= Integer.MAX_VALUE
-                            && protect((int) value);
-                    if (!protectedSocket && !stopping) {
-                        protectionFailed = true;
-                        main.post(() -> shutdown("protect_failed"));
-                    }
-                    return protectedSocket;
-                });
-                LibXray.setDNS(value -> !stopping && value >= 0 && value <= Integer.MAX_VALUE
-                        && protect((int) value), endpoint);
+                registerSocketProtection();
+                LibXray.setDNS(this::protectTransport, endpoint);
                 LibXray.startAndroidTun(config, fd);
                 main.post(() -> {
                     if (stopping || protectionFailed) return;
@@ -123,6 +118,27 @@ public final class XrayVpnService extends VpnService {
         });
     }
 
+    private void registerSocketProtection() {
+        synchronized (XrayVpnService.class) {
+            socketOwner = this;
+            if (dialerRegistered) return;
+            LibXray.registerDialerController(fd -> {
+                XrayVpnService owner = socketOwner;
+                return owner != null && owner.protectTransport(fd);
+            });
+            dialerRegistered = true;
+        }
+    }
+
+    private boolean protectTransport(long fd) {
+        boolean protectedSocket = !stopping && fd >= 0 && fd <= Integer.MAX_VALUE && protect((int) fd);
+        if (!protectedSocket && !stopping) {
+            protectionFailed = true;
+            main.post(() -> shutdown("protect_failed"));
+        }
+        return protectedSocket;
+    }
+
     private void shutdown(String reason) {
         if (stopping) return;
         stopping = true;
@@ -134,6 +150,9 @@ public final class XrayVpnService extends VpnService {
             } catch (Exception | LinkageError ignored) {
                 // Release the Android interface even if the native core failed.
             } finally {
+                synchronized (XrayVpnService.class) {
+                    if (socketOwner == this) socketOwner = null;
+                }
                 try {
                     if (tun != null) tun.close();
                 } catch (IOException ignored) {

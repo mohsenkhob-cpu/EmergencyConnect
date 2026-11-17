@@ -814,7 +814,7 @@ public class MainActivity extends Activity {
     }
 
     private void startQuickConnection() {
-        if (quickConnect || smartBusy || wireGuardStopPending || hasActiveAndroidVpn()) return;
+        if (quickConnect || smartBusy || wireGuardStopPending || xrayBusy || hasActiveAndroidVpn()) return;
         quickConnect = true;
         quickWaitingForStop = false;
         remainingEngines.clear();
@@ -1089,7 +1089,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean canImportWireGuard() {
-        if (!smartBusy && !quickConnect && !wireGuardStopPending && !hasActiveAndroidVpn()) return true;
+        if (!smartBusy && !quickConnect && !wireGuardStopPending && !xrayBusy && !hasActiveAndroidVpn()) return true;
         Toast.makeText(this, "برای آزمون فایل، اول اتصال فعلی را قطع کن", Toast.LENGTH_SHORT).show();
         return false;
     }
