@@ -183,9 +183,14 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
           export PATH="$(go env GOPATH)/bin:$PATH"
           cd "$XRAY"
-          MOBILE="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
-          go install "golang.org/x/mobile/cmd/gomobile@$MOBILE"
-          go install "golang.org/x/mobile/cmd/gobind@$MOBILE"
+          MOBILE="$(go mod download -json golang.org/x/mobile | jq -er '.Dir')"
+          cp -R "$MOBILE" "$RUNNER_TEMP/xray-mobile"
+          chmod -R u+w "$RUNNER_TEMP/xray-mobile"
+          python "$PROJECT/xray/isolate_gomobile.py" "$RUNNER_TEMP/xray-mobile"
+          go mod edit -replace="golang.org/x/mobile=$RUNNER_TEMP/xray-mobile"
+          (cd "$RUNNER_TEMP/xray-mobile" && go install ./cmd/gomobile ./cmd/gobind)
+          mkdir -p "$PROJECT/app/src/main/assets/xray-notices/golang.org/x/mobile"
+          cp "$MOBILE/LICENSE" "$MOBILE/PATENTS" "$PROJECT/app/src/main/assets/xray-notices/golang.org/x/mobile/"
           gomobile init
           gomobile bind -target=android/arm64 -androidapi 26 -trimpath \
             -ldflags='-checklinkname=0 -s -w -buildid= -extldflags=-Wl,-z,max-page-size=16384,--pack-dyn-relocs=android' \
@@ -213,7 +218,7 @@ jobs:
             echo "ERROR: APK signer does not match the persistent Gradle debug keystore. Refusing to publish."
             exit 1
           fi
-          unzip -l "$APK" | awk '$NF == "lib/arm64-v8a/libgojni.so" {hit=1} END {exit !hit}'
+          unzip -l "$APK" | awk '$NF == "lib/arm64-v8a/libmohsenxrayjni.so" {hit=1} END {exit !hit}'
           unzip -l "$APK" | awk '$NF == "assets/xray-notices/XTLS-libXray/LICENSE" {hit=1} END {exit !hit}'
           "$TOOLS/zipalign" -c -v 4 "$APK"
           "$TOOLS/aapt" dump badging "$APK" | grep -F "package: name='com.mohsen.filter' versionCode='3' versionName='1.0.2'"

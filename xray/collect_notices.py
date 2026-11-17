@@ -6,8 +6,15 @@ import subprocess
 import sys
 
 destination = Path(sys.argv[1])
-modules = json.loads(subprocess.check_output(["go", "mod", "download", "-json"], text=True)
-                     .strip().replace("\n}\n{", "\n},\n{").join(("[", "]")))
+output = subprocess.check_output(["go", "mod", "download", "-json"], text=True)
+decoder = json.JSONDecoder()
+modules = []
+while output.strip():
+    module, end = decoder.raw_decode(output.lstrip())
+    if "Error" in module:
+        raise RuntimeError(f"Could not download {module['Path']}: {module['Error']}")
+    modules.append(module)
+    output = output.lstrip()[end:]
 for name, source in [("XTLS-libXray", Path.cwd())] + [
     (module["Path"], Path(module["Dir"])) for module in modules
 ]:

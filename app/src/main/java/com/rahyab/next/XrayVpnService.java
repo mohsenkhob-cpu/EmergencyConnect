@@ -18,7 +18,7 @@ import java.net.InetAddress;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import libxray.LibXray;
+import libXray.LibXray;
 
 public final class XrayVpnService extends VpnService {
     static final String EVENT = "com.mohsen.filter.XRAY_EVENT";
