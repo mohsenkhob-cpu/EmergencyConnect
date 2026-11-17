@@ -57,6 +57,42 @@ public class MainActivity extends Activity {
     private final Object wireGuardStateLock = new Object();
     private final ExecutorService wireGuardStopWorker = Executors.newSingleThreadExecutor();
     private boolean wireGuardStopPending;
+    private static final int REQUEST_XRAY_PERMISSION = 4111;
+    private String pendingXrayConfig;
+    private boolean xrayBusy;
+    private boolean xrayStopping;
+    private boolean xrayReceiverRegistered;
+    private final BroadcastReceiver xrayReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!xrayBusy) return;
+            String state = intent.getStringExtra("state");
+            if (state == null) return;
+            if (xrayStopping && ("engine_started".equals(state) || "verified".equals(state))) return;
+            appendAppDiagnostic("Xray", state);
+            switch (state) {
+                case "starting": return;
+                case "engine_started":
+                    publishDiscoveryStatus("موتور Xray آماده شد؛ در حال آزمون HTTPS…", "searching");
+                    break;
+                case "verified":
+                    publishDiscoveryStatus("عبور HTTPS با Xray تأیید شد", "connected");
+                    break;
+                default:
+                    xrayBusy = false;
+                    xrayStopping = false;
+                    getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
+                    String message = switch (state) {
+                        case "stopped" -> "اتصال Xray قطع شد";
+                        case "https_failed" -> "آزمون HTTPS در تونل Xray ناموفق بود";
+                        case "protect_failed" -> "جداسازی سوکت خروجی Xray ناموفق بود";
+                        case "tun_failed" -> "راه‌اندازی تونل اندروید برای Xray ناموفق بود";
+                        default -> "راه‌اندازی موتور Xray ناموفق بود";
+                    };
+                    publishDiscoveryStatus(message, "stopped".equals(state) ? "disconnected" : "failed");
+                    break;
+            }
+        }
+    };
     private String pendingSingBoxJson;
     private static final int REQUEST_OPENVPN_FILE = 4108;
     private ArrayList<String> pendingOpenVpnProfiles;
@@ -712,7 +748,13 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams singBoxConnectParams = new LinearLayout.LayoutParams(-1, dp(54));
         singBoxConnectParams.topMargin = dp(8);
         advancedPanel.addView(singBoxConnectButton, singBoxConnectParams);
-        singBoxConnectButton.setOnClickListener(v -> requestSingBoxConnection());
+        singBoxConnectButton.setOnClickListener(v -> { if (canStartManualVpn()) requestSingBoxConnection(); });
+
+        Button xrayButton = new Button(this);
+        xrayButton.setText("آزمون Xray با لینک VLESS REALITY");
+        xrayButton.setAllCaps(false);
+        advancedPanel.addView(xrayButton);
+        xrayButton.setOnClickListener(v -> showXrayImport());
 
         Button savedServersButton = new Button(this);
         savedServersButton.setText("فهرست سرورهای ذخیره‌شده");
@@ -853,6 +895,16 @@ public class MainActivity extends Activity {
 
     @Override protected void onStart() {
         super.onStart();
+        if (!xrayReceiverRegistered) {
+            IntentFilter xrayFilter = new IntentFilter(XrayVpnService.EVENT);
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(xrayReceiver, xrayFilter, Context.RECEIVER_NOT_EXPORTED);
+            else registerReceiver(xrayReceiver, xrayFilter);
+            xrayReceiverRegistered = true;
+        }
+        if ("Xray".equals(getPreferences(MODE_PRIVATE).getString("selected_engine", ""))) {
+            xrayBusy = xrayBusy || hasActiveAndroidVpn();
+            if (xrayBusy) startService(new Intent(this, XrayVpnService.class).setAction(XrayVpnService.STATUS));
+        }
         if (!singBoxReceiverRegistered) {
             IntentFilter filter = new IntentFilter(SingBoxVpnService.ACTION_EVENT);
             if (Build.VERSION.SDK_INT >= 33) {
@@ -1088,6 +1140,11 @@ public class MainActivity extends Activity {
             else if (smartBusy) completeSmartAttempt("مجوز اتصال WireGuard صادر نشد", false);
             return;
         }
+        if (requestCode == REQUEST_XRAY_PERMISSION) {
+            if (resultCode == RESULT_OK) startXray();
+            else pendingXrayConfig = null;
+            return;
+        }
         if (resultCode != RESULT_OK) return;
         if (requestCode == REQUEST_SMART_WIREGUARD && data != null) {
             if (!canImportWireGuard()) return;
@@ -1261,7 +1318,7 @@ public class MainActivity extends Activity {
                     }
                     singBoxConnectButton.setEnabled(true);
                     setStatus("سرور انتخاب شد: " + labels[selected[0]]);
-                    requestSingBoxConnection();
+                    if (canStartManualVpn()) requestSingBoxConnection();
                 })
                 .setNegativeButton("بستن", null)
                 .setNeutralButton("حذف سرور", (dialog, which) -> {
@@ -1339,7 +1396,58 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    private boolean canStartManualVpn() {
+        boolean searching = "searching".equals(getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
+                .getString("connection_lamp_state", ""));
+        if (!searching && !smartBusy && !quickConnect && !wireGuardStopPending && !xrayBusy
+                && !hasActiveAndroidVpn()) return true;
+        Toast.makeText(this, "اول اتصال یا آزمون فعلی را قطع کنید", Toast.LENGTH_SHORT).show();
+        return false;
+    }
+
+    private void showXrayImport() {
+        if (!canStartManualVpn()) return;
+        EditText input = new EditText(this);
+        input.setHint("vless://…");
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT |
+                android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD |
+                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        if (Build.VERSION.SDK_INT >= 26) input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+        new AlertDialog.Builder(this).setTitle("Xray آزمایشی").setView(input)
+                .setPositiveButton("اتصال", (dialog, which) -> {
+                    if (!canStartManualVpn()) return;
+                    try {
+                        if (input.length() > 4096) throw new IllegalArgumentException();
+                        pendingXrayConfig = XrayProfile.fromLink(input.getText().toString());
+                    } catch (Exception ignored) {
+                        setStatus("Xray آزمایشی به یک لینک VLESS با TCP، REALITY و Vision نیاز دارد");
+                        return;
+                    }
+                    Intent permission = VpnService.prepare(this);
+                    if (permission != null) startActivityForResult(permission, REQUEST_XRAY_PERMISSION);
+                    else startXray();
+                }).setNegativeButton("انصراف", null).show();
+    }
+
+    private void startXray() {
+        String config = pendingXrayConfig;
+        pendingXrayConfig = null;
+        if (config == null || !canStartManualVpn()) return;
+        ++smartAttempt;
+        xrayBusy = true;
+        getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "Xray").apply();
+        publishDiscoveryStatus("در حال راه‌اندازی Xray آزمایشی…", "searching");
+        try {
+            startForegroundService(new Intent(this, XrayVpnService.class).putExtra("config", config));
+        } catch (RuntimeException ignored) {
+            xrayBusy = false;
+            getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
+            publishDiscoveryStatus("ارسال درخواست راه‌اندازی Xray ناموفق بود", "failed");
+        }
+    }
+
     private void requestSingBoxConnection() {
+        if (!smartBusy && !canStartManualVpn()) return;
         if (pendingSingBoxJson == null) {
             setStatus("ابتدا فایل JSON سرور را وارد کنید");
             return;
@@ -1353,6 +1461,7 @@ public class MainActivity extends Activity {
     }
 
     private void startSingBox() {
+        if (!smartBusy && !canStartManualVpn()) return;
         getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "sing-box").apply();
         if (pendingSingBoxJson == null) return;
         try {
@@ -1862,6 +1971,19 @@ public class MainActivity extends Activity {
     }
 
     private void disconnectAllEngines() {
+        pendingXrayConfig = null;
+        if (xrayBusy) {
+            if (xrayStopping) return;
+            xrayStopping = true;
+            publishDiscoveryStatus("در حال قطع Xray…", "searching");
+            try {
+                startService(new Intent(this, XrayVpnService.class).setAction(XrayVpnService.STOP));
+            } catch (RuntimeException ignored) {
+                xrayStopping = false;
+                setStatus("ارسال دستور قطع Xray ناموفق بود");
+            }
+            return;
+        }
         quickConnect = false;
         if (wireGuardStopPending) return;
         wireGuardStopPending = true;
@@ -2030,12 +2152,12 @@ public class MainActivity extends Activity {
             connectionOrb.setText("تونل فعال است\nاینترنت تأیید نشد");
             connectionOrb.setBackground(shape(Color.rgb(190, 137, 35), 100));
         }
-        boolean active = connected || searching || smartBusy || vpnPresent || quickConnect;
+        boolean active = connected || searching || smartBusy || vpnPresent || quickConnect || xrayBusy;
         if (connectButton != null) connectButton.setEnabled(!active && !wireGuardStopPending);
         if (sstpButton != null) sstpButton.setEnabled(!active && !wireGuardStopPending);
         if (smartSingBoxButton != null) smartSingBoxButton.setEnabled(!active && !wireGuardStopPending);
         if (smartWireGuardButton != null) smartWireGuardButton.setEnabled(!active && !wireGuardStopPending);
-        if (disconnectButton != null) disconnectButton.setEnabled(active && !wireGuardStopPending);
+        if (disconnectButton != null) disconnectButton.setEnabled(active && !wireGuardStopPending && !xrayStopping);
         if (discoveryButton != null) discoveryButton.setEnabled(!active && !wireGuardStopPending);
     }
 
@@ -2105,6 +2227,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (xrayReceiverRegistered) unregisterReceiver(xrayReceiver);
         ++smartAttempt;
         statusRefreshHandler.removeCallbacks(statusRefreshRunnable);
         if (statusPreferences != null && statusPreferenceListener != null) {

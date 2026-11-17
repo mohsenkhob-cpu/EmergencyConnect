@@ -22,6 +22,16 @@
             </intent-filter>
         </activity>
         <service
+            android:name=".XrayVpnService"
+            android:process=":xray"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Experimental manually configured VPN" />
+            <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
+        </service>
+        <service
             android:name="kittoku.osc.service.SstpVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false"

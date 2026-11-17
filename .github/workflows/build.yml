@@ -165,8 +165,34 @@ jobs:
           set -euo pipefail
           gradle --no-daemon :app:signingReport | tee signing-report.txt
           echo "Signing report saved for diagnosis."
+      - name: Set up Go for libXray
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Build pinned Android libXray and collect notices
+        run: |
+          set -euo pipefail
+          PROJECT="$PWD"
+          XRAY="$RUNNER_TEMP/libxray"
+          git init "$XRAY"
+          git -C "$XRAY" fetch --depth=1 https://github.com/XTLS/libXray.git 5a0f7d8d1c28b34afb5727b04b26a10f6dbac7e3
+          git -C "$XRAY" checkout --detach FETCH_HEAD
+          cp xray/android_tun.go "$XRAY/"
+          mkdir -p app/libs app/src/main/assets/xray-notices
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          cd "$XRAY"
+          MOBILE="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
+          go install "golang.org/x/mobile/cmd/gomobile@$MOBILE"
+          go install "golang.org/x/mobile/cmd/gobind@$MOBILE"
+          gomobile init
+          gomobile bind -target=android/arm64 -androidapi 26 -trimpath \
+            -ldflags='-checklinkname=0 -s -w -buildid= -extldflags=-Wl,-z,max-page-size=16384,--pack-dyn-relocs=android' \
+            -o "$PROJECT/app/libs/libXray.aar" .
+          python "$PROJECT/xray/collect_notices.py" "$PROJECT/app/src/main/assets/xray-notices"
       - name: Build debug APK
-        run: gradle --no-daemon -PciVersionCode=2 testDebugUnitTest assembleDebug
+        run: gradle --no-daemon -PciVersionCode=3 testDebugUnitTest assembleDebug
       - name: Verify APK signature, package, ABI, alignment and checksum
         run: |
           set -euo pipefail
@@ -182,12 +208,15 @@ jobs:
           test -n "$EXPECTED_SIGNER"
           echo "Persistent keystore signer: $EXPECTED_SIGNER"
           echo "APK signer:                 $ACTUAL_SIGNER"
-          if [ "$ACTUAL_SIGNER" != "$EXPECTED_SIGNER" ]; then
+          PREVIOUS_SIGNER=2742eeae8b4a25362f562d94d6b675f42d9cf76cf170ee3e79f4ca8bb6b10548
+          if [ "$ACTUAL_SIGNER" != "$EXPECTED_SIGNER" ] || [ "$ACTUAL_SIGNER" != "$PREVIOUS_SIGNER" ]; then
             echo "ERROR: APK signer does not match the persistent Gradle debug keystore. Refusing to publish."
             exit 1
           fi
+          unzip -l "$APK" | awk '$NF == "lib/arm64-v8a/libgojni.so" {hit=1} END {exit !hit}'
+          unzip -l "$APK" | awk '$NF == "assets/xray-notices/XTLS-libXray/LICENSE" {hit=1} END {exit !hit}'
           "$TOOLS/zipalign" -c -v 4 "$APK"
-          "$TOOLS/aapt" dump badging "$APK" | grep -F "package: name='com.mohsen.filter'"
+          "$TOOLS/aapt" dump badging "$APK" | grep -F "package: name='com.mohsen.filter' versionCode='3' versionName='1.0.2'"
           "$TOOLS/aapt" dump badging "$APK" | grep -F "native-code: 'arm64-v8a'"
           {
             echo "APK bytes: $(stat -c%s "$APK")"
@@ -205,8 +234,8 @@ jobs:
       - name: Publish public download release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: filter-mohsen-1.0.1-${{ github.run_id }}
-          name: Filter Mohsen 1.0.1
+          tag_name: filter-mohsen-1.0.2-${{ github.run_id }}
+          name: Filter Mohsen 1.0.2
           prerelease: true
           generate_release_notes: false
           body: |

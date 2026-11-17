@@ -1,0 +1,5 @@
+# Experimental Xray engine
+
+The Android build pins XTLS/libXray to 5a0f7d8d1c28b34afb5727b04b26a10f6dbac7e3 (MIT), which pins Xray-core to 676eaf66f8f05d4d558ee7a74b4736623d3feeb9 (MPL-2.0, v26.11.9). CI builds the ARM64 Android AAR from these sources with the small Go binding alongside this file and packages dependency notices. Corresponding sources and versioned dependencies are available at https://github.com/XTLS/libXray/tree/5a0f7d8d1c28b34afb5727b04b26a10f6dbac7e3 and https://github.com/XTLS/Xray-core/tree/676eaf66f8f05d4d558ee7a74b4736623d3feeb9. The wrapper uses libXray's socket-protection hooks and Xray's native TUN inbound.
+
+Manual import accepts one VLESS link using TCP, REALITY and Vision. No example contains real service credentials. The experiment uses a separate Android process, one selected engine, and an HTTPS probe on the VPN network. The user-facing status stays unverified until that probe passes. To validate on Android, test a permitted profile back-to-back on the same Wi-Fi in a reference client and this engine. Check actual HTTPS and repeated disconnect, then switch from SSTP to Xray after confirmed shutdown.
