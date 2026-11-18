@@ -95,6 +95,38 @@ public final class TunnelVerifier {
         }
     }
 
+    /** Check an HTTPS response from YouTube on the VPN network, without downloading video. */
+    static String probeYouTube(Context context) {
+        ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
+        Network vpn = manager == null ? null : manager.getActiveNetwork();
+        NetworkCapabilities capabilities = vpn == null ? null : manager.getNetworkCapabilities(vpn);
+        if (capabilities == null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN))
+            return "youtube_network_changed";
+
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) vpn.openConnection(
+                    new URL("https://www.youtube.com/robots.txt"), java.net.Proxy.NO_PROXY);
+            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            connection.setReadTimeout(READ_TIMEOUT_MS);
+            connection.setUseCaches(false);
+            connection.setInstanceFollowRedirects(false);
+            int code = connection.getResponseCode();
+            if (!vpn.equals(manager.getActiveNetwork())) return "youtube_network_changed";
+            return "youtube_http_" + code;
+        } catch (java.net.UnknownHostException error) {
+            return "youtube_dns_failed";
+        } catch (java.net.SocketTimeoutException error) {
+            return "youtube_timeout";
+        } catch (javax.net.ssl.SSLException error) {
+            return "youtube_tls_failed";
+        } catch (java.io.IOException error) {
+            return "youtube_io_failed";
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
     /** Distinguish a DNS lookup failure from a failed HTTPS path without changing VPN status. */
     private static String probeWithoutDns(ConnectivityManager manager, Network vpn) {
         if (!vpn.equals(manager.getActiveNetwork())) {

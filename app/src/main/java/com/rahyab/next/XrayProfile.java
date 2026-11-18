@@ -285,7 +285,9 @@ final class XrayProfile {
         // Android VpnService already owns the interface. A name here keeps
         // Xray from enumerating system interfaces while it reads the config.
         JSONObject inbound = new JSONObject().put("protocol", "tun")
-                .put("settings", new JSONObject().put("name", "mohsen0").put("mtu", 1400));
+                .put("settings", new JSONObject().put("name", "mohsen0").put("mtu", 1400))
+                .put("sniffing", new JSONObject().put("enabled", true).put("routeOnly", false)
+                        .put("destOverride", new JSONArray().put("http").put("tls").put("quic")));
         return new JSONObject().put("log", new JSONObject().put("loglevel", "none")
                         .put("access", "none").put("error", "none"))
                 .put("inbounds", new JSONArray().put(inbound))

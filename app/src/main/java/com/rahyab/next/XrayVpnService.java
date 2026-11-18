@@ -113,6 +113,12 @@ public final class XrayVpnService extends VpnService {
                             if (result.verified) event("verified");
                             else shutdown("https_failed");
                         });
+                        if (result.verified && !stopping) {
+                            String youtubeResult = TunnelVerifier.probeYouTube(this);
+                            main.post(() -> {
+                                if (!stopping && !protectionFailed) broadcastState(youtubeResult);
+                            });
+                        }
                     });
                 });
             } catch (LinkageError error) {
@@ -192,6 +198,10 @@ public final class XrayVpnService extends VpnService {
 
     private void event(String state) {
         lastState = state;
+        broadcastState(state);
+    }
+
+    private void broadcastState(String state) {
         sendBroadcast(new Intent(EVENT).setPackage(getPackageName()).putExtra("state", state));
     }
 

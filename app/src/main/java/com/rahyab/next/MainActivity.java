@@ -68,6 +68,10 @@ public class MainActivity extends Activity {
             String state = intent.getStringExtra("state");
             if (state == null) return;
             if (xrayStopping && ("engine_started".equals(state) || "verified".equals(state))) return;
+            if (state.startsWith("youtube_")) {
+                if (!xrayStopping) appendAppDiagnostic("Xray", state);
+                return;
+            }
             appendAppDiagnostic("Xray", state);
             switch (state) {
                 case "starting": return;
