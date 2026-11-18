@@ -24,7 +24,19 @@ public final class XrayVpnService extends VpnService {
     static final String EVENT = "com.mohsen.filter.XRAY_EVENT";
     static final String STOP = "com.mohsen.filter.XRAY_STOP";
     static final String STATUS = "com.mohsen.filter.XRAY_STATUS";
+    private static final long HEALTH_INTERVAL_MS = 40_000L;
+    private static final long HEALTH_RECHECK_MS = 12_000L;
+    private static final long RECOVERY_PAUSE_MS = 90_000L;
+    private static final int MAX_RECOVERY_ROUNDS = 2;
+    private static final int RECOVERY_CANDIDATES = 3;
     private String lastState = "starting";
+    private String activeConfig;
+    private Network underlyingNetwork;
+    private int failedChecks;
+    private int recoveryRounds;
+    private final java.util.Set<String> failedRelays = new java.util.HashSet<>();
+    private final Runnable healthCheck = this::checkMediaHealth;
+    private Notification.Builder connectionNotification;
     private long downloadKbps = -1;
     private static final String CHANNEL = "xray_vpn";
     private final ExecutorService coreExecutor = Executors.newSingleThreadExecutor();
@@ -63,12 +75,13 @@ public final class XrayVpnService extends VpnService {
                 new Intent(this, XrayVpnService.class).setAction(STOP),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         try {
-            startForeground(7401, new Notification.Builder(this, CHANNEL)
+            connectionNotification = new Notification.Builder(this, CHANNEL)
                     .setSmallIcon(android.R.drawable.ic_lock_lock)
                     .setContentTitle("فیلتر محسن • Xray آزمایشی")
                     .setContentText("اتصال آزمایشی")
                     .setOngoing(true).addAction(new Notification.Action.Builder(
-                            null, "قطع", stop).build()).build());
+                            null, "قطع", stop).build());
+            startForeground(7401, connectionNotification.build());
             openTunnel(config, intent.getBooleanExtra("measure_quality", false));
         } catch (Exception error) {
             shutdown("tun_failed");
@@ -83,6 +96,8 @@ public final class XrayVpnService extends VpnService {
         if (underlying == null || manager.getNetworkCapabilities(underlying) == null ||
                 manager.getNetworkCapabilities(underlying).hasTransport(
                         android.net.NetworkCapabilities.TRANSPORT_VPN)) throw new IOException();
+        underlyingNetwork = underlying;
+        activeConfig = config;
         LinkProperties link = manager.getLinkProperties(underlying);
         if (link == null || link.getDnsServers().isEmpty()) throw new IOException();
         InetAddress resolver = link.getDnsServers().get(0);
@@ -117,6 +132,7 @@ public final class XrayVpnService extends VpnService {
                             if (result.verified) {
                                 downloadKbps = speed;
                                 event("verified");
+                                if (measureQuality) scheduleHealthCheck(HEALTH_INTERVAL_MS);
                             } else shutdown("https_failed");
                         });
                         if (result.verified && !stopping) {
@@ -134,6 +150,112 @@ public final class XrayVpnService extends VpnService {
                 main.post(() -> shutdown(failure));
             }
         });
+    }
+
+    private void scheduleHealthCheck(long delay) {
+        main.removeCallbacks(healthCheck);
+        if (!stopping) main.postDelayed(healthCheck, delay);
+    }
+
+    private void checkMediaHealth() {
+        if (stopping) return;
+        verifier.execute(() -> {
+            int media = TunnelVerifier.probeXrayMedia(this);
+            main.post(() -> {
+                if (stopping) return;
+                if (media != 0) {
+                    failedChecks = 0;
+                    if ("health_retry".equals(lastState) || "health_degraded".equals(lastState)) {
+                        publishConnectionState("verified", "دسترسی دوباره برقرار شد");
+                    }
+                    scheduleHealthCheck(HEALTH_INTERVAL_MS);
+                } else if (++failedChecks == 1) {
+                    if (!"health_degraded".equals(lastState)) {
+                        publishConnectionState("health_retry", "در حال بررسی دوبارهٔ دسترسی به یوتیوب و اینستاگرام");
+                    }
+                    scheduleHealthCheck(HEALTH_RECHECK_MS);
+                } else if (recoveryRounds < MAX_RECOVERY_ROUNDS) {
+                    recoverRelay();
+                } else {
+                    markDegraded();
+                }
+            });
+        });
+    }
+
+    private void recoverRelay() {
+        recoveryRounds++;
+        publishConnectionState("recovering", "دسترسی قطع شده؛ در حال آزمون سرور جایگزین Xray");
+        String previous = activeConfig;
+        int fd = tun.getFd();
+        verifier.execute(() -> {
+            boolean switched = false;
+            try {
+                failedRelays.add(XrayProfile.relayKey(previous));
+                PublicProxyProvider.Result feed = PublicProxyProvider.fetch(
+                        url -> underlyingNetwork.openConnection(url, java.net.Proxy.NO_PROXY),
+                        () -> stopping);
+                for (String candidate : XrayProfile.fromPublicFeed(feed.profile, failedRelays, RECOVERY_CANDIDATES)) {
+                    if (stopping) return;
+                    String relayKey = XrayProfile.relayKey(candidate);
+                    failedRelays.add(relayKey);
+                    switched = true;
+                    if (restartCore(candidate, fd) && !stopping
+                            && TunnelVerifier.verify(this).verified && !stopping
+                            && TunnelVerifier.probeXrayMedia(this) == 3) {
+                        failedRelays.remove(relayKey);
+                        main.post(() -> {
+                            if (stopping) return;
+                            activeConfig = candidate;
+                            failedChecks = 0;
+                            downloadKbps = -1;
+                            publishConnectionState("recovered", "سرور جایگزین Xray وصل شد");
+                            scheduleHealthCheck(HEALTH_INTERVAL_MS);
+                        });
+                        return;
+                    }
+                }
+            } catch (Exception ignored) {
+                // Keep source URLs, server addresses and configuration out of diagnostics.
+            }
+            if (stopping) return;
+            boolean restored = !switched || restartCore(previous, fd);
+            main.post(() -> {
+                if (stopping) return;
+                if (restored) markDegraded();
+                else shutdown("recovery_failed");
+            });
+        });
+    }
+
+    private boolean restartCore(String config, int fd) {
+        try {
+            return coreExecutor.submit(() -> {
+                if (stopping) return false;
+                LibXray.stopAndroidTun();
+                if (stopping) return false;
+                // Native Xray duplicates the Android descriptor, so the VPN stays established.
+                LibXray.startAndroidTun(config, fd);
+                return true;
+            }).get();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.RejectedExecutionException error) {
+            return false;
+        }
+    }
+
+    private void markDegraded() {
+        failedChecks = 0;
+        publishConnectionState("health_degraded", "دسترسی تأیید نشد؛ سرور جایگزین مناسب پیدا نشد");
+        scheduleHealthCheck(RECOVERY_PAUSE_MS);
+    }
+
+    private void publishConnectionState(String state, String message) {
+        event(state);
+        getSystemService(NotificationManager.class).notify(7401,
+                connectionNotification.setContentText(message).build());
     }
 
     private static String classifyCoreFailure(Exception error) {
@@ -176,6 +298,7 @@ public final class XrayVpnService extends VpnService {
     private void shutdown(String reason) {
         if (stopping) return;
         stopping = true;
+        main.removeCallbacks(healthCheck);
         verifier.shutdownNow();
         coreExecutor.execute(() -> {
             try {

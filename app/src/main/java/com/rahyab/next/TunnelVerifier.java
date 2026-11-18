@@ -9,6 +9,7 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.URL;
@@ -141,6 +142,41 @@ public final class TunnelVerifier {
     }
 
     public static final long DOWNLOAD_TARGET_KBPS = 1500;
+
+    /** Bitmask of lightweight HTTPS responses from the media services through the VPN. */
+    static int probeXrayMedia(Context context) {
+        ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
+        Network vpn = manager == null ? null : manager.getActiveNetwork();
+        NetworkCapabilities capabilities = vpn == null ? null : manager.getNetworkCapabilities(vpn);
+        if (capabilities == null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN))
+            return 0;
+
+        int result = 0;
+        if (probeMediaHost(vpn, "https://www.youtube.com/robots.txt")) result |= 1;
+        if (!Thread.currentThread().isInterrupted()
+                && probeMediaHost(vpn, "https://www.instagram.com/robots.txt")) result |= 2;
+        return vpn.equals(manager.getActiveNetwork()) ? result : 0;
+    }
+
+    private static boolean probeMediaHost(Network vpn, String endpoint) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) vpn.openConnection(new URL(endpoint), java.net.Proxy.NO_PROXY);
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("Connection", "close");
+            connection.setConnectTimeout(3500);
+            connection.setReadTimeout(3500);
+            connection.setUseCaches(false);
+            connection.setInstanceFollowRedirects(false);
+            int code = connection.getResponseCode();
+            // Denial of a robots.txt request does not indicate a dead transport.
+            return code >= 200 && (code < 400 || code == 401 || code == 403 || code == 429);
+        } catch (IOException | RuntimeException ignored) {
+            return false;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
 
     /** Check an HTTPS response from YouTube on the VPN network, without downloading video. */
     static String probeYouTube(Context context) {

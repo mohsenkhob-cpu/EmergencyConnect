@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.UUID;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.json.JSONException;
 
 final class XrayProfile {
     private XrayProfile() {}
@@ -19,9 +20,14 @@ final class XrayProfile {
     }
 
     static java.util.List<String> fromPublicFeed(String profile) throws Exception {
+        return fromPublicFeed(profile, java.util.Set.of(), 5);
+    }
+
+    static java.util.List<String> fromPublicFeed(String profile, java.util.Set<String> excluded,
+                                                 int limit) throws Exception {
         JSONArray nodes = new JSONObject(profile).getJSONArray("outbounds");
         java.util.List<String> candidates = new java.util.ArrayList<>();
-        for (int i = 0; i < nodes.length() && candidates.size() < 5; i++) {
+        for (int i = 0; i < nodes.length() && candidates.size() < limit; i++) {
             JSONObject node = nodes.getJSONObject(i);
             if (!"vless".equals(node.optString("type")) || node.has("transport") ||
                     !"xtls-rprx-vision".equals(node.optString("flow"))) continue;
@@ -35,13 +41,26 @@ final class XrayProfile {
             options.put("pbk", reality.optString("public_key"));
             options.put("sid", reality.optString("short_id"));
             try {
-                candidates.add(buildConfig(node.getString("server"), node.getInt("server_port"),
-                        node.getString("uuid"), options).toString());
+                String host = node.getString("server");
+                int port = node.getInt("server_port");
+                if (!excluded.contains(relayKey(host, port))) {
+                    candidates.add(buildConfig(host, port, node.getString("uuid"), options).toString());
+                }
             } catch (ImportError ignored) {
                 // This relay cannot be used by the Xray engine.
             }
         }
         return candidates;
+    }
+
+    static String relayKey(String config) throws JSONException {
+        JSONObject server = new JSONObject(config).getJSONArray("outbounds").getJSONObject(0)
+                .getJSONObject("settings").getJSONArray("vnext").getJSONObject(0);
+        return relayKey(server.getString("address"), server.getInt("port"));
+    }
+
+    private static String relayKey(String host, int port) {
+        return host.toLowerCase(java.util.Locale.ROOT) + ":" + port;
     }
 
     static String fromInput(String input) throws Exception {

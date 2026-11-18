@@ -76,7 +76,11 @@ public class MainActivity extends Activity {
             if (!xrayBusy) return;
             String state = intent.getStringExtra("state");
             if (state == null) return;
-            if (xrayStopping && ("engine_started".equals(state) || "verified".equals(state))) return;
+            if (xrayStopping && switch (state) {
+                case "starting", "engine_started", "verified", "health_retry", "recovering",
+                        "recovered", "health_degraded" -> true;
+                default -> false;
+            }) return;
             if (state.startsWith("youtube_")) {
                 if (!xrayStopping) appendAppDiagnostic("Xray", state);
                 return;
@@ -99,6 +103,18 @@ public class MainActivity extends Activity {
                             ? "اتصال Xray برقرار شد؛ نمونهٔ دانلود " + speed + " کیلوبیت‌برثانیه"
                             : "عبور HTTPS با Xray تأیید شد", "connected");
                     break;
+                case "health_retry":
+                    publishDiscoveryStatus("در حال بررسی دوبارهٔ دسترسی به یوتیوب و اینستاگرام…", "searching");
+                    break;
+                case "recovering":
+                    publishDiscoveryStatus("دسترسی قطع شده؛ در حال آزمون سرور جایگزین Xray…", "searching");
+                    break;
+                case "recovered":
+                    publishDiscoveryStatus("سرور جایگزین Xray وصل شد؛ دسترسی HTTPS تأیید شد", "connected");
+                    break;
+                case "health_degraded":
+                    publishDiscoveryStatus("دسترسی تأیید نشد؛ سرور جایگزین مناسب پیدا نشد", "failed");
+                    break;
                 default:
                     xrayBusy = false;
                     xrayStopping = false;
@@ -118,6 +134,7 @@ public class MainActivity extends Activity {
                     }
                     String message = switch (state) {
                         case "stopped", "quality_retry" -> "اتصال Xray قطع شد";
+                        case "recovery_failed" -> "راه‌اندازی دوبارهٔ Xray ناموفق بود";
                         case "https_failed" -> "آزمون HTTPS در تونل Xray ناموفق بود";
                         case "protect_failed" -> "جداسازی سوکت خروجی Xray ناموفق بود";
                         case "tun_failed" -> "راه‌اندازی تونل اندروید برای Xray ناموفق بود";
