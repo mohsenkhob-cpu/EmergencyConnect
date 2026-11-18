@@ -132,24 +132,26 @@ public final class XrayVpnService extends VpnService {
                         boolean tunnelVerified = TunnelVerifier.verifyXray(this);
                         String youtubeResult = tunnelVerified && !stopping
                                 ? TunnelVerifier.probeYouTube(this) : "youtube_not_checked";
-                        // A 204 response or robots.txt alone must not light the green indicator.
-                        boolean verified = tunnelVerified && "youtube_page_verified".equals(youtubeResult);
-                        long speed = measureQuality && verified && !stopping
+                        // Do not mark 204-only HTTPS probes as a verified web session.
+                        boolean mediaVerified = tunnelVerified && "youtube_page_verified".equals(youtubeResult);
+                        long speed = measureQuality && mediaVerified && !stopping
                                 ? TunnelVerifier.sampleDownloadKbps(this) : -1L;
                         main.post(() -> {
                             if (stopping || protectionFailed) return;
                             broadcastState(youtubeResult);
-                            if (verified) {
-                                downloadKbps = speed;
+                            if (!tunnelVerified) {
+                                shutdown("https_failed");
+                                return;
+                            }
+                            downloadKbps = speed;
+                            nextQualityCheckAt = android.os.SystemClock.elapsedRealtime() + QUALITY_INTERVAL_MS;
+                            if (mediaVerified) {
                                 event("verified");
-                                if (measureQuality) {
-                                    if (isSlow(speed)) firstSlowSpeed = speed;
-                                    nextQualityCheckAt = android.os.SystemClock.elapsedRealtime()
-                                            + (isSlow(speed) ? HEALTH_RECHECK_MS : QUALITY_INTERVAL_MS);
-                                    scheduleHealthCheck(isSlow(speed) ? HEALTH_RECHECK_MS : HEALTH_INTERVAL_MS);
-                                }
+                                scheduleHealthCheck(HEALTH_INTERVAL_MS);
                             } else {
-                                shutdown(tunnelVerified ? "media_unverified" : "https_failed");
+                                // Preserve partial HTTPS access for real Chrome testing.
+                                event("limited");
+                                scheduleHealthCheck(HEALTH_RECHECK_MS);
                             }
                         });
                     });
@@ -181,16 +183,20 @@ public final class XrayVpnService extends VpnService {
                 if ((media & 1) != 0) {
                     failedChecks = 0;
                     if (speed > 0) downloadKbps = speed;
-                    if ("health_retry".equals(lastState) || "health_degraded".equals(lastState)) {
+                    if ("limited".equals(lastState) || "health_retry".equals(lastState)
+                            || "health_degraded".equals(lastState)) {
                         publishConnectionState("verified", "دسترسی دوباره برقرار شد");
                     }
                     if (measureSpeed && assessSpeed(speed, media)) return;
                     scheduleHealthCheck(HEALTH_INTERVAL_MS);
+                } else if ("limited".equals(lastState)) {
+                    // A limited tunnel is intentionally retained so the user can
+                    // test real websites; do not destabilize it with core restarts.
+                    failedChecks++;
+                    scheduleHealthCheck(HEALTH_INTERVAL_MS);
                 } else if (++failedChecks == 1) {
                     firstSlowSpeed = -1;
-                    if (!"health_degraded".equals(lastState)) {
-                        publishConnectionState("health_retry", "در حال بررسی دوبارهٔ دسترسی به یوتیوب و اینستاگرام");
-                    }
+                    publishConnectionState("health_retry", "بارگذاری صفحهٔ یوتیوب ناموفق بود؛ بررسی دوباره");
                     scheduleHealthCheck(HEALTH_RECHECK_MS);
                 } else if (recoveryRounds < MAX_RECOVERY_ROUNDS) {
                     recoverRelay(-1, 1);

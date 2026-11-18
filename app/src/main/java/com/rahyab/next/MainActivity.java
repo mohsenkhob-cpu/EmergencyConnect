@@ -73,7 +73,7 @@ public class MainActivity extends Activity {
             if (state == null) return;
             if (xrayStopping && switch (state) {
                 case "starting", "engine_started", "verified", "health_retry", "recovering",
-                        "recovered", "health_degraded", "quality_search", "quality_low" -> true;
+                        "recovered", "health_degraded", "quality_search", "quality_low", "limited" -> true;
                 default -> false;
             }) return;
             if ("recovery_detail".equals(state)) {
@@ -95,6 +95,15 @@ public class MainActivity extends Activity {
                 case "starting": return;
                 case "engine_started":
                     publishDiscoveryStatus("موتور Xray آماده شد؛ در حال آزمون HTTPS…", "searching");
+                    break;
+                case "limited":
+                    if (xrayTrialCount > 0) {
+                        clearXrayTrials();
+                        smartBusy = false;
+                    }
+                    publishDiscoveryStatus(
+                            "Xray عبور HTTPS را تأیید کرد ولی صفحهٔ یوتیوب باز نشد؛ اتصال برای آزمایش در مرورگر حفظ شده است.",
+                            "searching");
                     break;
                 case "verified":
                     long speed = intent.getLongExtra("download_kbps", -1);
