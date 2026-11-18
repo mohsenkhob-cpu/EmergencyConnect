@@ -86,6 +86,12 @@ public class MainActivity extends Activity {
                         case "https_failed" -> "آزمون HTTPS در تونل Xray ناموفق بود";
                         case "protect_failed" -> "جداسازی سوکت خروجی Xray ناموفق بود";
                         case "tun_failed" -> "راه‌اندازی تونل اندروید برای Xray ناموفق بود";
+                        case "core_binding_failed" -> "بارگذاری کتابخانهٔ Xray ناموفق بود";
+                        case "core_dns_failed" -> "آماده‌سازی DNS شبکه برای Xray ناموفق بود";
+                        case "core_interface_query_failed" -> "خواندن فهرست رابط‌های شبکه برای Xray ناموفق بود";
+                        case "core_tun_fd_failed" -> "Xray نتوانست رابط تونل اندروید را باز کند";
+                        case "core_permission_failed" -> "اندروید اجازهٔ عملیات لازم برای شروع Xray را نداد";
+                        case "core_config_failed" -> "موتور Xray تنظیمات اتصال را نپذیرفت";
                         default -> "راه‌اندازی موتور Xray ناموفق بود";
                     };
                     publishDiscoveryStatus(message, "stopped".equals(state) ? "disconnected" : "failed");

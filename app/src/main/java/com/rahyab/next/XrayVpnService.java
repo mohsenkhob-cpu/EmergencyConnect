@@ -96,9 +96,12 @@ public final class XrayVpnService extends VpnService {
         int fd = tun.getFd();
         coreExecutor.execute(() -> {
             if (stopping) return;
+            String stage = "core_binding_failed";
             try {
                 registerSocketProtection();
+                stage = "core_dns_failed";
                 LibXray.setDNS(this::protectTransport, endpoint);
+                stage = "core_failed";
                 LibXray.startAndroidTun(config, fd);
                 main.post(() -> {
                     if (stopping || protectionFailed) return;
@@ -112,10 +115,29 @@ public final class XrayVpnService extends VpnService {
                         });
                     });
                 });
-            } catch (Exception | LinkageError error) {
-                main.post(() -> shutdown("core_failed"));
+            } catch (LinkageError error) {
+                main.post(() -> shutdown("core_binding_failed"));
+            } catch (Exception error) {
+                String failure = "core_failed".equals(stage) ? classifyCoreFailure(error) : stage;
+                main.post(() -> shutdown(failure));
             }
         });
+    }
+
+    private static String classifyCoreFailure(Exception error) {
+        // Native errors may contain user settings. Only publish fixed categories.
+        String message = error.getMessage();
+        if (message == null) return "core_failed";
+        if (message.contains("fail to get system interface information"))
+            return "core_interface_query_failed";
+        if (message.contains("bad file descriptor"))
+            return "core_tun_fd_failed";
+        if (message.contains("operation not permitted") || message.contains("permission denied"))
+            return "core_permission_failed";
+        if (message.contains("failed to build") || message.contains("failed to parse") ||
+                message.contains("failed to load config"))
+            return "core_config_failed";
+        return "core_failed";
     }
 
     private void registerSocketProtection() {
