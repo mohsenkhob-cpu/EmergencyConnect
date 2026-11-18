@@ -85,7 +85,7 @@ class SstpVpnService : VpnService() {
         currentStage = "آماده‌سازی موتور"
         getSharedPreferences("sstp_engine", MODE_PRIVATE).edit().clear()
             .putString(OscPrefKey.HOME_HOSTNAME.name, host.substringBefore(':'))
-            .putInt(OscPrefKey.SSL_PORT.name, host.substringAfter(':').toInt())
+            .putString(OscPrefKey.SSL_PORT.name, host.substringAfter(':'))
             .putString(OscPrefKey.HOME_USERNAME.name, "vpn")
             .putString(OscPrefKey.HOME_PASSWORD.name, "vpn").apply()
         publish("در حال آزمایش SSTP — $host", "searching")
