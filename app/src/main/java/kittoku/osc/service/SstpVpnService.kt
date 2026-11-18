@@ -19,6 +19,9 @@ class SstpVpnService : VpnService() {
     @Volatile private var generation = 0
     private var active = false
     private var verified = false
+    private var bestHost: String? = null
+    private var bestSpeed = -1L
+    private var restoringBest = false
     private var currentHost = ""
     private var currentStage = ""
     private val diagnostics by lazy { getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE) }
@@ -59,7 +62,11 @@ class SstpVpnService : VpnService() {
 
     private fun tryNext() {
         if (!active) return
-        val host = candidates.removeFirstOrNull()
+        var host = candidates.removeFirstOrNull()
+        if (host == null && !restoringBest) {
+            host = bestHost
+            restoringBest = host != null
+        }
         if (host == null) {
             active = false
             publish("اتصال SSTP تأیید نشد؛ نتیجه هر میزبان در گزارش است", "failed")
@@ -89,12 +96,30 @@ class SstpVpnService : VpnService() {
         stage(token, "آزمون اینترنت")
         scope.launch {
             val result = TunnelVerifier.verify(this@SstpVpnService)
+            val speed = if (result.verified && token == generation)
+                TunnelVerifier.sampleDownloadKbps(this@SstpVpnService) else -1L
             main.post {
                 if (!active || token != generation) return@post
                 if (result.verified) {
                     verified = true
-                    recordResult("عبور اینترنت تأیید شد")
-                    publish("عبور اینترنت با SSTP تأیید شد", "connected")
+                    val speedLabel = if (speed > 0) "نمونهٔ دانلود: $speed کیلوبیت‌برثانیه"
+                        else "نمونهٔ دانلود در دسترس نبود"
+                    recordResult("عبور اینترنت تأیید شد؛ $speedLabel")
+                    if (!restoringBest && speed < TunnelVerifier.DOWNLOAD_TARGET_KBPS) {
+                        if (bestHost == null || speed > bestSpeed) {
+                            bestHost = currentHost
+                            bestSpeed = speed
+                        }
+                        if (candidates.isNotEmpty() || bestHost != currentHost) {
+                            publish("در حال بررسی سرور سریع‌تر SSTP…", "searching")
+                            controller?.kill(false, null)
+                            return@post
+                        }
+                    }
+                    bestHost = null
+                    bestSpeed = -1L
+                    restoringBest = false
+                    publish("عبور اینترنت با SSTP تأیید شد؛ $speedLabel", "connected")
                 } else {
                     recordResult(result.message)
                     controller?.kill(false, null)

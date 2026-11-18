@@ -95,6 +95,53 @@ public final class TunnelVerifier {
         }
     }
 
+    /** Short sample used to compare verified tunnels, in kilobits per second. */
+    public static long sampleDownloadKbps(Context context) {
+        ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
+        Network vpn = manager == null ? null : manager.getActiveNetwork();
+        NetworkCapabilities capabilities = vpn == null ? null : manager.getNetworkCapabilities(vpn);
+        if (capabilities == null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN))
+            return -1;
+
+        int limit = 128 * 1024;
+        long started = android.os.SystemClock.elapsedRealtime();
+        long deadline = started + 4_000L;
+        int bytes = 0;
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) vpn.openConnection(
+                    new URL("https://speed.cloudflare.com/__down?bytes=" + limit),
+                    java.net.Proxy.NO_PROXY);
+            connection.setConnectTimeout(1800);
+            connection.setReadTimeout(1800);
+            connection.setUseCaches(false);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) return -1;
+            try (InputStream input = connection.getInputStream()) {
+                byte[] buffer = new byte[8192];
+                while (bytes < limit && android.os.SystemClock.elapsedRealtime() < deadline
+                        && !Thread.currentThread().isInterrupted()) {
+                    int count = input.read(buffer, 0, Math.min(buffer.length, limit - bytes));
+                    if (count < 0) break;
+                    bytes += count;
+                }
+            }
+        } catch (java.net.SocketTimeoutException ignored) {
+            // A partial transfer can still indicate a slow connection.
+        } catch (java.io.IOException | RuntimeException ignored) {
+            return -1;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+        if (bytes == 0 || !vpn.equals(manager.getActiveNetwork())
+                || Thread.currentThread().isInterrupted()) return -1;
+        long elapsed = Math.max(1, android.os.SystemClock.elapsedRealtime() - started);
+        return Math.max(1, bytes * 8L / elapsed);
+    }
+
+    public static final long DOWNLOAD_TARGET_KBPS = 1500;
+
     /** Check an HTTPS response from YouTube on the VPN network, without downloading video. */
     static String probeYouTube(Context context) {
         ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);

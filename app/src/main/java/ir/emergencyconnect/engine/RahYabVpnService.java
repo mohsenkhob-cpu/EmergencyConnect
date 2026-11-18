@@ -758,36 +758,7 @@ public final class RahYabVpnService extends VpnService {
      * Returns kilobits per second, or -1 when the probe is unavailable.
      */
     private long measureTunnelDownloadKbps() {
-        HttpURLConnection connection = null;
-        long bytesRead = 0L;
-        long startedAt = System.nanoTime();
-        try {
-            URL url = new URL("https://speed.cloudflare.com/__down?bytes=131072");
-            connection = (HttpURLConnection) url.openConnection();
-            connection.setInstanceFollowRedirects(false);
-            connection.setConnectTimeout(5000);
-            connection.setReadTimeout(6000);
-            connection.setUseCaches(false);
-            connection.setRequestProperty("Accept-Encoding", "identity");
-            connection.setRequestMethod("GET");
-            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) return -1L;
-            try (java.io.InputStream input = connection.getInputStream()) {
-                byte[] buffer = new byte[8192];
-                int count;
-                while ((count = input.read(buffer)) != -1) {
-                    bytesRead += count;
-                    if (bytesRead >= 256L * 1024L) break;
-                }
-            }
-            long elapsedNanos = System.nanoTime() - startedAt;
-            if (bytesRead < 16L * 1024L || elapsedNanos <= 0L) return -1L;
-            double seconds = elapsedNanos / 1_000_000_000.0;
-            return Math.max(1L, Math.round(bytesRead * 8.0 / seconds / 1000.0));
-        } catch (IOException | RuntimeException ignored) {
-            return -1L;
-        } finally {
-            if (connection != null) connection.disconnect();
-        }
+        return com.rahyab.next.TunnelVerifier.sampleDownloadKbps(this);
     }
 
     /**
@@ -1938,8 +1909,9 @@ public final class RahYabVpnService extends VpnService {
                 waiting.countDown();
             }
         }
-        if (autoConnected && ("NATIVE_CONNECT_EXCEPTION".equals(name)
-                || "DISCONNECTED".equals(name) || "EXITING".equals(name))) {
+        if (autoConnected && !stopRequested.get() && !nativeStopInProgress.get()
+                && ("NATIVE_CONNECT_EXCEPTION".equals(name) || (!fileOnly && "TRANSPORT_ERROR".equals(name))
+                    || disconnectEvent)) {
             scheduleAutoFailover();
         }
         // The automatic-search worker owns the lamp for the entire request.

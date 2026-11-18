@@ -240,12 +240,27 @@ public final class PublicProxyProvider {
     static ArrayList<String> buildBatches(String profile) throws Exception {
         JSONArray outbounds = new JSONObject(profile).getJSONArray("outbounds");
         ArrayList<String> batches = new ArrayList<>();
+        JSONObject standalone = null;
         for (int first = 1; first < outbounds.length(); first += 8) {
             JSONArray nodes = new JSONArray();
             for (int i = first; i < Math.min(first + 8, outbounds.length()); i++) {
-                nodes.put(outbounds.getJSONObject(i));
+                JSONObject node = outbounds.getJSONObject(i);
+                nodes.put(node);
+                JSONObject tls = node.optJSONObject("tls");
+                if (standalone == null && "vless".equals(node.optString("type"))
+                        && "xtls-rprx-vision".equals(node.optString("flow"))
+                        && !node.has("transport") && tls != null && tls.has("reality")) standalone = node;
             }
             batches.add(withResolver(buildProfile(nodes), batches.size()));
+        }
+        // Verify one common VLESS profile directly if every URLTest group fails.
+        if (standalone != null) {
+            JSONObject single = new JSONObject(buildProfile(new JSONArray().put(standalone)));
+            String tag = standalone.getString("tag");
+            single.put("outbounds", new JSONArray().put(standalone));
+            single.getJSONObject("route").put("final", tag);
+            single.getJSONObject("dns").getJSONArray("servers").getJSONObject(0).put("detour", tag);
+            batches.add(single.toString());
         }
         return batches;
     }
@@ -254,7 +269,7 @@ public final class PublicProxyProvider {
         JSONArray tags = new JSONArray();
         for (int i = 0; i < nodes.length(); i++) tags.put(nodes.getJSONObject(i).getString("tag"));
         JSONObject group = new JSONObject().put("type", "urltest").put("tag", "rahyab-auto")
-                .put("outbounds", tags).put("url", "https://www.gstatic.com/generate_204")
+                .put("outbounds", tags).put("url", "https://cp.cloudflare.com/generate_204")
                 .put("interval", "1m").put("tolerance", 100).put("interrupt_exist_connections", false);
         JSONArray outbounds = new JSONArray().put(group);
         for (int i = 0; i < nodes.length(); i++) outbounds.put(nodes.getJSONObject(i));

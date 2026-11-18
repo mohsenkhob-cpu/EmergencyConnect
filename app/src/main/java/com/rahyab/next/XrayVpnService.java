@@ -25,6 +25,7 @@ public final class XrayVpnService extends VpnService {
     static final String STOP = "com.mohsen.filter.XRAY_STOP";
     static final String STATUS = "com.mohsen.filter.XRAY_STATUS";
     private String lastState = "starting";
+    private long downloadKbps = -1;
     private static final String CHANNEL = "xray_vpn";
     private final ExecutorService coreExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService verifier = Executors.newSingleThreadExecutor();
@@ -40,7 +41,8 @@ public final class XrayVpnService extends VpnService {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null || STOP.equals(intent.getAction())) {
-            shutdown("stopped");
+            shutdown(intent != null && intent.getBooleanExtra("quality_retry", false)
+                    ? "quality_retry" : "stopped");
             return START_NOT_STICKY;
         }
         if (STATUS.equals(intent.getAction())) {
@@ -67,14 +69,14 @@ public final class XrayVpnService extends VpnService {
                     .setContentText("اتصال آزمایشی")
                     .setOngoing(true).addAction(new Notification.Action.Builder(
                             null, "قطع", stop).build()).build());
-            openTunnel(config);
+            openTunnel(config, intent.getBooleanExtra("measure_quality", false));
         } catch (Exception error) {
             shutdown("tun_failed");
         }
         return START_NOT_STICKY;
     }
 
-    private void openTunnel(String config) throws IOException {
+    private void openTunnel(String config, boolean measureQuality) throws IOException {
         if (prepare(this) != null) throw new IOException();
         ConnectivityManager manager = getSystemService(ConnectivityManager.class);
         Network underlying = manager.getActiveNetwork();
@@ -108,10 +110,14 @@ public final class XrayVpnService extends VpnService {
                     event("engine_started");
                     verifier.execute(() -> {
                         TunnelVerifier.Result result = TunnelVerifier.verify(this);
+                        long speed = measureQuality && result.verified && !stopping
+                                ? TunnelVerifier.sampleDownloadKbps(this) : -1L;
                         main.post(() -> {
                             if (stopping || protectionFailed) return;
-                            if (result.verified) event("verified");
-                            else shutdown("https_failed");
+                            if (result.verified) {
+                                downloadKbps = speed;
+                                event("verified");
+                            } else shutdown("https_failed");
                         });
                         if (result.verified && !stopping) {
                             String youtubeResult = TunnelVerifier.probeYouTube(this);
@@ -202,7 +208,8 @@ public final class XrayVpnService extends VpnService {
     }
 
     private void broadcastState(String state) {
-        sendBroadcast(new Intent(EVENT).setPackage(getPackageName()).putExtra("state", state));
+        sendBroadcast(new Intent(EVENT).setPackage(getPackageName()).putExtra("state", state)
+                .putExtra("download_kbps", downloadKbps));
     }
 
     @Override public void onRevoke() {
