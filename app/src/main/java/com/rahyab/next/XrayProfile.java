@@ -5,6 +5,7 @@ import java.net.URLDecoder;
 import java.util.HashMap;
 import java.util.Base64;
 import java.util.Map;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import org.json.JSONArray;
@@ -54,7 +55,7 @@ final class XrayProfile {
         if (!Set.of("tcp", "raw").contains(network))
             throw new ImportError("نوع انتقال باید TCP یا RAW باشد");
         if (selected.has("proxySettings") || stream.has("finalmask") ||
-                stream.has("finalMask") || stream.has("sockopt")) {
+                stream.has("finalMask")) {
             throw new ImportError("خروجی VLESS تنظیمات انتقال اضافی دارد");
         }
         for (String transportKey : Set.of("tcpSettings", "rawSettings")) {
@@ -88,7 +89,99 @@ final class XrayProfile {
         options.put("sid", reality.optString("shortId"));
         options.put("spx", reality.optString("spiderX"));
         options.put("pqv", reality.optString("mldsa65Verify"));
-        return buildConfig(endpoint.getHost(), port, user.optString("id"), options);
+        JSONObject config = buildConfig(endpoint.getHost(), port, user.optString("id"), options);
+        JSONObject socketOptions = readSocketOptions(stream);
+        if (socketOptions != null) {
+            config.getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+                    .put("sockopt", socketOptions);
+        }
+        JSONObject dns = exported.optJSONObject("dns");
+        JSONObject hosts = dns == null ? null : dns.optJSONObject("hosts");
+        if (hosts != null && hosts.has(address)) {
+            Object pinnedIp = hosts.opt(address);
+            JSONArray addresses = pinnedIp instanceof JSONArray ? (JSONArray) pinnedIp
+                    : new JSONArray().put(pinnedIp);
+            if (addresses.length() == 0 || addresses.length() > 16)
+                throw new ImportError("تعداد نشانی‌های ثبت‌شده برای سرور نامعتبر است");
+            for (int index = 0; index < addresses.length(); index++) {
+                if (!isIpLiteral(addresses.optString(index))) {
+                    throw new ImportError("نشانی ثبت‌شده برای سرور در DNS نامعتبر است");
+                }
+            }
+            if (socketOptions == null) {
+                socketOptions = new JSONObject();
+                config.getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+                        .put("sockopt", socketOptions);
+            }
+            if ("asis".equalsIgnoreCase(socketOptions.optString("domainStrategy", "AsIs"))) {
+                socketOptions.put("domainStrategy", "UseIP");
+            }
+            config.put("dns", new JSONObject()
+                    .put("hosts", new JSONObject().put(address, pinnedIp))
+                    .put("servers", new JSONArray().put("localhost")));
+        } else if (socketOptions != null) {
+            config.put("dns", new JSONObject().put("servers", new JSONArray().put("localhost")));
+        }
+        return config.toString();
+    }
+
+    private static JSONObject readSocketOptions(JSONObject stream) throws Exception {
+        if (!stream.has("sockopt")) return null;
+        JSONObject source = stream.optJSONObject("sockopt");
+        if (source == null) throw new ImportError("ساختار تنظیمات سوکت نامعتبر است");
+
+        JSONObject result = new JSONObject();
+        java.util.Iterator<String> keys = source.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            if ("domainStrategy".equals(key)) {
+                String strategy = source.optString(key);
+                if (!Set.of("asis", "useip", "useipv4", "useipv6", "useipv4v6", "useipv6v4",
+                        "forceip", "forceipv4", "forceipv6", "forceipv4v6", "forceipv6v4")
+                        .contains(strategy.toLowerCase(Locale.ROOT))) {
+                    throw new ImportError("روش یافتن IP سرور در تنظیمات سوکت پشتیبانی نمی‌شود");
+                }
+                result.put(key, strategy);
+            } else if ("happyEyeballs".equals(key)) {
+                JSONObject happy = source.optJSONObject(key);
+                if (happy == null) throw new ImportError("ساختار Happy Eyeballs نامعتبر است");
+                JSONObject checked = new JSONObject();
+                java.util.Iterator<String> happyKeys = happy.keys();
+                while (happyKeys.hasNext()) {
+                    String setting = happyKeys.next();
+                    Object value = happy.opt(setting);
+                    boolean valid = switch (setting) {
+                        case "prioritizeIPv6" -> value instanceof Boolean;
+                        case "interleave", "maxConcurrentTry" ->
+                                value instanceof Integer && (Integer) value >= 0 && (Integer) value <= 16;
+                        case "tryDelayMs" ->
+                                value instanceof Integer && (Integer) value >= 0 && (Integer) value <= 10_000;
+                        default -> false;
+                    };
+                    if (!valid) throw new ImportError("یکی از گزینه‌های Happy Eyeballs نامعتبر است");
+                    checked.put(setting, value);
+                }
+                result.put(key, checked);
+            } else {
+                throw new ImportError("یکی از گزینه‌های سوکت در این نسخه پشتیبانی نمی‌شود");
+            }
+        }
+        return result;
+    }
+
+    private static boolean isIpLiteral(String ip) {
+        if (ip.indexOf(':') >= 0 && ip.matches("[0-9A-Fa-f:.]{2,45}")) {
+            try {
+                return new URI("vless", null, ip, 1, null, null, null).getHost() != null;
+            } catch (java.net.URISyntaxException e) {
+                return false;
+            }
+        }
+        if (!ip.matches("[0-9]{1,3}(\\.[0-9]{1,3}){3}")) return false;
+        for (String octet : ip.split("\\.")) {
+            if (Integer.parseInt(octet) > 255 || (octet.length() > 1 && octet.startsWith("0"))) return false;
+        }
+        return true;
     }
 
     static String fromLink(String link) throws Exception {
@@ -129,10 +222,10 @@ final class XrayProfile {
                 throw new ImportError("یکی از گزینه‌های لینک تکراری است");
             }
         }
-        return buildConfig(uri.getHost(), uri.getPort(), uri.getUserInfo(), options);
+        return buildConfig(uri.getHost(), uri.getPort(), uri.getUserInfo(), options).toString();
     }
 
-    private static String buildConfig(String host, int port, String userId, Map<String, String> options)
+    private static JSONObject buildConfig(String host, int port, String userId, Map<String, String> options)
             throws Exception {
         String id;
         try {
@@ -194,6 +287,6 @@ final class XrayProfile {
         return new JSONObject().put("log", new JSONObject().put("loglevel", "none")
                         .put("access", "none").put("error", "none"))
                 .put("inbounds", new JSONArray().put(inbound))
-                .put("outbounds", new JSONArray().put(outbound)).toString();
+                .put("outbounds", new JSONArray().put(outbound));
     }
 }
