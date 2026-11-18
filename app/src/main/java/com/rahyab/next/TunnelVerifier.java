@@ -178,11 +178,12 @@ public final class TunnelVerifier {
             return 0;
 
         int result = 0;
-        if (probeMediaHost(vpn, "https://www.youtube.com/robots.txt")) result |= 1;
+        if (probeMediaHost(vpn, "https://www.youtube.com/")) result |= 1;
         if (!Thread.currentThread().isInterrupted()
-                && probeMediaHost(vpn, "https://www.instagram.com/robots.txt")) result |= 2;
+                && probeMediaHost(vpn, "https://www.instagram.com/")) result |= 2;
         return vpn.equals(manager.getActiveNetwork()) ? result : 0;
     }
+
 
     private static boolean probeMediaHost(Network vpn, String endpoint) {
         HttpURLConnection connection = null;
@@ -190,13 +191,16 @@ public final class TunnelVerifier {
             connection = (HttpURLConnection) vpn.openConnection(new URL(endpoint), java.net.Proxy.NO_PROXY);
             connection.setRequestMethod("GET");
             connection.setRequestProperty("Connection", "close");
-            connection.setConnectTimeout(3500);
-            connection.setReadTimeout(3500);
+            connection.setRequestProperty("Accept", "text/html");
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            connection.setConnectTimeout(6000);
+            connection.setReadTimeout(6000);
             connection.setUseCaches(false);
             connection.setInstanceFollowRedirects(false);
             int code = connection.getResponseCode();
-            // Denial of a robots.txt request does not indicate a dead transport.
-            return code >= 200 && (code < 400 || code == 401 || code == 403 || code == 429);
+            if (code != HttpURLConnection.HTTP_OK) return false;
+            int bytes = readHtmlPreview(connection.getInputStream());
+            return isUsableHtmlResponse(code, connection.getContentType(), bytes);
         } catch (IOException | RuntimeException ignored) {
             return false;
         } finally {
@@ -204,7 +208,29 @@ public final class TunnelVerifier {
         }
     }
 
-    /** Check an HTTPS response from YouTube on the VPN network, without downloading video. */
+    /** A small robots.txt/204 response is NOT proof that a web page can load. */
+    static boolean isUsableHtmlResponse(int code, String contentType, int bytes) {
+        return code == HttpURLConnection.HTTP_OK && contentType != null
+                && contentType.toLowerCase(java.util.Locale.ROOT).contains("text/html")
+                && bytes >= 512;
+    }
+
+    /** Read only a preview, so a large or endless HTML page cannot stall the VPN verifier. */
+    private static int readHtmlPreview(InputStream input) throws IOException {
+        try (InputStream stream = input) {
+            byte[] bytes = new byte[1024];
+            int total = 0;
+            while (total < bytes.length && !Thread.currentThread().isInterrupted()) {
+                int count = stream.read(bytes, total, bytes.length - total);
+                if (count <= 0) break;
+                total += count;
+            }
+            return total;
+        }
+    }
+
+
+    /** Probe the actual YouTube homepage, rather than the easily fetched robots.txt. */
     static String probeYouTube(Context context) {
         ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
         Network vpn = manager == null ? null : manager.getActiveNetwork();
@@ -215,21 +241,28 @@ public final class TunnelVerifier {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) vpn.openConnection(
-                    new URL("https://www.youtube.com/robots.txt"), java.net.Proxy.NO_PROXY);
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
+                    new URL("https://www.youtube.com/"), java.net.Proxy.NO_PROXY);
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("Accept", "text/html");
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            connection.setConnectTimeout(7000);
+            connection.setReadTimeout(7000);
             connection.setUseCaches(false);
             connection.setInstanceFollowRedirects(false);
             int code = connection.getResponseCode();
             if (!vpn.equals(manager.getActiveNetwork())) return "youtube_network_changed";
-            return "youtube_http_" + code;
+            if (code != HttpURLConnection.HTTP_OK) return "youtube_page_http_" + code;
+            int bytes = readHtmlPreview(connection.getInputStream());
+            if (!vpn.equals(manager.getActiveNetwork())) return "youtube_network_changed";
+            return isUsableHtmlResponse(code, connection.getContentType(), bytes)
+                    ? "youtube_page_verified" : "youtube_page_content_failed";
         } catch (java.net.UnknownHostException error) {
             return "youtube_dns_failed";
         } catch (java.net.SocketTimeoutException error) {
             return "youtube_timeout";
         } catch (javax.net.ssl.SSLException error) {
             return "youtube_tls_failed";
-        } catch (java.io.IOException error) {
+        } catch (java.io.IOException | RuntimeException error) {
             return "youtube_io_failed";
         } finally {
             if (connection != null) connection.disconnect();

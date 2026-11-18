@@ -127,12 +127,18 @@ public final class XrayVpnService extends VpnService {
                 main.post(() -> {
                     if (stopping || protectionFailed) return;
                     event("engine_started");
+
                     verifier.execute(() -> {
-                        boolean verified = TunnelVerifier.verifyXray(this);
+                        boolean tunnelVerified = TunnelVerifier.verifyXray(this);
+                        String youtubeResult = tunnelVerified && !stopping
+                                ? TunnelVerifier.probeYouTube(this) : "youtube_not_checked";
+                        // A 204 response or robots.txt alone must not light the green indicator.
+                        boolean verified = tunnelVerified && "youtube_page_verified".equals(youtubeResult);
                         long speed = measureQuality && verified && !stopping
                                 ? TunnelVerifier.sampleDownloadKbps(this) : -1L;
                         main.post(() -> {
                             if (stopping || protectionFailed) return;
+                            broadcastState(youtubeResult);
                             if (verified) {
                                 downloadKbps = speed;
                                 event("verified");
@@ -142,14 +148,10 @@ public final class XrayVpnService extends VpnService {
                                             + (isSlow(speed) ? HEALTH_RECHECK_MS : QUALITY_INTERVAL_MS);
                                     scheduleHealthCheck(isSlow(speed) ? HEALTH_RECHECK_MS : HEALTH_INTERVAL_MS);
                                 }
-                            } else shutdown("https_failed");
+                            } else {
+                                shutdown(tunnelVerified ? "media_unverified" : "https_failed");
+                            }
                         });
-                        if (verified && !stopping) {
-                            String youtubeResult = TunnelVerifier.probeYouTube(this);
-                            main.post(() -> {
-                                if (!stopping && !protectionFailed) broadcastState(youtubeResult);
-                            });
-                        }
                     });
                 });
             } catch (LinkageError error) {
@@ -176,7 +178,7 @@ public final class XrayVpnService extends VpnService {
                     ? TunnelVerifier.sampleDownloadKbps(this) : -1;
             main.post(() -> {
                 if (stopping) return;
-                if (media != 0) {
+                if ((media & 1) != 0) {
                     failedChecks = 0;
                     if (speed > 0) downloadKbps = speed;
                     if ("health_retry".equals(lastState) || "health_degraded".equals(lastState)) {
@@ -191,7 +193,7 @@ public final class XrayVpnService extends VpnService {
                     }
                     scheduleHealthCheck(HEALTH_RECHECK_MS);
                 } else if (recoveryRounds < MAX_RECOVERY_ROUNDS) {
-                    recoverRelay(-1, 3);
+                    recoverRelay(-1, 1);
                 } else {
                     markDegraded();
                 }
@@ -203,15 +205,14 @@ public final class XrayVpnService extends VpnService {
         if (speed > 0) downloadKbps = speed;
         broadcastState(speed > 0 ? "quality_sample" : "quality_sample_unavailable");
         if (isSlow(speed)) {
-            if (firstSlowSpeed > 0) {
-                long baseline = Math.max(firstSlowSpeed, speed);
-                firstSlowSpeed = -1;
-                recoverRelay(baseline, media);
-                return true;
-            }
+            // Switching the single native Xray core interrupts all active user traffic.
+            // Preserve a working tunnel on slow speed; recover only after failed page probes.
             firstSlowSpeed = speed;
-            nextQualityCheckAt = android.os.SystemClock.elapsedRealtime() + HEALTH_RECHECK_MS;
-            scheduleHealthCheck(HEALTH_RECHECK_MS);
+            nextQualityCheckAt = android.os.SystemClock.elapsedRealtime() + QUALITY_INTERVAL_MS;
+            if (!"quality_low".equals(lastState)) {
+                publishConnectionState("quality_low", "سرعت پایین است؛ اتصال فعال حفظ شد");
+            }
+            scheduleHealthCheck(HEALTH_INTERVAL_MS);
             return true;
         }
         firstSlowSpeed = -1;

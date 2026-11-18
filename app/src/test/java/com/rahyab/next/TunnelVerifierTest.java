@@ -20,6 +20,14 @@ public class TunnelVerifierTest {
         assertFalse(TunnelVerifier.isPublicAddressLiteral(""));
     }
 
+    @Test public void homepageVerifierRejectsFalsePositives() {
+        assertFalse(TunnelVerifier.isUsableHtmlResponse(204, "text/html", 1024));
+        assertFalse(TunnelVerifier.isUsableHtmlResponse(200, "text/plain", 1024));
+        assertFalse(TunnelVerifier.isUsableHtmlResponse(200, "text/html", 120));
+        assertFalse(TunnelVerifier.isUsableHtmlResponse(403, "text/html", 2048));
+        assertTrue(TunnelVerifier.isUsableHtmlResponse(200, "text/html; charset=utf-8", 1024));
+    }
+
     @Test public void acceptsPublicIpv6Literal() {
         assertTrue(TunnelVerifier.isPublicAddressLiteral("2001:4860:4860::8888"));
     }

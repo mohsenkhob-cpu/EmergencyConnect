@@ -118,7 +118,7 @@ public class MainActivity extends Activity {
                     publishDiscoveryStatus("سرعت اتصال پایین است؛ در حال آزمون سرور سریع‌تر Xray…", "searching");
                     break;
                 case "quality_low":
-                    publishDiscoveryStatus("سرعت اتصال Xray پایین است؛ سرور سریع‌تری پیدا نشد", "connected");
+                    publishDiscoveryStatus("سرعت Xray پایین است؛ اتصال موجود بدون تعویض سرور حفظ شد", "connected");
                     break;
                 case "recovered":
                     long recoveredSpeed = intent.getLongExtra("download_kbps", -1);
@@ -134,7 +134,8 @@ public class MainActivity extends Activity {
                     xrayStopping = false;
                     getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
                     if (xrayTrialCount > 0 && !xrayCandidates.isEmpty()
-                            && ("https_failed".equals(state) || "core_config_failed".equals(state))) {
+                            && ("https_failed".equals(state) || "media_unverified".equals(state)
+                            || "core_config_failed".equals(state))) {
                         int attempt = smartAttempt;
                         retryXrayAfterTunnelCloses(attempt, 0);
                         return;
@@ -147,6 +148,7 @@ public class MainActivity extends Activity {
                         case "stopped" -> "اتصال Xray قطع شد";
                         case "recovery_failed" -> "راه‌اندازی دوبارهٔ Xray ناموفق بود";
                         case "https_failed" -> "آزمون HTTPS در تونل Xray ناموفق بود";
+                        case "media_unverified" -> "تونل HTTPS دارد، اما بارگذاری صفحهٔ یوتیوب تأیید نشد";
                         case "protect_failed" -> "جداسازی سوکت خروجی Xray ناموفق بود";
                         case "tun_failed" -> "راه‌اندازی تونل اندروید برای Xray ناموفق بود";
                         case "core_binding_failed" -> "بارگذاری کتابخانهٔ Xray ناموفق بود";
