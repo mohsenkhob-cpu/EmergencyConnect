@@ -27,13 +27,15 @@ final class XrayProfile {
                                                  int limit) throws Exception {
         JSONArray nodes = new JSONObject(profile).getJSONArray("outbounds");
         java.util.List<String> candidates = new java.util.ArrayList<>();
+        Set<String> seen = new java.util.HashSet<>();
         for (int i = 0; i < nodes.length() && candidates.size() < limit; i++) {
             JSONObject node = nodes.getJSONObject(i);
             if (!"vless".equals(node.optString("type")) || node.has("transport") ||
                     !"xtls-rprx-vision".equals(node.optString("flow"))) continue;
             JSONObject tls = node.optJSONObject("tls");
             JSONObject reality = tls == null ? null : tls.optJSONObject("reality");
-            if (reality == null || !reality.optBoolean("enabled")) continue;
+            if (reality == null || !tls.optBoolean("enabled") || tls.optBoolean("insecure")
+                    || !reality.optBoolean("enabled")) continue;
             Map<String, String> options = new HashMap<>();
             options.put("flow", node.optString("flow"));
             options.put("security", "reality");
@@ -43,14 +45,52 @@ final class XrayProfile {
             try {
                 String host = node.getString("server");
                 int port = node.getInt("server_port");
-                if (!excluded.contains(relayKey(host, port))) {
+                PublicProxyProvider.validateRelayHost(host);
+                String key = relayKey(host, port);
+                if (port >= 1 && port <= 65535 && !excluded.contains(key) && !seen.contains(key)) {
                     candidates.add(buildConfig(host, port, node.getString("uuid"), options).toString());
+                    seen.add(key);
                 }
-            } catch (ImportError ignored) {
+            } catch (ImportError | java.io.IOException | JSONException ignored) {
                 // This relay cannot be used by the Xray engine.
             }
         }
         return candidates;
+    }
+
+    static java.util.List<String> fromPublicLinks(String body, Set<String> excluded,
+                                                  java.util.function.BooleanSupplier cancelled)
+            throws InterruptedException {
+        java.util.List<String> candidates = new java.util.ArrayList<>();
+        Set<String> hosts = new java.util.HashSet<>();
+        for (String line : body.split("\\R")) {
+            if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted())
+                throw new InterruptedException("Cancelled");
+            String link = line.trim();
+            if (!link.startsWith("vless://") || link.length() > 8192) continue;
+            try {
+                String config = fromLink(link);
+                String key = relayKey(config);
+                String host = key.substring(0, key.lastIndexOf(':'));
+                PublicProxyProvider.validateRelayHost(host);
+                if (excluded.contains(key) || !hosts.add(host)) continue;
+                candidates.add(config);
+                if (candidates.size() == 32) break;
+            } catch (Exception ignored) {
+                // Ignore malformed or unsupported public links without logging their contents.
+            }
+        }
+        // Preserve the upstream ordering within the preferred and alternate ports.
+        candidates.sort(java.util.Comparator.comparing(config -> !configUsesPort443(config)));
+        return candidates;
+    }
+
+    private static boolean configUsesPort443(String config) {
+        try {
+            return relayKey(config).endsWith(":443");
+        } catch (JSONException impossible) {
+            return false;
+        }
     }
 
     static String relayKey(String config) throws JSONException {

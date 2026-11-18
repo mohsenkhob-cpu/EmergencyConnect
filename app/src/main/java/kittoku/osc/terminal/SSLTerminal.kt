@@ -232,10 +232,11 @@ internal class SSLTerminal(private val bridge: SharedBridge) {
     private suspend fun establishHttp(): Boolean {
         val buffer = ByteBuffer.allocate(getApplicationBufferSize())
 
+        val authority = if (sslPort == 443) sslHostname else "$sslHostname:$sslPort"
         val request = arrayOf(
             "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1",
             "Content-Length: 18446744073709551615",
-            "Host: $sslHostname",
+            "Host: $authority",
             "SSTPCORRELATIONID: {${bridge.guid}}"
         ).joinToString(separator = HTTP_DELIMITER, postfix = HTTP_SUFFIX).toByteArray(Charsets.US_ASCII)
 

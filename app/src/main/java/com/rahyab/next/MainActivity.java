@@ -1560,15 +1560,18 @@ public class MainActivity extends Activity {
         publishDiscoveryStatus("در حال جست‌وجوی سرور Xray…", "searching");
         worker.execute(() -> {
             try {
-                PublicProxyProvider.Result feed = PublicProxyProvider.fetch(
-                        url -> url.openConnection(java.net.Proxy.NO_PROXY), () -> attempt != smartAttempt);
-                java.util.List<String> candidates = XrayProfile.fromPublicFeed(feed.profile);
+                PublicProxyProvider.XraySources feed = PublicProxyProvider.fetchXray(
+                        url -> url.openConnection(java.net.Proxy.NO_PROXY), () -> attempt != smartAttempt,
+                        java.util.Set.of(), 5);
+                java.util.List<String> candidates = feed.candidates();
                 runOnUiThread(() -> {
                     if (isDestroyed() || attempt != smartAttempt) return;
                     if (candidates.isEmpty()) {
                         completeSmartAttempt("سرور سازگار با Xray در فهرست آنلاین پیدا نشد", false);
                         return;
                     }
+                    appendAppDiagnostic("Xray", "منابع سازگار: " + feed.label()
+                            + "؛ گزینه‌های آزمون: " + candidates.size());
                     xrayCandidates.addAll(candidates);
                     xrayTrialCount = candidates.size();
                     xrayTrialIndex = 0;
@@ -2142,17 +2145,13 @@ public class MainActivity extends Activity {
         int attempt = smartAttempt;
         worker.execute(() -> {
             try {
-                java.util.LinkedHashSet<String> hosts = new java.util.LinkedHashSet<>();
-                for (VpnGateProvider.Server server : VpnGateProvider.fetch().servers) {
-                    String host = server.hostName.trim();
-                    if (host.matches("(?i)public-vpn-[0-9]+")) host += ".opengw.net";
-                    if (host.matches("(?i)[a-z0-9-]+\\.opengw\\.net")) hosts.add(host);
-                    if (hosts.size() == 4) break;
-                }
-                if (hosts.isEmpty()) throw new java.io.IOException("نام میزبان مناسب پیدا نشد");
+                VpnGateProvider.SstpCandidates feed = VpnGateProvider.fetchSstpCandidates();
+                if (feed.endpoints().isEmpty()) throw new java.io.IOException("نام میزبان مناسب پیدا نشد");
                 runOnUiThread(() -> {
                     if (attempt != smartAttempt || isDestroyed()) return;
-                    pendingSstpHosts = new ArrayList<>(hosts);
+                    appendAppDiagnostic("SSTP", "میزبان‌های اعلام‌شده برای SSTP: "
+                            + feed.advertisedCount() + "؛ کل گزینه‌ها: " + feed.endpoints().size());
+                    pendingSstpHosts = new ArrayList<>(feed.endpoints());
                     Intent permission = VpnService.prepare(this);
                     if (permission == null) launchSstp();
                     else startActivityForResult(permission, REQUEST_SSTP_PERMISSION);

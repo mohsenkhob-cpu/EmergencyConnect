@@ -155,6 +155,76 @@ public final class VpnGateProvider {
         }
     }
 
+    record SstpCandidates(List<String> endpoints, int advertisedCount) {}
+
+    static SstpCandidates fetchSstpCandidates() throws Exception {
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var directory = pool.submit(() -> parseSstpDirectory(new String(
+                    fetchBytes("https://www.vpngate.net/EN/", MAX_RESPONSE_BYTES, 4000, 4500, false),
+                    StandardCharsets.UTF_8)));
+            var csv = pool.submit(VpnGateProvider::fetch);
+            List<String> advertised;
+            try {
+                advertised = directory.get(6, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException ignored) {
+                advertised = List.of();
+            }
+
+            var endpoints = new java.util.LinkedHashSet<String>();
+            advertised.stream().limit(3).forEach(endpoints::add);
+            int explicit = endpoints.size();
+            List<Server> fallback = new ArrayList<>();
+            try {
+                fallback.addAll(csv.get(explicit > 0 ? 1 : 10, java.util.concurrent.TimeUnit.SECONDS).servers);
+            } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException ignored) {
+                // The protocol directory may still be sufficient.
+            }
+            fallback.sort(Comparator.comparingLong((Server server) -> server.advertisedSpeedBytesPerSecond)
+                    .reversed().thenComparingInt(server -> server.advertisedPingMs));
+            for (Server server : fallback) {
+                String host = server.hostName.trim().toLowerCase(java.util.Locale.ROOT);
+                if (host.matches("public-vpn-[0-9]+")) host += ".opengw.net";
+                if (host.matches("[a-z0-9-]+\\.opengw\\.net")) endpoints.add(host + ":443");
+                if (endpoints.size() >= 4) break;
+            }
+            for (String endpoint : advertised) {
+                if (endpoints.size() >= 4) break;
+                if (endpoints.add(endpoint)) explicit++;
+            }
+            return new SstpCandidates(new ArrayList<>(endpoints), explicit);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    static List<String> parseSstpDirectory(String html) {
+        Pattern rows = Pattern.compile("(?is)<tr\\b[^>]*>.*?</tr\\s*>");
+        Pattern endpoint = Pattern.compile(
+                "(?i)SSTP\\s+Hostname\\s*:\\s*([a-z0-9-]+\\.opengw\\.net)\\s*:\\s*([0-9]{1,5})\\b");
+        Pattern speed = Pattern.compile("(?i)([0-9]+(?:\\.[0-9]+)?)\\s+Mbps");
+        record Entry(String endpoint, int port, double advertisedMbps) {}
+        List<Entry> entries = new ArrayList<>();
+        Matcher row = rows.matcher(html);
+        while (row.find()) {
+            String content = row.group().replaceAll("<[^>]*>", " ")
+                    .replaceAll("(?i)&nbsp;|&#160;", " ");
+            Matcher address = endpoint.matcher(content);
+            if (!address.find()) continue;
+            int port = Integer.parseInt(address.group(2));
+            if (port < 1 || port > 65535) continue;
+            Matcher bandwidth = speed.matcher(content);
+            entries.add(new Entry(address.group(1).toLowerCase(java.util.Locale.ROOT) + ":" + port,
+                    port, bandwidth.find() ? Double.parseDouble(bandwidth.group(1)) : 0));
+        }
+        entries.sort(Comparator.comparingDouble(Entry::advertisedMbps).reversed());
+        var ordered = new java.util.LinkedHashSet<String>();
+        entries.stream().filter(entry -> entry.port() == 443).findFirst()
+                .ifPresent(entry -> ordered.add(entry.endpoint()));
+        for (Entry entry : entries) ordered.add(entry.endpoint());
+        return new ArrayList<>(ordered);
+    }
+
     private static Result fetchOfficial() throws IOException {
         byte[] body = fetchBytes(OFFICIAL_API, MAX_RESPONSE_BYTES, CONNECT_TIMEOUT_MS,
                 READ_TIMEOUT_MS, true);

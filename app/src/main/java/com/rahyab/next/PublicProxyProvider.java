@@ -57,6 +57,96 @@ public final class PublicProxyProvider {
         }
     }
 
+    record XraySources(List<String> candidates, String label) {}
+
+    static XraySources fetchXray(Connections connections, BooleanSupplier cancelled,
+                                 Set<String> excluded, int limit) throws Exception {
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(3);
+        try {
+            var fast = executor.submit(() -> fetchFastXray(connections, cancelled, excluded));
+            var iran = executor.submit(() -> fetchXrayLinks(connections, cancelled, excluded,
+                    "morpheusadam/v2ray-config", "subs/bundles/iran.txt"));
+            var vision = executor.submit(() -> fetchXrayLinks(connections, cancelled, excluded,
+                    "drmikecrypto/PulseConfigs", "features/vision.txt"));
+            var requests = List.of(fast, iran, vision);
+            var names = List.of("Raydikalx", "Morpheus Iran", "PulseConfigs Vision");
+            var feeds = new ArrayList<List<String>>();
+            var labels = new ArrayList<String>();
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+            for (int index = 0; index < requests.size(); index++) {
+                check(cancelled);
+                try {
+                    long remaining = Math.max(0, deadline - System.nanoTime());
+                    List<String> feed = requests.get(index).get(remaining, java.util.concurrent.TimeUnit.NANOSECONDS);
+                    if (!feed.isEmpty()) {
+                        feeds.add(feed);
+                        labels.add(names.get(index) + " (" + feed.size() + ")");
+                    }
+                } catch (java.util.concurrent.TimeoutException | java.util.concurrent.ExecutionException ignored) {
+                    // Another catalog may still be usable.
+                }
+            }
+            check(cancelled);
+            return new XraySources(interleaveXray(feeds, limit), String.join(" + ", labels));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    static List<String> interleaveXray(List<List<String>> feeds, int limit) throws Exception {
+        List<String> selected = new ArrayList<>();
+        Set<String> hosts = new HashSet<>();
+        int longest = feeds.stream().mapToInt(List::size).max().orElse(0);
+        for (int index = 0; index < longest && selected.size() < limit; index++) {
+            for (List<String> feed : feeds) {
+                if (index >= feed.size()) continue;
+                String config = feed.get(index);
+                String endpoint = XrayProfile.relayKey(config);
+                String host = endpoint.substring(0, endpoint.lastIndexOf(':'));
+                if (hosts.add(host)) selected.add(config);
+                if (selected.size() == limit) break;
+            }
+        }
+        return selected;
+    }
+
+    private static List<String> fetchFastXray(Connections connections, BooleanSupplier cancelled,
+                                               Set<String> excluded) throws Exception {
+        for (String base : RAYDIKALX_MIRRORS) {
+            check(cancelled);
+            try {
+                JSONObject index = new JSONObject(read(connections, base + "index.json", 65536, cancelled));
+                validateFreshness(index.getString("updated_at"), System.currentTimeMillis());
+                List<String> candidates = XrayProfile.fromPublicFeed(
+                        read(connections, base + "fast/singbox.json", MAX_FEED_BYTES, cancelled), excluded, 32);
+                if (!candidates.isEmpty()) return candidates;
+            } catch (InterruptedException stop) {
+                throw stop;
+            } catch (Exception ignored) {
+                // Try the next HTTPS mirror.
+            }
+        }
+        return List.of();
+    }
+
+    private static List<String> fetchXrayLinks(Connections connections, BooleanSupplier cancelled,
+                                               Set<String> excluded, String repo, String path) throws Exception {
+        for (String url : List.of("https://raw.githubusercontent.com/" + repo + "/main/" + path,
+                "https://cdn.jsdelivr.net/gh/" + repo + "@main/" + path)) {
+            check(cancelled);
+            try {
+                List<String> candidates = XrayProfile.fromPublicLinks(
+                        read(connections, url, 1024 * 1024, cancelled), excluded, cancelled);
+                if (!candidates.isEmpty()) return candidates;
+            } catch (InterruptedException stop) {
+                throw stop;
+            } catch (Exception ignored) {
+                // Try the next HTTPS mirror.
+            }
+        }
+        return List.of();
+    }
+
     private static List<JSONObject> fetchRaydikalx(Connections connections, BooleanSupplier cancelled)
             throws Exception {
         IOException failure = new IOException("فهرست Raydikalx در دسترس نبود");
@@ -148,12 +238,11 @@ public final class PublicProxyProvider {
         return result;
     }
 
-    private static JSONObject sanitizeNode(JSONObject node) throws Exception {
-        String type = node.getString("type");
-        if (!"vless".equals(type) && !"trojan".equals(type)) throw new IOException("Unsupported protocol");
-        String host = node.getString("server");
-        if (host.length() > 253 || !host.matches("[A-Za-z0-9.-]+") || host.equalsIgnoreCase("localhost")
-                || host.endsWith(".local") || host.endsWith(".internal")) throw new IOException("Invalid host");
+    static void validateRelayHost(String host) throws IOException {
+        host = host.toLowerCase(Locale.ROOT);
+        if (host.endsWith(".")) host = host.substring(0, host.length() - 1);
+        if (host.length() > 253 || !host.matches("[A-Za-z0-9.-]+") || !host.contains(".")
+                || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".localhost")) throw new IOException("Invalid host");
         if (host.matches("[0-9.]+")) {
             InetAddress ip = InetAddress.getByName(host);
             byte[] b = ip.getAddress();
@@ -163,6 +252,13 @@ public final class PublicProxyProvider {
                     || ((b[0] & 255) == 100 && (b[1] & 255) >= 64 && (b[1] & 255) <= 127))
                 throw new IOException("Non-public relay");
         }
+    }
+
+    private static JSONObject sanitizeNode(JSONObject node) throws Exception {
+        String type = node.getString("type");
+        if (!"vless".equals(type) && !"trojan".equals(type)) throw new IOException("Unsupported protocol");
+        String host = node.getString("server");
+        validateRelayHost(host);
         int port = node.getInt("server_port");
         if (port < 1 || port > 65535) throw new IOException("Invalid port");
         JSONObject tls = node.getJSONObject("tls");

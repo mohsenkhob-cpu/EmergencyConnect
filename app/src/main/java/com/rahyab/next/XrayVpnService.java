@@ -246,10 +246,10 @@ public final class XrayVpnService extends VpnService {
                 attempted.add(XrayProfile.relayKey(previous));
                 java.util.Set<String> excluded = new java.util.HashSet<>(failedRelays);
                 excluded.addAll(attempted);
-                PublicProxyProvider.Result feed = PublicProxyProvider.fetch(
+                PublicProxyProvider.XraySources feed = PublicProxyProvider.fetchXray(
                         url -> underlyingNetwork.openConnection(url, java.net.Proxy.NO_PROXY),
-                        () -> stopping);
-                for (String candidate : XrayProfile.fromPublicFeed(feed.profile, excluded, RECOVERY_CANDIDATES)) {
+                        () -> stopping, excluded, RECOVERY_CANDIDATES);
+                for (String candidate : feed.candidates()) {
                     if (stopping) return;
                     String relayKey = XrayProfile.relayKey(candidate);
                     attempted.add(relayKey);

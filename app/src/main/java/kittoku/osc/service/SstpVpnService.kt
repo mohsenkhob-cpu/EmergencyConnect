@@ -37,7 +37,12 @@ class SstpVpnService : VpnService() {
             return START_NOT_STICKY
         }
         val hosts = intent.getStringArrayListExtra("hosts").orEmpty()
-            .filter { it.matches(Regex("(?i)[a-z0-9-]+\\.opengw\\.net")) }.distinct().take(4)
+            .mapNotNull { endpoint ->
+                val host = endpoint.substringBefore(':')
+                val port = endpoint.substringAfter(':', "443").toIntOrNull()
+                if (host.matches(Regex("(?i)[a-z0-9-]+\\.opengw\\.net")) && port != null
+                    && port in 1..65535) "$host:$port" else null
+            }.distinct().take(4)
         if (hosts.isEmpty()) {
             stopSelf(startId)
             return START_NOT_STICKY
@@ -79,7 +84,8 @@ class SstpVpnService : VpnService() {
         currentHost = host
         currentStage = "آماده‌سازی موتور"
         getSharedPreferences("sstp_engine", MODE_PRIVATE).edit().clear()
-            .putString(OscPrefKey.HOME_HOSTNAME.name, host)
+            .putString(OscPrefKey.HOME_HOSTNAME.name, host.substringBefore(':'))
+            .putInt(OscPrefKey.SSL_PORT.name, host.substringAfter(':').toInt())
             .putString(OscPrefKey.HOME_USERNAME.name, "vpn")
             .putString(OscPrefKey.HOME_PASSWORD.name, "vpn").apply()
         publish("در حال آزمایش SSTP — $host", "searching")
