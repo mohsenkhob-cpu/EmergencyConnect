@@ -18,8 +18,35 @@ final class XrayProfile {
         ImportError(String message) { super(message); }
     }
 
+    static java.util.List<String> fromPublicFeed(String profile) throws Exception {
+        JSONArray nodes = new JSONObject(profile).getJSONArray("outbounds");
+        java.util.List<String> candidates = new java.util.ArrayList<>();
+        for (int i = 0; i < nodes.length() && candidates.size() < 5; i++) {
+            JSONObject node = nodes.getJSONObject(i);
+            if (!"vless".equals(node.optString("type")) || node.has("transport") ||
+                    !"xtls-rprx-vision".equals(node.optString("flow"))) continue;
+            JSONObject tls = node.optJSONObject("tls");
+            JSONObject reality = tls == null ? null : tls.optJSONObject("reality");
+            if (reality == null || !reality.optBoolean("enabled")) continue;
+            Map<String, String> options = new HashMap<>();
+            options.put("flow", node.optString("flow"));
+            options.put("security", "reality");
+            options.put("sni", tls.optString("server_name"));
+            options.put("pbk", reality.optString("public_key"));
+            options.put("sid", reality.optString("short_id"));
+            try {
+                candidates.add(buildConfig(node.getString("server"), node.getInt("server_port"),
+                        node.getString("uuid"), options).toString());
+            } catch (ImportError ignored) {
+                // This relay cannot be used by the Xray engine.
+            }
+        }
+        return candidates;
+    }
+
     static String fromInput(String input) throws Exception {
         String trimmed = input.trim();
+        if (trimmed.startsWith("\uFEFF")) trimmed = trimmed.substring(1).trim();
         if (!trimmed.startsWith("{")) return fromLink(trimmed);
         if (trimmed.length() > 128 * 1024) {
             throw new ImportError("حجم تنظیمات JSON بیش از حد مجاز است");

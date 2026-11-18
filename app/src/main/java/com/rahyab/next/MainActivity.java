@@ -58,6 +58,10 @@ public class MainActivity extends Activity {
     private final ExecutorService wireGuardStopWorker = Executors.newSingleThreadExecutor();
     private boolean wireGuardStopPending;
     private static final int REQUEST_XRAY_PERMISSION = 4111;
+    private static final int REQUEST_XRAY_FILE = 4112;
+    private final java.util.ArrayDeque<String> xrayCandidates = new java.util.ArrayDeque<>();
+    private int xrayTrialCount;
+    private int xrayTrialIndex;
     private String pendingXrayConfig;
     private boolean xrayBusy;
     private boolean xrayStopping;
@@ -79,12 +83,26 @@ public class MainActivity extends Activity {
                     publishDiscoveryStatus("موتور Xray آماده شد؛ در حال آزمون HTTPS…", "searching");
                     break;
                 case "verified":
+                    if (xrayTrialCount > 0) {
+                        clearXrayTrials();
+                        smartBusy = false;
+                    }
                     publishDiscoveryStatus("عبور HTTPS با Xray تأیید شد", "connected");
                     break;
                 default:
                     xrayBusy = false;
                     xrayStopping = false;
                     getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
+                    if (xrayTrialCount > 0 && ("https_failed".equals(state) || "core_config_failed".equals(state))
+                            && !xrayCandidates.isEmpty()) {
+                        int attempt = smartAttempt;
+                        retryXrayAfterTunnelCloses(attempt, 0);
+                        return;
+                    }
+                    if (xrayTrialCount > 0) {
+                        clearXrayTrials();
+                        smartBusy = false;
+                    }
                     String message = switch (state) {
                         case "stopped" -> "اتصال Xray قطع شد";
                         case "https_failed" -> "آزمون HTTPS در تونل Xray ناموفق بود";
@@ -766,6 +784,20 @@ public class MainActivity extends Activity {
         advancedPanel.addView(xrayButton);
         xrayButton.setOnClickListener(v -> showXrayImport());
 
+        Button xrayFinder = new Button(this);
+        xrayFinder.setText("فایل‌یاب هوشمند Xray");
+        advancedPanel.addView(xrayFinder);
+        xrayFinder.setOnClickListener(v -> {
+            if (!canStartManualVpn()) return;
+            new AlertDialog.Builder(this).setTitle("فایل‌یاب هوشمند Xray")
+                    .setItems(new String[]{"پیدا کردن و آزمون سرور آنلاین", "انتخاب فایل از گوشی"},
+                            (dialog, item) -> {
+                                if (item == 0) startXrayDiscovery();
+                                else startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                                        .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQUEST_XRAY_FILE);
+                            }).setNegativeButton("انصراف", null).show();
+        });
+
         Button savedServersButton = new Button(this);
         savedServersButton.setText("فهرست سرورهای ذخیره‌شده");
         savedServersButton.setAllCaps(false);
@@ -1152,7 +1184,18 @@ public class MainActivity extends Activity {
         }
         if (requestCode == REQUEST_XRAY_PERMISSION) {
             if (resultCode == RESULT_OK) startXray();
-            else pendingXrayConfig = null;
+            else {
+                pendingXrayConfig = null;
+                if (xrayTrialCount > 0) {
+                    clearXrayTrials();
+                    completeSmartAttempt("مجوز اتصال Xray صادر نشد", false);
+                }
+            }
+            return;
+        }
+        if (requestCode == REQUEST_XRAY_FILE) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null)
+                importXrayFile(data.getData());
             return;
         }
         if (resultCode != RESULT_OK) return;
@@ -1440,25 +1483,128 @@ public class MainActivity extends Activity {
                 return;
             }
             dialog.dismiss();
-            Intent permission = VpnService.prepare(this);
-            if (permission != null) startActivityForResult(permission, REQUEST_XRAY_PERMISSION);
-            else startXray();
+            requestXrayPermission();
         });
+    }
+
+    private void importXrayFile(Uri uri) {
+        if (!canStartManualVpn()) return;
+        int attempt = smartAttempt;
+        worker.execute(() -> {
+            try (InputStream input = getContentResolver().openInputStream(uri);
+                 ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+                if (input == null) throw new java.io.IOException();
+                byte[] buffer = new byte[4096];
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    if (attempt != smartAttempt) return;
+                    if (bytes.size() + count > 128 * 1024)
+                        throw new XrayProfile.ImportError("حجم فایل بیشتر از ۱۲۸ کیلوبایت است");
+                    bytes.write(buffer, 0, count);
+                }
+                String config = XrayProfile.fromInput(new String(bytes.toByteArray(), StandardCharsets.UTF_8));
+                runOnUiThread(() -> {
+                    if (isDestroyed() || attempt != smartAttempt || !canStartManualVpn()) return;
+                    pendingXrayConfig = config;
+                    requestXrayPermission();
+                });
+            } catch (Exception error) {
+                String message = error instanceof XrayProfile.ImportError ? error.getMessage()
+                        : "خواندن فایل Xray ناموفق بود";
+                runOnUiThread(() -> {
+                    if (!isDestroyed() && attempt == smartAttempt) setStatus(message);
+                });
+            }
+        });
+    }
+
+    private void startXrayDiscovery() {
+        if (!canStartManualVpn()) return;
+        smartBusy = true;
+        int attempt = ++smartAttempt;
+        publishDiscoveryStatus("در حال جست‌وجوی سرور Xray…", "searching");
+        worker.execute(() -> {
+            try {
+                PublicProxyProvider.Result feed = PublicProxyProvider.fetch(
+                        url -> url.openConnection(java.net.Proxy.NO_PROXY), () -> attempt != smartAttempt);
+                java.util.List<String> candidates = XrayProfile.fromPublicFeed(feed.profile);
+                runOnUiThread(() -> {
+                    if (isDestroyed() || attempt != smartAttempt) return;
+                    if (candidates.isEmpty()) {
+                        completeSmartAttempt("سرور سازگار با Xray در فهرست آنلاین پیدا نشد", false);
+                        return;
+                    }
+                    xrayCandidates.addAll(candidates);
+                    xrayTrialCount = candidates.size();
+                    xrayTrialIndex = 0;
+                    pendingXrayConfig = xrayCandidates.removeFirst();
+                    requestXrayPermission();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (!isDestroyed() && attempt == smartAttempt)
+                        completeSmartAttempt("دریافت فهرست آنلاین Xray ناموفق بود", false);
+                });
+            }
+        });
+    }
+
+    private void retryXrayAfterTunnelCloses(int attempt, int waits) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            if (isDestroyed() || attempt != smartAttempt || xrayTrialCount == 0) return;
+            if (hasActiveAndroidVpn()) {
+                if (waits < 10) retryXrayAfterTunnelCloses(attempt, waits + 1);
+                else {
+                    clearXrayTrials();
+                    completeSmartAttempt("تونل قبلی هنوز آزاد نشده است", false);
+                }
+                return;
+            }
+            pendingXrayConfig = xrayCandidates.removeFirst();
+            startXray();
+        }, 300);
+    }
+
+    private void clearXrayTrials() {
+        xrayCandidates.clear();
+        xrayTrialCount = 0;
+        xrayTrialIndex = 0;
+    }
+
+    private void requestXrayPermission() {
+        Intent permission = VpnService.prepare(this);
+        if (permission != null) startActivityForResult(permission, REQUEST_XRAY_PERMISSION);
+        else startXray();
     }
 
     private void startXray() {
         String config = pendingXrayConfig;
         pendingXrayConfig = null;
-        if (config == null || !canStartManualVpn()) return;
-        ++smartAttempt;
+        if (config == null) return;
+        boolean automatic = xrayTrialCount > 0;
+        if (automatic && hasActiveAndroidVpn()) {
+            clearXrayTrials();
+            completeSmartAttempt("ابتدا اتصال فعلی را قطع کنید", false);
+            return;
+        }
+        if (!automatic) {
+            if (!canStartManualVpn()) return;
+            ++smartAttempt;
+        }
         xrayBusy = true;
         getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "Xray").apply();
-        publishDiscoveryStatus("در حال راه‌اندازی Xray آزمایشی…", "searching");
+        publishDiscoveryStatus(automatic
+                ? "آزمون سرور Xray " + (++xrayTrialIndex) + " از " + xrayTrialCount
+                : "در حال راه‌اندازی Xray آزمایشی…", "searching");
         try {
             startForegroundService(new Intent(this, XrayVpnService.class).putExtra("config", config));
         } catch (RuntimeException ignored) {
             xrayBusy = false;
             getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
+            if (automatic) {
+                clearXrayTrials();
+                smartBusy = false;
+            }
             publishDiscoveryStatus("ارسال درخواست راه‌اندازی Xray ناموفق بود", "failed");
         }
     }
@@ -1989,6 +2135,10 @@ public class MainActivity extends Activity {
 
     private void disconnectAllEngines() {
         pendingXrayConfig = null;
+        if (xrayTrialCount > 0) {
+            clearXrayTrials();
+            smartBusy = false;
+        }
         if (xrayBusy) {
             if (xrayStopping) return;
             xrayStopping = true;
