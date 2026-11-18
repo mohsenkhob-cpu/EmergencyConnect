@@ -1413,20 +1413,25 @@ public class MainActivity extends Activity {
                 android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD |
                 android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         if (Build.VERSION.SDK_INT >= 26) input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
-        new AlertDialog.Builder(this).setTitle("Xray آزمایشی").setView(input)
-                .setPositiveButton("اتصال", (dialog, which) -> {
-                    if (!canStartManualVpn()) return;
-                    try {
-                        if (input.length() > 4096) throw new IllegalArgumentException();
-                        pendingXrayConfig = XrayProfile.fromLink(input.getText().toString());
-                    } catch (Exception ignored) {
-                        setStatus("Xray آزمایشی به یک لینک VLESS با TCP، REALITY و Vision نیاز دارد");
-                        return;
-                    }
-                    Intent permission = VpnService.prepare(this);
-                    if (permission != null) startActivityForResult(permission, REQUEST_XRAY_PERMISSION);
-                    else startXray();
-                }).setNegativeButton("انصراف", null).show();
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Xray آزمایشی").setView(input)
+                .setPositiveButton("اتصال", null).setNegativeButton("انصراف", null).create();
+        dialog.show();
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(button -> {
+            if (!canStartManualVpn()) return;
+            try {
+                pendingXrayConfig = XrayProfile.fromLink(input.getText().toString());
+            } catch (Exception e) {
+                String message = e instanceof XrayProfile.ImportError
+                        ? e.getMessage() : "آماده‌سازی تنظیمات Xray ناموفق بود";
+                input.setError(message);
+                setStatus("ورود لینک Xray: " + message);
+                return;
+            }
+            dialog.dismiss();
+            Intent permission = VpnService.prepare(this);
+            if (permission != null) startActivityForResult(permission, REQUEST_XRAY_PERMISSION);
+            else startXray();
+        });
     }
 
     private void startXray() {
