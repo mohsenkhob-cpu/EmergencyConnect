@@ -751,7 +751,7 @@ public class MainActivity extends Activity {
         singBoxConnectButton.setOnClickListener(v -> { if (canStartManualVpn()) requestSingBoxConnection(); });
 
         Button xrayButton = new Button(this);
-        xrayButton.setText("آزمون Xray با لینک VLESS REALITY");
+        xrayButton.setText("آزمون Xray با لینک یا JSON");
         xrayButton.setAllCaps(false);
         advancedPanel.addView(xrayButton);
         xrayButton.setOnClickListener(v -> showXrayImport());
@@ -1408,10 +1408,12 @@ public class MainActivity extends Activity {
     private void showXrayImport() {
         if (!canStartManualVpn()) return;
         EditText input = new EditText(this);
-        input.setHint("vless://…");
+        input.setHint("لینک VLESS یا متن JSON");
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT |
                 android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD |
-                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS |
+                android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        input.setMaxLines(4);
         if (Build.VERSION.SDK_INT >= 26) input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Xray آزمایشی").setView(input)
                 .setPositiveButton("اتصال", null).setNegativeButton("انصراف", null).create();
@@ -1419,12 +1421,12 @@ public class MainActivity extends Activity {
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(button -> {
             if (!canStartManualVpn()) return;
             try {
-                pendingXrayConfig = XrayProfile.fromLink(input.getText().toString());
+                pendingXrayConfig = XrayProfile.fromInput(input.getText().toString());
             } catch (Exception e) {
                 String message = e instanceof XrayProfile.ImportError
                         ? e.getMessage() : "آماده‌سازی تنظیمات Xray ناموفق بود";
                 input.setError(message);
-                setStatus("ورود لینک Xray: " + message);
+                setStatus("ورود تنظیمات Xray: " + message);
                 return;
             }
             dialog.dismiss();

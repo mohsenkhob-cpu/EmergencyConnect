@@ -17,6 +17,80 @@ final class XrayProfile {
         ImportError(String message) { super(message); }
     }
 
+    static String fromInput(String input) throws Exception {
+        String trimmed = input.trim();
+        if (!trimmed.startsWith("{")) return fromLink(trimmed);
+        if (trimmed.length() > 128 * 1024) {
+            throw new ImportError("حجم تنظیمات JSON بیش از حد مجاز است");
+        }
+
+        JSONObject exported;
+        try {
+            exported = new JSONObject(trimmed);
+        } catch (org.json.JSONException | StackOverflowError e) {
+            throw new ImportError("متن JSON ناقص است یا ساختار نامعتبر دارد");
+        }
+        JSONArray outbounds = exported.optJSONArray("outbounds");
+        JSONObject selected = null;
+        for (int index = 0; outbounds != null && index < outbounds.length(); index++) {
+            JSONObject candidate = outbounds.optJSONObject(index);
+            if (candidate == null || !"vless".equals(candidate.optString("protocol"))) continue;
+            if (selected != null) throw new ImportError("فایل JSON باید فقط یک خروجی VLESS داشته باشد");
+            selected = candidate;
+        }
+        if (selected == null) throw new ImportError("در فایل JSON خروجی VLESS پیدا نشد");
+
+        JSONObject settings = selected.optJSONObject("settings");
+        JSONArray servers = settings == null ? null : settings.optJSONArray("vnext");
+        JSONObject server = servers != null && servers.length() == 1 ? servers.optJSONObject(0) : null;
+        JSONArray users = server == null ? null : server.optJSONArray("users");
+        JSONObject user = users != null && users.length() == 1 ? users.optJSONObject(0) : null;
+        if (user == null) throw new ImportError("خروجی VLESS باید یک سرور و یک کاربر داشته باشد");
+
+        JSONObject stream = selected.optJSONObject("streamSettings");
+        JSONObject reality = stream == null ? null : stream.optJSONObject("realitySettings");
+        if (reality == null) throw new ImportError("تنظیمات REALITY در خروجی VLESS پیدا نشد");
+        String network = stream.optString("network", "tcp");
+        if (!Set.of("tcp", "raw").contains(network))
+            throw new ImportError("نوع انتقال باید TCP یا RAW باشد");
+        if (selected.has("proxySettings") || stream.has("finalmask") ||
+                stream.has("finalMask") || stream.has("sockopt")) {
+            throw new ImportError("خروجی VLESS تنظیمات انتقال اضافی دارد");
+        }
+        for (String transportKey : Set.of("tcpSettings", "rawSettings")) {
+            JSONObject transport = stream.optJSONObject(transportKey);
+            JSONObject header = transport == null ? null : transport.optJSONObject("header");
+            if (header != null && !Set.of("", "none").contains(header.optString("type"))) {
+                throw new ImportError("نوع انتقال باید TCP یا RAW بدون سربرگ باشد");
+            }
+        }
+
+        String address = server.optString("address");
+        int port = server.optInt("port", -1);
+        URI endpoint;
+        try {
+            endpoint = new URI("vless", null, address, port, null, null, null);
+        } catch (java.net.URISyntaxException e) {
+            throw new ImportError("نشانی سرور در JSON نامعتبر است");
+        }
+        if (endpoint.getHost() == null || address.length() > 253 || port < 1 || port > 65535)
+            throw new ImportError("نشانی یا پورت سرور در JSON نامعتبر است");
+
+        Map<String, String> options = new HashMap<>();
+        options.put("type", network);
+        options.put("security", stream.optString("security"));
+        options.put("flow", user.optString("flow"));
+        options.put("encryption", user.optString("encryption", "none"));
+        options.put("sni", reality.optString("serverName"));
+        options.put("fp", reality.optString("fingerprint"));
+        String key = reality.optString("password");
+        options.put("pbk", key.isEmpty() ? reality.optString("publicKey") : key);
+        options.put("sid", reality.optString("shortId"));
+        options.put("spx", reality.optString("spiderX"));
+        options.put("pqv", reality.optString("mldsa65Verify"));
+        return buildConfig(endpoint.getHost(), port, user.optString("id"), options);
+    }
+
     static String fromLink(String link) throws Exception {
         String trimmed = link.trim();
         if (!trimmed.startsWith("vless://")) {
@@ -38,14 +112,6 @@ final class XrayProfile {
                 (uri.getPath() != null && !uri.getPath().isEmpty() && !"/".equals(uri.getPath()))) {
             throw new ImportError("نشانی یا پورت سرور در لینک نامعتبر است");
         }
-        String id;
-        try {
-            if (uri.getUserInfo() == null) throw new IllegalArgumentException();
-            id = UUID.fromString(uri.getUserInfo()).toString();
-            if (!id.equalsIgnoreCase(uri.getUserInfo())) throw new IllegalArgumentException();
-        } catch (IllegalArgumentException e) {
-            throw new ImportError("شناسهٔ کاربر در لینک وجود ندارد یا نامعتبر است");
-        }
         Map<String, String> options = new HashMap<>();
         Set<String> supported = Set.of("security", "type", "flow", "encryption", "sni", "fp",
                 "pbk", "sid", "spx", "headerType", "pqv");
@@ -62,6 +128,19 @@ final class XrayProfile {
             if (options.put(part[0], value) != null) {
                 throw new ImportError("یکی از گزینه‌های لینک تکراری است");
             }
+        }
+        return buildConfig(uri.getHost(), uri.getPort(), uri.getUserInfo(), options);
+    }
+
+    private static String buildConfig(String host, int port, String userId, Map<String, String> options)
+            throws Exception {
+        String id;
+        try {
+            if (userId == null) throw new IllegalArgumentException();
+            id = UUID.fromString(userId).toString();
+            if (!id.equalsIgnoreCase(userId)) throw new IllegalArgumentException();
+        } catch (IllegalArgumentException e) {
+            throw new ImportError("شناسهٔ کاربر در تنظیمات وجود ندارد یا نامعتبر است");
         }
         String flow = options.get("flow");
         String name = options.getOrDefault("sni", "");
@@ -86,21 +165,27 @@ final class XrayProfile {
         String verificationKey = options.getOrDefault("pqv", "");
         if (!verificationKey.isEmpty()) {
             try {
-                if (Base64.getUrlDecoder().decode(verificationKey).length != 1952)
+                if (verificationKey.length() != 2603 ||
+                        Base64.getUrlDecoder().decode(verificationKey).length != 1952)
                     throw new IllegalArgumentException();
             } catch (IllegalArgumentException e) {
                 throw new ImportError("کلید بررسی ML-DSA در لینک نامعتبر است");
             }
         }
         String fingerprint = options.getOrDefault("fp", "");
+        if (!fingerprint.matches("[A-Za-z0-9_-]{0,64}"))
+            throw new ImportError("مقدار Fingerprint نامعتبر است");
+        String spiderX = options.getOrDefault("spx", "");
+        if (spiderX.length() > 4096)
+            throw new ImportError("مقدار SpiderX بیش از حد طولانی است");
         JSONObject reality = new JSONObject().put("serverName", name).put("password", key)
                 .put("shortId", shortId).put("fingerprint", fingerprint.isEmpty() ? "chrome" : fingerprint)
-                .put("spiderX", options.getOrDefault("spx", ""));
+                .put("spiderX", spiderX);
         if (!verificationKey.isEmpty()) reality.put("mldsa65Verify", verificationKey);
         JSONObject stream = new JSONObject().put("network", "raw")
                 .put("security", "reality").put("realitySettings", reality);
         JSONObject user = new JSONObject().put("id", id).put("flow", flow).put("encryption", "none");
-        JSONObject server = new JSONObject().put("address", uri.getHost()).put("port", uri.getPort())
+        JSONObject server = new JSONObject().put("address", host).put("port", port)
                 .put("users", new JSONArray().put(user));
         JSONObject outbound = new JSONObject().put("protocol", "vless").put("streamSettings", stream)
                 .put("settings", new JSONObject().put("vnext", new JSONArray().put(server)));
