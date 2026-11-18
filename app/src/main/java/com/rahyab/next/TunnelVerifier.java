@@ -96,6 +96,32 @@ public final class TunnelVerifier {
         }
     }
 
+    /** Xray can confirm HTTPS even if the IP-reporting endpoint is unavailable. */
+    static boolean verifyXray(Context context) {
+        if (verify(context).verified) return true;
+        if (Thread.currentThread().isInterrupted()) return false;
+        ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
+        if (manager == null) return false;
+        Network vpn = manager.getActiveNetwork();
+        NetworkCapabilities capabilities = vpn == null ? null : manager.getNetworkCapabilities(vpn);
+        if (capabilities == null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return false;
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) vpn.openConnection(
+                    new URL("https://cp.cloudflare.com/generate_204"), java.net.Proxy.NO_PROXY);
+            connection.setConnectTimeout(3500);
+            connection.setReadTimeout(3500);
+            connection.setUseCaches(false);
+            connection.setInstanceFollowRedirects(false);
+            return connection.getResponseCode() == HttpURLConnection.HTTP_NO_CONTENT
+                    && vpn.equals(manager.getActiveNetwork());
+        } catch (IOException | RuntimeException ignored) {
+            return false;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
     /** Short sample used to compare verified tunnels, in kilobits per second. */
     public static long sampleDownloadKbps(Context context) {
         ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);

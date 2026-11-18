@@ -128,12 +128,12 @@ public final class XrayVpnService extends VpnService {
                     if (stopping || protectionFailed) return;
                     event("engine_started");
                     verifier.execute(() -> {
-                        TunnelVerifier.Result result = TunnelVerifier.verify(this);
-                        long speed = measureQuality && result.verified && !stopping
+                        boolean verified = TunnelVerifier.verifyXray(this);
+                        long speed = measureQuality && verified && !stopping
                                 ? TunnelVerifier.sampleDownloadKbps(this) : -1L;
                         main.post(() -> {
                             if (stopping || protectionFailed) return;
-                            if (result.verified) {
+                            if (verified) {
                                 downloadKbps = speed;
                                 event("verified");
                                 if (measureQuality) {
@@ -144,7 +144,7 @@ public final class XrayVpnService extends VpnService {
                                 }
                             } else shutdown("https_failed");
                         });
-                        if (result.verified && !stopping) {
+                        if (verified && !stopping) {
                             String youtubeResult = TunnelVerifier.probeYouTube(this);
                             main.post(() -> {
                                 if (!stopping && !protectionFailed) broadcastState(youtubeResult);
@@ -178,10 +178,11 @@ public final class XrayVpnService extends VpnService {
                 if (stopping) return;
                 if (media != 0) {
                     failedChecks = 0;
+                    if (speed > 0) downloadKbps = speed;
                     if ("health_retry".equals(lastState) || "health_degraded".equals(lastState)) {
                         publishConnectionState("verified", "دسترسی دوباره برقرار شد");
                     }
-                    if (measureSpeed && assessSpeed(speed)) return;
+                    if (measureSpeed && assessSpeed(speed, media)) return;
                     scheduleHealthCheck(HEALTH_INTERVAL_MS);
                 } else if (++failedChecks == 1) {
                     firstSlowSpeed = -1;
@@ -190,7 +191,7 @@ public final class XrayVpnService extends VpnService {
                     }
                     scheduleHealthCheck(HEALTH_RECHECK_MS);
                 } else if (recoveryRounds < MAX_RECOVERY_ROUNDS) {
-                    recoverRelay(-1);
+                    recoverRelay(-1, 3);
                 } else {
                     markDegraded();
                 }
@@ -198,14 +199,14 @@ public final class XrayVpnService extends VpnService {
         });
     }
 
-    private boolean assessSpeed(long speed) {
+    private boolean assessSpeed(long speed, int media) {
         if (speed > 0) downloadKbps = speed;
         broadcastState(speed > 0 ? "quality_sample" : "quality_sample_unavailable");
         if (isSlow(speed)) {
             if (firstSlowSpeed > 0) {
                 long baseline = Math.max(firstSlowSpeed, speed);
                 firstSlowSpeed = -1;
-                recoverRelay(baseline);
+                recoverRelay(baseline, media);
                 return true;
             }
             firstSlowSpeed = speed;
@@ -228,7 +229,11 @@ public final class XrayVpnService extends VpnService {
         return baseline > 0 && candidate >= baseline + Math.max(150L, (baseline + 3L) / 4L);
     }
 
-    private void recoverRelay(long baseline) {
+    static boolean preservesMediaAccess(int required, int observed) {
+        return (observed & required) == required;
+    }
+
+    private void recoverRelay(long baseline, int requiredMedia) {
         boolean qualitySearch = baseline > 0;
         if (qualitySearch) {
             qualityRounds++;
@@ -249,16 +254,36 @@ public final class XrayVpnService extends VpnService {
                 PublicProxyProvider.XraySources feed = PublicProxyProvider.fetchXray(
                         url -> underlyingNetwork.openConnection(url, java.net.Proxy.NO_PROXY),
                         () -> stopping, excluded, RECOVERY_CANDIDATES);
+                reportRecovery("گزینه‌های جایگزین دریافت‌شده: " + feed.candidates().size());
+                int attempt = 0;
                 for (String candidate : feed.candidates()) {
                     if (stopping) return;
+                    String label = "گزینه " + (++attempt) + " — ";
                     String relayKey = XrayProfile.relayKey(candidate);
                     attempted.add(relayKey);
                     switched = true;
-                    if (!restartCore(candidate, fd) || stopping || !TunnelVerifier.verify(this).verified) continue;
+                    if (!restartCore(candidate, fd)) {
+                        reportRecovery(label + "راه‌اندازی موتور ناموفق");
+                        continue;
+                    }
+                    if (stopping) return;
+                    if (!TunnelVerifier.verifyXray(this)) {
+                        reportRecovery(label + "آزمون HTTPS ناموفق");
+                        continue;
+                    }
                     long candidateSpeed = qualitySearch && !stopping
                             ? TunnelVerifier.sampleDownloadKbps(this) : -1;
-                    if ((qualitySearch && !improvesSpeed(baseline, candidateSpeed)) || stopping
-                            || TunnelVerifier.probeXrayMedia(this) != 3) continue;
+                    if (qualitySearch && !improvesSpeed(baseline, candidateSpeed)) {
+                        reportRecovery(label + (candidateSpeed > 0
+                                ? "بهبود سرعت کافی نبود (" + candidateSpeed + " کیلوبیت‌برثانیه)"
+                                : "نمونهٔ سرعت در دسترس نبود"));
+                        continue;
+                    }
+                    if (stopping) return;
+                    if (!preservesMediaAccess(requiredMedia, TunnelVerifier.probeXrayMedia(this))) {
+                        reportRecovery(label + "دسترسی لازم به سرویس‌های ویدیو تأیید نشد");
+                        continue;
+                    }
                     attempted.remove(relayKey);
                     main.post(() -> {
                         if (stopping) return;
@@ -272,17 +297,20 @@ public final class XrayVpnService extends VpnService {
                     return;
                 }
             } catch (Exception ignored) {
-                // Keep source URLs, server addresses and configuration out of diagnostics.
+                reportRecovery("دریافت یا پردازش گزینه‌های جایگزین ناموفق بود");
             }
             if (stopping) return;
             boolean restored = !switched || restartCore(previous, fd);
-            boolean previousVerified = qualitySearch && restored && !stopping
-                    && (!switched || TunnelVerifier.verify(this).verified);
+            boolean previousVerified = restored && !stopping
+                    && ((!switched && qualitySearch) || TunnelVerifier.verifyXray(this));
+            if (switched) reportRecovery(previousVerified
+                    ? "بازگشت به سرور قبلی؛ HTTPS تأیید شد"
+                    : "بازگشت به سرور قبلی؛ HTTPS تأیید نشد");
             main.post(() -> {
                 if (stopping) return;
                 if (!restored) {
                     shutdown("recovery_failed");
-                } else if (!previousVerified) {
+                } else if (!qualitySearch || !previousVerified) {
                     markDegraded();
                 } else {
                     downloadKbps = baseline;
@@ -292,6 +320,11 @@ public final class XrayVpnService extends VpnService {
                 }
             });
         });
+    }
+
+    private void reportRecovery(String message) {
+        if (!stopping) sendBroadcast(new Intent(EVENT).setPackage(getPackageName())
+                .putExtra("state", "recovery_detail").putExtra("detail", message));
     }
 
     private boolean restartCore(String config, int fd) {

@@ -76,6 +76,10 @@ public class MainActivity extends Activity {
                         "recovered", "health_degraded", "quality_search", "quality_low" -> true;
                 default -> false;
             }) return;
+            if ("recovery_detail".equals(state)) {
+                if (!xrayStopping) appendAppDiagnostic("Xray", intent.getStringExtra("detail"));
+                return;
+            }
             if (state.startsWith("youtube_")) {
                 if (!xrayStopping) appendAppDiagnostic("Xray", state);
                 return;
@@ -99,7 +103,9 @@ public class MainActivity extends Activity {
                         smartBusy = false;
                     }
                     publishDiscoveryStatus(speed > 0
-                            ? "اتصال Xray برقرار شد؛ نمونهٔ دانلود " + speed + " کیلوبیت‌برثانیه"
+                            ? (speed < TunnelVerifier.DOWNLOAD_TARGET_KBPS
+                                    ? "Xray وصل شد؛ سرعت پایین است: " : "Xray وصل شد؛ نمونهٔ دانلود: ")
+                                    + speed + " کیلوبیت‌برثانیه"
                             : "عبور HTTPS با Xray تأیید شد", "connected");
                     break;
                 case "health_retry":
