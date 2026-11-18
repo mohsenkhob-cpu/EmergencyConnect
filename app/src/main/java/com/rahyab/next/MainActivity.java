@@ -670,6 +670,9 @@ public class MainActivity extends Activity {
         discoveryButton = engineButton(bottomEngines, "OpenVPN", this::startSmartOpenVpnSearch);
         smartSingBoxButton = engineButton(topEngines, "sing-box", this::startSmartSingBox);
         smartWireGuardButton = engineButton(bottomEngines, "WireGuard", this::startWireGuardSearch);
+
+        Button xrayFinder = engineButton(bottomEngines, "فایل‌یاب Xray", this::showXrayFinder);
+        xrayFinder.setContentDescription("فایل‌یاب هوشمند Xray");
         sstpButton = engineButton(topEngines, "SSTP", this::discoverSstp);
 
         LinearLayout advancedPanel = new LinearLayout(this);
@@ -784,20 +787,6 @@ public class MainActivity extends Activity {
         advancedPanel.addView(xrayButton);
         xrayButton.setOnClickListener(v -> showXrayImport());
 
-        Button xrayFinder = new Button(this);
-        xrayFinder.setText("فایل‌یاب هوشمند Xray");
-        advancedPanel.addView(xrayFinder);
-        xrayFinder.setOnClickListener(v -> {
-            if (!canStartManualVpn()) return;
-            new AlertDialog.Builder(this).setTitle("فایل‌یاب هوشمند Xray")
-                    .setItems(new String[]{"پیدا کردن و آزمون سرور آنلاین", "انتخاب فایل از گوشی"},
-                            (dialog, item) -> {
-                                if (item == 0) startXrayDiscovery();
-                                else startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                                        .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQUEST_XRAY_FILE);
-                            }).setNegativeButton("انصراف", null).show();
-        });
-
         Button savedServersButton = new Button(this);
         savedServersButton.setText("فهرست سرورهای ذخیره‌شده");
         savedServersButton.setAllCaps(false);
@@ -840,6 +829,17 @@ public class MainActivity extends Activity {
         row.addView(button, dimensions);
         button.setOnClickListener(v -> action.run());
         return button;
+    }
+
+    private void showXrayFinder() {
+        if (!canStartManualVpn()) return;
+        new AlertDialog.Builder(this).setTitle("فایل‌یاب هوشمند Xray")
+                .setItems(new String[]{"پیدا کردن و آزمون سرور آنلاین", "انتخاب فایل از گوشی"},
+                        (dialog, item) -> {
+                            if (item == 0) startXrayDiscovery();
+                            else startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                                    .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQUEST_XRAY_FILE);
+                        }).setNegativeButton("انصراف", null).show();
     }
 
     private void startWireGuardSearch() {
