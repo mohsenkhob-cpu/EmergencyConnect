@@ -63,11 +63,6 @@ public class MainActivity extends Activity {
     private int xrayTrialCount;
     private int xrayTrialIndex;
     private String pendingXrayConfig;
-    private String currentXrayTrial;
-    private String bestXrayTrial;
-    private long bestXraySpeed;
-    private boolean xrayRestoringBest;
-    private boolean xrayQualityRetryPending;
     private boolean xrayBusy;
     private boolean xrayStopping;
     private boolean xrayReceiverRegistered;
@@ -78,11 +73,17 @@ public class MainActivity extends Activity {
             if (state == null) return;
             if (xrayStopping && switch (state) {
                 case "starting", "engine_started", "verified", "health_retry", "recovering",
-                        "recovered", "health_degraded" -> true;
+                        "recovered", "health_degraded", "quality_search", "quality_low" -> true;
                 default -> false;
             }) return;
             if (state.startsWith("youtube_")) {
                 if (!xrayStopping) appendAppDiagnostic("Xray", state);
+                return;
+            }
+            if (state.startsWith("quality_sample")) {
+                long speed = intent.getLongExtra("download_kbps", -1);
+                appendAppDiagnostic("Xray", "quality_sample".equals(state)
+                        ? "نمونهٔ دانلود: " + speed + " کیلوبیت‌برثانیه" : "نمونهٔ دانلود در دسترس نبود");
                 return;
             }
             appendAppDiagnostic("Xray", state);
@@ -92,10 +93,8 @@ public class MainActivity extends Activity {
                     publishDiscoveryStatus("موتور Xray آماده شد؛ در حال آزمون HTTPS…", "searching");
                     break;
                 case "verified":
-                    if (xrayQualityRetryPending) return;
                     long speed = intent.getLongExtra("download_kbps", -1);
                     if (xrayTrialCount > 0) {
-                        if (tryFasterXray(speed)) return;
                         clearXrayTrials();
                         smartBusy = false;
                     }
@@ -109,8 +108,17 @@ public class MainActivity extends Activity {
                 case "recovering":
                     publishDiscoveryStatus("دسترسی قطع شده؛ در حال آزمون سرور جایگزین Xray…", "searching");
                     break;
+                case "quality_search":
+                    publishDiscoveryStatus("سرعت اتصال پایین است؛ در حال آزمون سرور سریع‌تر Xray…", "searching");
+                    break;
+                case "quality_low":
+                    publishDiscoveryStatus("سرعت اتصال Xray پایین است؛ سرور سریع‌تری پیدا نشد", "connected");
+                    break;
                 case "recovered":
-                    publishDiscoveryStatus("سرور جایگزین Xray وصل شد؛ دسترسی HTTPS تأیید شد", "connected");
+                    long recoveredSpeed = intent.getLongExtra("download_kbps", -1);
+                    publishDiscoveryStatus(recoveredSpeed > 0
+                            ? "سرور جایگزین Xray وصل شد؛ نمونهٔ دانلود " + recoveredSpeed + " کیلوبیت‌برثانیه"
+                            : "سرور جایگزین Xray وصل شد؛ دسترسی HTTPS تأیید شد", "connected");
                     break;
                 case "health_degraded":
                     publishDiscoveryStatus("دسترسی تأیید نشد؛ سرور جایگزین مناسب پیدا نشد", "failed");
@@ -118,12 +126,9 @@ public class MainActivity extends Activity {
                 default:
                     xrayBusy = false;
                     xrayStopping = false;
-                    xrayQualityRetryPending = false;
                     getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
-                    if (xrayTrialCount > 0 && !xrayRestoringBest &&
-                            ("quality_retry".equals(state) || "https_failed".equals(state)
-                                    || "core_config_failed".equals(state))
-                            && (!xrayCandidates.isEmpty() || bestXrayTrial != null)) {
+                    if (xrayTrialCount > 0 && !xrayCandidates.isEmpty()
+                            && ("https_failed".equals(state) || "core_config_failed".equals(state))) {
                         int attempt = smartAttempt;
                         retryXrayAfterTunnelCloses(attempt, 0);
                         return;
@@ -133,7 +138,7 @@ public class MainActivity extends Activity {
                         smartBusy = false;
                     }
                     String message = switch (state) {
-                        case "stopped", "quality_retry" -> "اتصال Xray قطع شد";
+                        case "stopped" -> "اتصال Xray قطع شد";
                         case "recovery_failed" -> "راه‌اندازی دوبارهٔ Xray ناموفق بود";
                         case "https_failed" -> "آزمون HTTPS در تونل Xray ناموفق بود";
                         case "protect_failed" -> "جداسازی سوکت خروجی Xray ناموفق بود";
@@ -146,8 +151,7 @@ public class MainActivity extends Activity {
                         case "core_config_failed" -> "موتور Xray تنظیمات اتصال را نپذیرفت";
                         default -> "راه‌اندازی موتور Xray ناموفق بود";
                     };
-                    publishDiscoveryStatus(message, ("stopped".equals(state) || "quality_retry".equals(state))
-                            ? "disconnected" : "failed");
+                    publishDiscoveryStatus(message, "stopped".equals(state) ? "disconnected" : "failed");
                     break;
             }
         }
@@ -1580,26 +1584,6 @@ public class MainActivity extends Activity {
         });
     }
 
-    private boolean tryFasterXray(long speed) {
-        if (xrayRestoringBest || speed >= TunnelVerifier.DOWNLOAD_TARGET_KBPS) return false;
-        if (bestXrayTrial == null || speed > bestXraySpeed) {
-            bestXrayTrial = currentXrayTrial;
-            bestXraySpeed = speed;
-        }
-        if (xrayCandidates.isEmpty() && java.util.Objects.equals(currentXrayTrial, bestXrayTrial)) return false;
-        appendAppDiagnostic("Xray", speed < 0 ? "نمونهٔ دانلود در دسترس نبود"
-                : "نمونهٔ دانلود: " + speed + " کیلوبیت‌برثانیه");
-        try {
-            startService(new Intent(this, XrayVpnService.class).setAction(XrayVpnService.STOP)
-                    .putExtra("quality_retry", true));
-            xrayQualityRetryPending = true;
-            publishDiscoveryStatus("در حال بررسی سرور سریع‌تر Xray…", "searching");
-            return true;
-        } catch (RuntimeException ignored) {
-            return false;
-        }
-    }
-
     private void retryXrayAfterTunnelCloses(int attempt, int waits) {
         new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
             if (isDestroyed() || attempt != smartAttempt || xrayTrialCount == 0) return;
@@ -1611,8 +1595,7 @@ public class MainActivity extends Activity {
                 }
                 return;
             }
-            xrayRestoringBest = xrayCandidates.isEmpty();
-            pendingXrayConfig = xrayRestoringBest ? bestXrayTrial : xrayCandidates.removeFirst();
+            pendingXrayConfig = xrayCandidates.removeFirst();
             startXray();
         }, 300);
     }
@@ -1621,10 +1604,6 @@ public class MainActivity extends Activity {
         xrayCandidates.clear();
         xrayTrialCount = 0;
         xrayTrialIndex = 0;
-        currentXrayTrial = null;
-        bestXrayTrial = null;
-        bestXraySpeed = -1L;
-        xrayRestoringBest = false;
     }
 
     private void requestXrayPermission() {
@@ -1648,11 +1627,9 @@ public class MainActivity extends Activity {
             ++smartAttempt;
         }
         xrayBusy = true;
-        currentXrayTrial = automatic ? config : null;
         getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "Xray").apply();
         publishDiscoveryStatus(automatic
-                ? (xrayRestoringBest ? "در حال اتصال دوباره به بهترین سرور Xray…"
-                        : "آزمون سرور Xray " + (++xrayTrialIndex) + " از " + xrayTrialCount)
+                ? "آزمون سرور Xray " + (++xrayTrialIndex) + " از " + xrayTrialCount
                 : "در حال راه‌اندازی Xray آزمایشی…", "searching");
         try {
             startForegroundService(new Intent(this, XrayVpnService.class).putExtra("config", config)

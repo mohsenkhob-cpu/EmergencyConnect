@@ -26,6 +26,7 @@ public final class XrayVpnService extends VpnService {
     static final String STATUS = "com.mohsen.filter.XRAY_STATUS";
     private static final long HEALTH_INTERVAL_MS = 40_000L;
     private static final long HEALTH_RECHECK_MS = 12_000L;
+    private static final long QUALITY_INTERVAL_MS = 90_000L;
     private static final long RECOVERY_PAUSE_MS = 90_000L;
     private static final int MAX_RECOVERY_ROUNDS = 2;
     private static final int RECOVERY_CANDIDATES = 3;
@@ -34,7 +35,11 @@ public final class XrayVpnService extends VpnService {
     private Network underlyingNetwork;
     private int failedChecks;
     private int recoveryRounds;
+    private int qualityRounds;
+    private long firstSlowSpeed = -1;
+    private long nextQualityCheckAt;
     private final java.util.Set<String> failedRelays = new java.util.HashSet<>();
+    private final java.util.Set<String> slowRelays = new java.util.HashSet<>();
     private final Runnable healthCheck = this::checkMediaHealth;
     private Notification.Builder connectionNotification;
     private long downloadKbps = -1;
@@ -53,8 +58,7 @@ public final class XrayVpnService extends VpnService {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null || STOP.equals(intent.getAction())) {
-            shutdown(intent != null && intent.getBooleanExtra("quality_retry", false)
-                    ? "quality_retry" : "stopped");
+            shutdown("stopped");
             return START_NOT_STICKY;
         }
         if (STATUS.equals(intent.getAction())) {
@@ -132,7 +136,12 @@ public final class XrayVpnService extends VpnService {
                             if (result.verified) {
                                 downloadKbps = speed;
                                 event("verified");
-                                if (measureQuality) scheduleHealthCheck(HEALTH_INTERVAL_MS);
+                                if (measureQuality) {
+                                    if (isSlow(speed)) firstSlowSpeed = speed;
+                                    nextQualityCheckAt = android.os.SystemClock.elapsedRealtime()
+                                            + (isSlow(speed) ? HEALTH_RECHECK_MS : QUALITY_INTERVAL_MS);
+                                    scheduleHealthCheck(isSlow(speed) ? HEALTH_RECHECK_MS : HEALTH_INTERVAL_MS);
+                                }
                             } else shutdown("https_failed");
                         });
                         if (result.verified && !stopping) {
@@ -159,8 +168,12 @@ public final class XrayVpnService extends VpnService {
 
     private void checkMediaHealth() {
         if (stopping) return;
+        boolean measureSpeed = qualityRounds < MAX_RECOVERY_ROUNDS
+                && android.os.SystemClock.elapsedRealtime() >= nextQualityCheckAt;
         verifier.execute(() -> {
             int media = TunnelVerifier.probeXrayMedia(this);
+            long speed = measureSpeed && media != 0 && !stopping
+                    ? TunnelVerifier.sampleDownloadKbps(this) : -1;
             main.post(() -> {
                 if (stopping) return;
                 if (media != 0) {
@@ -168,14 +181,16 @@ public final class XrayVpnService extends VpnService {
                     if ("health_retry".equals(lastState) || "health_degraded".equals(lastState)) {
                         publishConnectionState("verified", "دسترسی دوباره برقرار شد");
                     }
+                    if (measureSpeed && assessSpeed(speed)) return;
                     scheduleHealthCheck(HEALTH_INTERVAL_MS);
                 } else if (++failedChecks == 1) {
+                    firstSlowSpeed = -1;
                     if (!"health_degraded".equals(lastState)) {
                         publishConnectionState("health_retry", "در حال بررسی دوبارهٔ دسترسی به یوتیوب و اینستاگرام");
                     }
                     scheduleHealthCheck(HEALTH_RECHECK_MS);
                 } else if (recoveryRounds < MAX_RECOVERY_ROUNDS) {
-                    recoverRelay();
+                    recoverRelay(-1);
                 } else {
                     markDegraded();
                 }
@@ -183,47 +198,98 @@ public final class XrayVpnService extends VpnService {
         });
     }
 
-    private void recoverRelay() {
-        recoveryRounds++;
-        publishConnectionState("recovering", "دسترسی قطع شده؛ در حال آزمون سرور جایگزین Xray");
+    private boolean assessSpeed(long speed) {
+        if (speed > 0) downloadKbps = speed;
+        broadcastState(speed > 0 ? "quality_sample" : "quality_sample_unavailable");
+        if (isSlow(speed)) {
+            if (firstSlowSpeed > 0) {
+                long baseline = Math.max(firstSlowSpeed, speed);
+                firstSlowSpeed = -1;
+                recoverRelay(baseline);
+                return true;
+            }
+            firstSlowSpeed = speed;
+            nextQualityCheckAt = android.os.SystemClock.elapsedRealtime() + HEALTH_RECHECK_MS;
+            scheduleHealthCheck(HEALTH_RECHECK_MS);
+            return true;
+        }
+        firstSlowSpeed = -1;
+        nextQualityCheckAt = android.os.SystemClock.elapsedRealtime() + QUALITY_INTERVAL_MS;
+        if (speed > 0 && "quality_low".equals(lastState))
+            publishConnectionState("verified", "سرعت اتصال Xray بهتر شد");
+        return false;
+    }
+
+    private static boolean isSlow(long speed) {
+        return speed > 0 && speed < TunnelVerifier.DOWNLOAD_TARGET_KBPS;
+    }
+
+    static boolean improvesSpeed(long baseline, long candidate) {
+        return baseline > 0 && candidate >= baseline + Math.max(150L, (baseline + 3L) / 4L);
+    }
+
+    private void recoverRelay(long baseline) {
+        boolean qualitySearch = baseline > 0;
+        if (qualitySearch) {
+            qualityRounds++;
+            publishConnectionState("quality_search", "سرعت پایین است؛ در حال آزمون سرور سریع‌تر Xray");
+        } else {
+            recoveryRounds++;
+            publishConnectionState("recovering", "دسترسی قطع شده؛ در حال آزمون سرور جایگزین Xray");
+        }
         String previous = activeConfig;
         int fd = tun.getFd();
         verifier.execute(() -> {
             boolean switched = false;
             try {
-                failedRelays.add(XrayProfile.relayKey(previous));
+                java.util.Set<String> attempted = qualitySearch ? slowRelays : failedRelays;
+                attempted.add(XrayProfile.relayKey(previous));
+                java.util.Set<String> excluded = new java.util.HashSet<>(failedRelays);
+                excluded.addAll(attempted);
                 PublicProxyProvider.Result feed = PublicProxyProvider.fetch(
                         url -> underlyingNetwork.openConnection(url, java.net.Proxy.NO_PROXY),
                         () -> stopping);
-                for (String candidate : XrayProfile.fromPublicFeed(feed.profile, failedRelays, RECOVERY_CANDIDATES)) {
+                for (String candidate : XrayProfile.fromPublicFeed(feed.profile, excluded, RECOVERY_CANDIDATES)) {
                     if (stopping) return;
                     String relayKey = XrayProfile.relayKey(candidate);
-                    failedRelays.add(relayKey);
+                    attempted.add(relayKey);
                     switched = true;
-                    if (restartCore(candidate, fd) && !stopping
-                            && TunnelVerifier.verify(this).verified && !stopping
-                            && TunnelVerifier.probeXrayMedia(this) == 3) {
-                        failedRelays.remove(relayKey);
-                        main.post(() -> {
-                            if (stopping) return;
-                            activeConfig = candidate;
-                            failedChecks = 0;
-                            downloadKbps = -1;
-                            publishConnectionState("recovered", "سرور جایگزین Xray وصل شد");
-                            scheduleHealthCheck(HEALTH_INTERVAL_MS);
-                        });
-                        return;
-                    }
+                    if (!restartCore(candidate, fd) || stopping || !TunnelVerifier.verify(this).verified) continue;
+                    long candidateSpeed = qualitySearch && !stopping
+                            ? TunnelVerifier.sampleDownloadKbps(this) : -1;
+                    if ((qualitySearch && !improvesSpeed(baseline, candidateSpeed)) || stopping
+                            || TunnelVerifier.probeXrayMedia(this) != 3) continue;
+                    attempted.remove(relayKey);
+                    main.post(() -> {
+                        if (stopping) return;
+                        activeConfig = candidate;
+                        failedChecks = 0;
+                        downloadKbps = candidateSpeed;
+                        nextQualityCheckAt = android.os.SystemClock.elapsedRealtime() + QUALITY_INTERVAL_MS;
+                        publishConnectionState("recovered", "سرور جایگزین Xray وصل شد");
+                        scheduleHealthCheck(HEALTH_INTERVAL_MS);
+                    });
+                    return;
                 }
             } catch (Exception ignored) {
                 // Keep source URLs, server addresses and configuration out of diagnostics.
             }
             if (stopping) return;
             boolean restored = !switched || restartCore(previous, fd);
+            boolean previousVerified = qualitySearch && restored && !stopping
+                    && (!switched || TunnelVerifier.verify(this).verified);
             main.post(() -> {
                 if (stopping) return;
-                if (restored) markDegraded();
-                else shutdown("recovery_failed");
+                if (!restored) {
+                    shutdown("recovery_failed");
+                } else if (!previousVerified) {
+                    markDegraded();
+                } else {
+                    downloadKbps = baseline;
+                    nextQualityCheckAt = android.os.SystemClock.elapsedRealtime() + RECOVERY_PAUSE_MS;
+                    publishConnectionState("quality_low", "سرعت پایین است؛ سرور سریع‌تری پیدا نشد");
+                    scheduleHealthCheck(HEALTH_INTERVAL_MS);
+                }
             });
         });
     }
