@@ -105,7 +105,7 @@ public final class TunnelVerifier {
                 lastFailure = "DNS سرویس بررسی " + (index + 1) + " پاسخ نداد";
             } catch (java.net.SocketTimeoutException e) {
                 lastFailure = "مهلت پاسخ سرویس بررسی " + (index + 1) + " تمام شد";
-            } catch (IOException | RuntimeException e) {
+            } catch (Exception e) {
                 lastFailure = "آزمون HTTPS سرویس بررسی " + (index + 1)
                         + " ناموفق بود (" + e.getClass().getSimpleName() + ")";
             } finally {
@@ -132,7 +132,7 @@ public final class TunnelVerifier {
                     ? new JSONObject(body).optString("ip", "").trim()
                     : body.trim();
             return isPublicAddressLiteral(candidate) ? candidate : null;
-        } catch (RuntimeException error) {
+        } catch (Exception error) {
             return null;
         }
     }
