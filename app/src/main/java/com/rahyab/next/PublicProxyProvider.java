@@ -336,9 +336,11 @@ public final class PublicProxyProvider {
     static ArrayList<String> buildBatches(String profile) throws Exception {
         JSONArray outbounds = new JSONObject(profile).getJSONArray("outbounds");
         ArrayList<String> batches = new ArrayList<>();
-        for (int first = 1; first < outbounds.length(); first += 8) {
+        int relayLimit = outbounds.length();
+        if (relayLimit > 1 && "direct".equals(outbounds.getJSONObject(relayLimit - 1).optString("type"))) relayLimit--;
+        for (int first = 1; first < relayLimit; first += 8) {
             JSONArray nodes = new JSONArray();
-            for (int i = first; i < Math.min(first + 8, outbounds.length()); i++) {
+            for (int i = first; i < Math.min(first + 8, relayLimit); i++) {
                 JSONObject node = outbounds.getJSONObject(i);
                 nodes.put(node);
             }
@@ -347,13 +349,14 @@ public final class PublicProxyProvider {
         // A URLTest group may fail even when an individual relay still works.
         // Probe a small set of actual individual relays after the grouped tests.
         int individual = 0;
-        for (int i = 1; i < outbounds.length() && individual < 5; i++) {
+        for (int i = 1; i < relayLimit && individual < 5; i++) {
             JSONObject node = outbounds.getJSONObject(i);
             if (!"vless".equals(node.optString("type"))
                     && !"trojan".equals(node.optString("type"))) continue;
             JSONObject single = new JSONObject(buildProfile(new JSONArray().put(node)));
             String tag = node.getString("tag");
-            single.put("outbounds", new JSONArray().put(node));
+            single.put("outbounds", new JSONArray().put(node)
+                    .put(new JSONObject().put("type", "direct").put("tag", "direct")));
             single.getJSONObject("route").put("final", tag);
             single.getJSONObject("dns").getJSONArray("servers").getJSONObject(0).put("detour", tag);
             batches.add(withResolver(single.toString(), individual++));
@@ -369,6 +372,7 @@ public final class PublicProxyProvider {
                 .put("interval", "1m").put("tolerance", 100).put("interrupt_exist_connections", false);
         JSONArray outbounds = new JSONArray().put(group);
         for (int i = 0; i < nodes.length(); i++) outbounds.put(nodes.getJSONObject(i));
+        outbounds.put(new JSONObject().put("type", "direct").put("tag", "direct"));
         JSONObject tun = new JSONObject().put("type", "tun").put("tag", "tun-in")
                 .put("address", new JSONArray().put("172.19.0.1/30")).put("mtu", 1400)
                 .put("auto_route", true).put("strict_route", true).put("stack", "mixed");

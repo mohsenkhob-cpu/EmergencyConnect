@@ -104,6 +104,7 @@ public final class RahYabVpnService extends VpnService {
     private volatile long lastAutoFailoverAtMs;
     private static final long RECENT_RELAY_MAX_AGE_MS = 6 * 60 * 60 * 1000L;
     private volatile long searchNetworkHandle;
+    private volatile int searchTransport = -1;
     private final AtomicBoolean failoverQueued = new AtomicBoolean(false);
     private final java.util.Set<String> triedServerEndpoints = new java.util.HashSet<>();
     private static final String VPN_GATE_API = "https://www.vpngate.net/api/iphone/";
@@ -389,6 +390,7 @@ public final class RahYabVpnService extends VpnService {
                 if (profiles != null && !profiles.isEmpty()) {
                     synchronized (triedServerEndpoints) { triedServerEndpoints.clear(); }
                     searchNetworkHandle = activePhysicalNetworkHandle();
+                    searchTransport = RecentRelayStore.physicalTransport(this);
                     prioritizeRecentRelay(profiles);
                     runAutoSearch(profiles, 0, startId);
                 } else {
@@ -970,7 +972,9 @@ public final class RahYabVpnService extends VpnService {
     }
 
     private void rememberVerifiedRelay(String profile, String endpoint) {
-        if (searchNetworkHandle == 0 || endpoint.isEmpty()) return;
+        if (endpoint.isEmpty()) return;
+        RecentRelayStore.save(this, profile, endpoint, profileProtocol(profile), searchTransport);
+        if (searchNetworkHandle == 0) return;
         getSharedPreferences("rah_yab_recent_relay", MODE_PRIVATE).edit()
                 .putLong("network", searchNetworkHandle)
                 .putLong("saved_at", android.os.SystemClock.elapsedRealtime())
@@ -980,6 +984,15 @@ public final class RahYabVpnService extends VpnService {
     }
 
     private void prioritizeRecentRelay(ArrayList<String> profiles) {
+        RecentRelayStore.Entry verified = RecentRelayStore.load(this, searchTransport);
+        if (verified != null) {
+            profiles.removeIf(candidate -> verified.endpoint.equals(profileEndpoint(candidate))
+                    && verified.protocol.equals(profileProtocol(candidate)));
+            profiles.add(0, verified.profile);
+            appendAutoHistory("AUTO_SECURE_VERIFIED_RELAY_FIRST",
+                    "آزمون پروفایل رمزگذاری‌شدهٔ آخرین سرور موفق قبل از فهرست تازه");
+            return;
+        }
         if (searchNetworkHandle == 0) return;
         android.content.SharedPreferences recent =
                 getSharedPreferences("rah_yab_recent_relay", MODE_PRIVATE);

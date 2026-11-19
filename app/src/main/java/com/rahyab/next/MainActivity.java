@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
                 if (!xrayStopping) appendAppDiagnostic("Xray", intent.getStringExtra("detail"));
                 return;
             }
-            if (state.startsWith("youtube_")) {
+            if (state.startsWith("youtube_") || state.startsWith("probe_")) {
                 if (!xrayStopping) appendAppDiagnostic("Xray", state);
                 return;
             }
@@ -244,6 +244,7 @@ public class MainActivity extends Activity {
                 disconnectButton.setEnabled(true);
                 verifyTunnel("sing-box");
             } else if ("TUN_ESTABLISHED".equals(event)) {
+                appendAppDiagnostic("sing-box", detail == null ? "تونل ایجاد شد" : detail);
                 setStatus("تونل اندروید ایجاد شد؛ بررسی عبور واقعی اینترنت لازم است");
                 singBoxConnectButton.setEnabled(true);
                 disconnectButton.setEnabled(true);
@@ -2104,6 +2105,12 @@ public class MainActivity extends Activity {
                         profiles.size() + " پروفایل دریافت شد؛ برای اجازه VPN آماده‌اید", attempt);
             } catch (Exception error) {
                 ArrayList<String> cachedProfiles = loadRecentSmartProfiles();
+                if (cachedProfiles.isEmpty()) {
+                    ir.emergencyconnect.engine.RecentRelayStore.Entry previous =
+                            ir.emergencyconnect.engine.RecentRelayStore.load(this,
+                                    ir.emergencyconnect.engine.RecentRelayStore.physicalTransport(this));
+                    if (previous != null) cachedProfiles.add(previous.profile);
+                }
                 if (!cachedProfiles.isEmpty()) {
                     prepareSmartProfiles(cachedProfiles,
                             "دریافت فهرست تازه ناموفق بود؛ آزمون "

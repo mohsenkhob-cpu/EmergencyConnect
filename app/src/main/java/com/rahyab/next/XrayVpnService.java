@@ -130,6 +130,7 @@ public final class XrayVpnService extends VpnService {
 
                     verifier.execute(() -> {
                         boolean tunnelVerified = TunnelVerifier.verifyXray(this);
+                        if (!tunnelVerified) broadcastState("probe_" + TunnelVerifier.lastXrayProbeStage());
                         String youtubeResult = tunnelVerified && !stopping
                                 ? TunnelVerifier.probeYouTube(this) : "youtube_not_checked";
                         // Do not mark 204-only HTTPS probes as a verified web session.

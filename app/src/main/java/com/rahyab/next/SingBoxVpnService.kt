@@ -394,31 +394,52 @@ class SingBoxVpnService : VpnService() {
         val builder = Builder().setSession("فیلتر محسن").setMtu(options.mtu)
         if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
 
+        var assignedAddresses = 0
+        var advertisedDns = 0
+        var advertisedRoutes = 0
+        val generatedDns = runCatching {
+            JSONObject(profile.orEmpty()).optJSONObject("dns")?.optString("final") == "rah-yab-dns"
+        }.getOrDefault(false)
         val v4 = options.inet4Address
         while (v4.hasNext()) {
             val address = v4.next()
             builder.addAddress(address.address(), address.prefix())
+            assignedAddresses++
         }
         val v6 = options.inet6Address
         while (v6.hasNext()) {
             val address = v6.next()
             builder.addAddress(address.address(), address.prefix())
+            assignedAddresses++
         }
 
         if (options.autoRoute) {
             if (options.dnsMode.value != Libbox.DNSModeDisabled) {
                 val dns = options.dnsServerAddress
-                while (dns.hasNext()) builder.addDnsServer(dns.next())
+                while (dns.hasNext()) {
+                    builder.addDnsServer(dns.next())
+                    advertisedDns++
+                }
+                if (advertisedDns == 0 && generatedDns) {
+                    builder.addDnsServer("172.19.0.2")
+                    advertisedDns++
+                }
             }
             val r4 = options.inet4RouteRange
             while (r4.hasNext()) {
                 val route = r4.next()
                 builder.addRoute(route.address(), route.prefix())
+                advertisedRoutes++
             }
             val r6 = options.inet6RouteRange
             while (r6.hasNext()) {
                 val route = r6.next()
                 builder.addRoute(route.address(), route.prefix())
+                advertisedRoutes++
+            }
+            if (advertisedRoutes == 0 && generatedDns) {
+                builder.addRoute("0.0.0.0", 0)
+                advertisedRoutes++
             }
             val included = options.includePackage
             while (included.hasNext()) builder.addAllowedApplication(included.next())
@@ -429,7 +450,8 @@ class SingBoxVpnService : VpnService() {
         val descriptor = builder.establish() ?: error("Android نتوانست تونل VPN را بسازد")
         tunnel?.close()
         tunnel = descriptor
-        sendEvent(EVENT_TUN_ESTABLISHED)
+        sendEvent(EVENT_TUN_ESTABLISHED,
+            "TUN_PARAMETERS addresses=$assignedAddresses dns=$advertisedDns routes=$advertisedRoutes")
         return descriptor.fd
     }
 

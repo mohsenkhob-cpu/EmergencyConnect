@@ -96,9 +96,21 @@ public final class TunnelVerifier {
         }
     }
 
+    private static volatile String lastXrayProbeStage = "not_checked";
+    static String lastXrayProbeStage() { return lastXrayProbeStage; }
+
     /** Xray can confirm HTTPS even if the IP-reporting endpoint is unavailable. */
     static boolean verifyXray(Context context) {
-        if (verify(context).verified) return true;
+        Result initial = verify(context);
+        if (initial.verified) {
+            lastXrayProbeStage = "ip_https_verified";
+            return true;
+        }
+        String reason = initial.message;
+        lastXrayProbeStage = reason.contains("DNS") ? "dns_failed"
+                : reason.contains("Timeout") || reason.contains("timed out") ? "timeout"
+                : reason.contains("مسیر VPN") ? "vpn_route_missing"
+                : reason.contains("HTTP ") ? "unexpected_http" : "https_path_failed";
         if (Thread.currentThread().isInterrupted()) return false;
         ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
         if (manager == null) return false;
@@ -113,9 +125,18 @@ public final class TunnelVerifier {
             connection.setReadTimeout(3500);
             connection.setUseCaches(false);
             connection.setInstanceFollowRedirects(false);
-            return connection.getResponseCode() == HttpURLConnection.HTTP_NO_CONTENT
+            boolean verified = connection.getResponseCode() == HttpURLConnection.HTTP_NO_CONTENT
                     && vpn.equals(manager.getActiveNetwork());
+            if (verified) lastXrayProbeStage = "cloudflare_204_verified";
+            return verified;
+        } catch (java.net.UnknownHostException error) {
+            lastXrayProbeStage = "dns_failed";
+            return false;
+        } catch (java.net.SocketTimeoutException error) {
+            lastXrayProbeStage = "https_timeout";
+            return false;
         } catch (IOException | RuntimeException ignored) {
+            lastXrayProbeStage = "https_io_failed";
             return false;
         } finally {
             if (connection != null) connection.disconnect();

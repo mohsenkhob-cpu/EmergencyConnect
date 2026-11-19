@@ -388,7 +388,8 @@ public final class SingBoxProfile {
         JSONObject bootstrap = new JSONObject().put("type", "https")
                 .put("tag", "rah-yab-bootstrap").put("server", "1.1.1.1")
                 .put("path", "/dns-query").put("tls", new JSONObject().put("enabled", true)
-                        .put("server_name", "cloudflare-dns.com"));
+                        .put("server_name", "cloudflare-dns.com"))
+                .put("detour", "direct");
         JSONObject route = root.getJSONObject("route");
         route.put("default_domain_resolver", "rah-yab-bootstrap");
         addTunDnsRoute(route);
