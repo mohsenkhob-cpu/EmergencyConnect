@@ -388,8 +388,9 @@ public final class SingBoxProfile {
         JSONObject bootstrap = new JSONObject().put("type", "https")
                 .put("tag", "rah-yab-bootstrap").put("server", "1.1.1.1")
                 .put("path", "/dns-query").put("tls", new JSONObject().put("enabled", true)
-                        .put("server_name", "cloudflare-dns.com"))
-                .put("detour", "direct");
+                        .put("server_name", "cloudflare-dns.com"));
+        // sing-box 1.14 DNS-over-HTTPS uses a direct dialer by default.
+        // An explicit detour to an empty 'direct' outbound fails during startup.
         JSONObject route = root.getJSONObject("route");
         route.put("default_domain_resolver", "rah-yab-bootstrap");
         addTunDnsRoute(route);

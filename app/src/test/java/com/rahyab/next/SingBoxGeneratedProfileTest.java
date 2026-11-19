@@ -6,14 +6,16 @@ import java.util.ArrayList;
 import static org.junit.Assert.*;
 
 public class SingBoxGeneratedProfileTest {
-    @Test public void generatedDnsBootstrapUsesDirectPath() throws Exception {
+    @Test public void generatedDnsBootstrapUsesImplicitDirectDialer() throws Exception {
         JSONObject node = new JSONObject().put("type","vless").put("tag","relay-1")
                 .put("server","203.0.113.10").put("server_port",443);
         JSONObject root = new JSONObject(PublicProxyProvider.buildProfile(new JSONArray().put(node)));
         JSONArray outbounds = root.getJSONArray("outbounds");
         assertEquals("direct",outbounds.getJSONObject(outbounds.length()-1).getString("type"));
-        assertEquals("direct",root.getJSONObject("dns").getJSONArray("servers")
-                .getJSONObject(1).getString("detour"));
+        assertFalse(root.getJSONObject("dns").getJSONArray("servers")
+                .getJSONObject(1).has("detour"));
+        assertEquals("rah-yab-bootstrap", root.getJSONObject("route")
+                .getString("default_domain_resolver"));
         ArrayList<String> batches = PublicProxyProvider.buildBatches(root.toString());
         assertEquals(2,batches.size());
         for (String item : batches) {
@@ -21,6 +23,8 @@ public class SingBoxGeneratedProfileTest {
             JSONArray children = batch.getJSONArray("outbounds");
             assertEquals("direct",children.getJSONObject(children.length()-1).getString("type"));
             assertNotEquals("direct",batch.getJSONObject("route").getString("final"));
+            assertFalse(batch.getJSONObject("dns").getJSONArray("servers")
+                    .getJSONObject(1).has("detour"));
         }
     }
 }

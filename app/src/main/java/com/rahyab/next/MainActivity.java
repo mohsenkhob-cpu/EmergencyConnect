@@ -205,6 +205,7 @@ public class MainActivity extends Activity {
     private String previousSpeedEngine;
     private final ArrayList<String> smartSingBoxBatches = new ArrayList<>();
     private int smartSingBoxBatch;
+    private boolean singBoxAdvancePending;
     private long lastSingBoxVerificationEvent;
     private android.widget.ProgressBar connectionSpinner;
     private Button connectButton;
@@ -252,13 +253,37 @@ public class MainActivity extends Activity {
                 // sing-box may be stopped intentionally while another VPN engine starts.
                 // Do not overwrite the shared VPN status or disable its disconnect control here.
             } else if ("ERROR".equals(event)) {
-                if (smartBusy) advanceSmartSingBox("راه‌اندازی موتور ناموفق بود");
-                else setStatus("خطای sing-box: " + (detail == null ? "نامشخص" : detail));
+                String category = categorizeSingBoxStartError(detail);
+                appendAppDiagnostic("sing-box", "ENGINE_START_FAILED — " + category);
+                getSharedPreferences("rahyab_singbox_status", MODE_PRIVATE).edit()
+                        .putString("verification_stage", "ENGINE_START_FAILED")
+                        .putString("verification_detail", category).apply();
+                if (smartBusy) advanceSmartSingBox(category);
+                else setStatus("خطای sing-box: " + category);
                 singBoxConnectButton.setEnabled(true);
                 disconnectButton.setEnabled(false);
             }
         }
     };
+
+    /**
+     * Record only an error category. Native startup messages can contain
+     * server data or credentials and must not be copied into shared logs.
+     */
+    private static String categorizeSingBoxStartError(String detail) {
+        String value = detail == null ? "" : detail.toLowerCase(java.util.Locale.ROOT);
+        if (value.contains("detour") && value.contains("direct"))
+            return "DNS_INVALID_DIRECT_DETOUR";
+        if (value.contains("dns")) return "DNS_SETUP_FAILED";
+        if (value.contains("tun")) return "TUN_SETUP_FAILED";
+        if (value.contains("permission") || value.contains("protect"))
+            return "ANDROID_VPN_PERMISSION";
+        if (value.contains("initialize") || value.contains("invalid")
+                || value.contains("unknown") || value.contains("parse"))
+            return "PROFILE_CONFIGURATION_INVALID";
+        if (value.contains("timeout") || value.contains("deadline")) return "STARTUP_TIMEOUT";
+        return "ENGINE_START_FAILED_OTHER";
+    }
 
     private final Tunnel wireGuardTunnel = new Tunnel() {
         @Override public String getName() { return "RahYab-WireGuard"; }
@@ -1769,6 +1794,7 @@ public class MainActivity extends Activity {
                     smartSingBoxBatches.clear();
                     smartSingBoxBatches.addAll(batches);
                     smartSingBoxBatch = 0;
+                    singBoxAdvancePending = false;
                     appendAppDiagnostic("sing-box", "منابع: " + result.source
                             + " | سرورهای قابل آزمون: " + result.count);
                     launchSingBoxBatch();
@@ -1783,6 +1809,7 @@ public class MainActivity extends Activity {
     }
 
     private void launchSingBoxBatch() {
+        singBoxAdvancePending = false;
         pendingSingBoxJson = smartSingBoxBatches.get(smartSingBoxBatch);
         publishDiscoveryStatus("آزمون مرحلهٔ " + (smartSingBoxBatch + 1) + " از "
                 + smartSingBoxBatches.size() + " sing-box", "searching");
@@ -1790,10 +1817,21 @@ public class MainActivity extends Activity {
     }
 
     private void advanceSmartSingBox(String failure) {
+        if (!smartBusy || singBoxAdvancePending) return;
+        singBoxAdvancePending = true;
+        final int attempt = smartAttempt;
+        final int failedIndex = smartSingBoxBatch;
+        appendAppDiagnostic("sing-box", "مرحلهٔ " + (failedIndex + 1)
+                + " — " + failure);
+        // The previous libbox service needs time to release its TUN/FD;
+        // immediately starting the next one can produce a misleading cascade.
+        SingBoxVpnService.stop(this);
         if (++smartSingBoxBatch < smartSingBoxBatches.size()) {
-            launchSingBoxBatch();
+            statusRefreshHandler.postDelayed(() -> {
+                if (attempt != smartAttempt || !smartBusy || isDestroyed()) return;
+                launchSingBoxBatch();
+            }, 1500L);
         } else {
-            SingBoxVpnService.requestDisconnect(this);
             completeSmartAttempt("عبور اینترنت با sing-box تأیید نشد: " + failure, false);
         }
     }
