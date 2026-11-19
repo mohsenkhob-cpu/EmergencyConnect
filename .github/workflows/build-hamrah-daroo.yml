@@ -1,0 +1,39 @@
+name: Build Hamrah Daroo Android APK
+on:
+  push:
+    branches:
+      - hamrah-daroo-apk-20261119
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK platform
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Unpack source and build signed debug APK
+        run: |
+          mkdir -p build-hamrah
+          base64 -d hamrah-daroo-source.zip.base64 > /tmp/hamrah.zip
+          unzip -q /tmp/hamrah.zip -d build-hamrah
+          cd build-hamrah
+          gradle --no-daemon --stacktrace :app:assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/Hamrah-Daroo-v1.0.1.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hamrah-Daroo-v1.0.1-APK
+          path: Hamrah-Daroo-v1.0.1.apk
+          if-no-files-found: error
