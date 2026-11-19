@@ -66,6 +66,7 @@ public class MainActivity extends Activity {
     private String activeXrayEndpointKey;
     private boolean xrayBusy;
     private boolean xrayStopping;
+    private boolean xrayTryingAlternative;
     private boolean xrayReceiverRegistered;
     private final BroadcastReceiver xrayReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -98,6 +99,18 @@ public class MainActivity extends Activity {
                     publishDiscoveryStatus("موتور Xray آماده شد؛ در حال آزمون HTTPS…", "searching");
                     break;
                 case "limited":
+                    if (xrayTrialCount > 0 && !xrayCandidates.isEmpty()) {
+                        xrayTryingAlternative = true;
+                        appendAppDiagnostic("Xray", "این سرور فقط اینترنت محدود دارد؛ آزمون گزینه بعدی");
+                        publishDiscoveryStatus("سرور Xray محدود بود؛ در حال بررسی سرور بعدی…", "searching");
+                        try {
+                            startService(new Intent(this, XrayVpnService.class).setAction(XrayVpnService.STOP));
+                        } catch (RuntimeException ignored) {
+                            clearXrayTrials();
+                            smartBusy = false;
+                        }
+                        break;
+                    }
                     if (xrayTrialCount > 0) {
                         clearXrayTrials();
                         smartBusy = false;
@@ -110,6 +123,21 @@ public class MainActivity extends Activity {
                     // HTML availability does not prove working YouTube video playback.
                     // Never award a 'best relay' score from this partial probe.
                     long speed = intent.getLongExtra("download_kbps", -1);
+                    if (xrayTrialCount > 0 && !xrayCandidates.isEmpty()
+                            && (speed <= 0 || speed < 500)) {
+                        xrayTryingAlternative = true;
+                        appendAppDiagnostic("Xray", "صفحه یوتیوب پاسخ داد، اما سرعت نمونه "
+                                + (speed <= 0 ? "نامشخص" : speed + " kbps")
+                                + " است؛ آزمون گزینه بعدی");
+                        publishDiscoveryStatus("سرور Xray کم‌سرعت بود؛ بررسی گزینه بعدی…", "searching");
+                        try {
+                            startService(new Intent(this, XrayVpnService.class).setAction(XrayVpnService.STOP));
+                        } catch (RuntimeException ignored) {
+                            clearXrayTrials();
+                            smartBusy = false;
+                        }
+                        break;
+                    }
                     if (xrayTrialCount > 0) {
                         clearXrayTrials();
                         smartBusy = false;
@@ -149,7 +177,9 @@ public class MainActivity extends Activity {
                     getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
                     if (xrayTrialCount > 0 && !xrayCandidates.isEmpty()
                             && ("https_failed".equals(state) || "media_unverified".equals(state)
-                            || "core_config_failed".equals(state))) {
+                            || "core_config_failed".equals(state)
+                            || ("stopped".equals(state) && xrayTryingAlternative))) {
+                        xrayTryingAlternative = false;
                         int attempt = smartAttempt;
                         retryXrayAfterTunnelCloses(attempt, 0);
                         return;
@@ -755,7 +785,6 @@ public class MainActivity extends Activity {
         page.addView(bottomEngines);
 
         discoveryButton = engineButton(bottomEngines, "OpenVPN", this::startSmartOpenVpnSearch);
-        smartSingBoxButton = engineButton(topEngines, "sing-box", this::startSmartSingBox);
         smartWireGuardButton = engineButton(bottomEngines, "WireGuard", this::startWireGuardSearch);
 
         Button xrayFinder = engineButton(bottomEngines, "فایل‌یاب Xray", this::showXrayFinder);
@@ -779,6 +808,24 @@ public class MainActivity extends Activity {
         buttonParams.topMargin = dp(24);
         advancedPanel.addView(connectButton, buttonParams);
         connectButton.setOnClickListener(v -> chooseWireGuardFile());
+
+        Button vpnBookLink = new Button(this);
+        vpnBookLink.setText("ساخت فایل رایگان WireGuard — VPNBook");
+        vpnBookLink.setAllCaps(false);
+        advancedPanel.addView(vpnBookLink);
+        vpnBookLink.setOnClickListener(v -> openWireGuardWebsite(
+                "https://www.vpnbook.com/freevpn/wireguard-vpn"));
+
+        Button protonLink = new Button(this);
+        protonLink.setText("دریافت فایل WireGuard — Proton VPN");
+        protonLink.setAllCaps(false);
+        advancedPanel.addView(protonLink);
+        protonLink.setOnClickListener(v -> openWireGuardWebsite(
+                "https://protonvpn.com/support/wireguard-configurations"));
+
+        TextView wgHelp = label("VPNBook رایگان است؛ فایل‌ها ۷ روز اعتبار دارند. فایل .conf را دریافت کنید و با دکمه «انتخاب فایل WireGuard» وارد کنید.",
+                12, Color.rgb(235, 190, 115), false);
+        advancedPanel.addView(wgHelp);
 
         Button wireGuardSources = new Button(this);
         wireGuardSources.setText("منابع آنلاین WireGuard");
@@ -834,7 +881,6 @@ public class MainActivity extends Activity {
         singBoxButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
         LinearLayout.LayoutParams singBoxParams = new LinearLayout.LayoutParams(-1, dp(54));
         singBoxParams.topMargin = dp(12);
-        advancedPanel.addView(singBoxButton, singBoxParams);
         singBoxButton.setOnClickListener(v -> chooseSingBoxFile());
 
         Button pasteLinkButton = new Button(this);
@@ -844,7 +890,6 @@ public class MainActivity extends Activity {
         pasteLinkButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
         LinearLayout.LayoutParams pasteLinkParams = new LinearLayout.LayoutParams(-1, dp(54));
         pasteLinkParams.topMargin = dp(8);
-        advancedPanel.addView(pasteLinkButton, pasteLinkParams);
         pasteLinkButton.setOnClickListener(v -> showOtherImportDialog());
 
         Button vlessButton = new Button(this);
@@ -854,7 +899,6 @@ public class MainActivity extends Activity {
         vlessButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
         LinearLayout.LayoutParams vlessParams = new LinearLayout.LayoutParams(-1, dp(54));
         vlessParams.topMargin = dp(8);
-        advancedPanel.addView(vlessButton, vlessParams);
         vlessButton.setOnClickListener(v -> showVlessImportDialog());
 
         singBoxConnectButton = new Button(this);
@@ -865,7 +909,6 @@ public class MainActivity extends Activity {
         singBoxConnectButton.setBackground(shape(Color.rgb(31, 151, 137), 18));
         LinearLayout.LayoutParams singBoxConnectParams = new LinearLayout.LayoutParams(-1, dp(54));
         singBoxConnectParams.topMargin = dp(8);
-        advancedPanel.addView(singBoxConnectButton, singBoxConnectParams);
         singBoxConnectButton.setOnClickListener(v -> { if (canStartManualVpn()) requestSingBoxConnection(); });
 
         Button xrayButton = new Button(this);
@@ -881,7 +924,6 @@ public class MainActivity extends Activity {
         savedServersButton.setBackground(shape(Color.rgb(54, 83, 125), 18));
         LinearLayout.LayoutParams savedParams = new LinearLayout.LayoutParams(-1, dp(54));
         savedParams.topMargin = dp(8);
-        advancedPanel.addView(savedServersButton, savedParams);
         savedServersButton.setOnClickListener(v -> showSavedServers());
 
         Button openVpnFile = new Button(this);
@@ -897,12 +939,21 @@ public class MainActivity extends Activity {
             startActivityForResult(file, REQUEST_OPENVPN_FILE);
         });
 
-        TextView note = label("پروفایل‌های WireGuard، sing-box، VLESS، VMess و Trojan قابل وارد کردن هستند. پشتیبانی هر قالب به ساختار لینک یا فایل بستگی دارد.",
+        TextView note = label("فایل WireGuard و OpenVPN و تنظیمات VLESS/REALITY مخصوص Xray قابل وارد کردن هستند.",
                 12, Color.rgb(235, 190, 115), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
         noteParams.topMargin = dp(24);
         advancedPanel.addView(note, noteParams);
         setContentView(scroll);
+    }
+
+    private void openWireGuardWebsite(String address) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(address))
+                    .addCategory(Intent.CATEGORY_BROWSABLE));
+        } catch (RuntimeException ignored) {
+            setStatus("مرورگری برای بازکردن سایت WireGuard پیدا نشد");
+        }
     }
 
     private Button engineButton(LinearLayout row, String title, Runnable action) {
@@ -1036,6 +1087,9 @@ public class MainActivity extends Activity {
 
     @Override protected void onStart() {
         super.onStart();
+        if ("sing-box".equals(getPreferences(MODE_PRIVATE).getString("selected_engine", ""))) {
+            getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
+        }
         if (!xrayReceiverRegistered) {
             IntentFilter xrayFilter = new IntentFilter(XrayVpnService.EVENT);
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(xrayReceiver, xrayFilter, Context.RECEIVER_NOT_EXPORTED);
@@ -1691,6 +1745,7 @@ public class MainActivity extends Activity {
 
     private void clearXrayTrials() {
         xrayCandidates.clear();
+        xrayTryingAlternative = false;
         xrayTrialCount = 0;
         xrayTrialIndex = 0;
     }

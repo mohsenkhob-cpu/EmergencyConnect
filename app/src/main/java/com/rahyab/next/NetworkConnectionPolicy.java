@@ -29,8 +29,6 @@ final class NetworkConnectionPolicy {
             order.add("OpenVPN");
             order.add("SSTP");
         }
-        // sing-box is experimental until its real exit traffic is confirmed.
-        order.add("sing-box");
         if (validWireGuardProfiles) order.add("WireGuard");
         return order;
     }

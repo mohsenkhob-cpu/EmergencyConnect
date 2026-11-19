@@ -9,12 +9,12 @@ public class NetworkConnectionPolicyTest {
         assertTrue(NetworkConnectionPolicy.isMciOperator("IR-MCI"));
         assertTrue(NetworkConnectionPolicy.isMciOperator("همراه اول"));
         assertFalse(NetworkConnectionPolicy.isMciOperator("Irancell"));
-        assertEquals(List.of("SSTP", "OpenVPN", "sing-box"),
+        assertEquals(List.of("SSTP", "OpenVPN"),
                 NetworkConnectionPolicy.quickOrder(true, false));
     }
 
     @Test public void otherNetworksPreserveVerifiedOpenvpnFirst() {
-        assertEquals(List.of("OpenVPN", "SSTP", "sing-box", "WireGuard"),
+        assertEquals(List.of("OpenVPN", "SSTP", "WireGuard"),
                 NetworkConnectionPolicy.quickOrder(false, true));
     }
 

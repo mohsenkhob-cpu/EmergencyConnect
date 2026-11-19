@@ -13,8 +13,8 @@ android {
         applicationId 'com.mohsen.filter'
         minSdk 26
         targetSdk 35
-        versionCode (ciVersionCode != null ? ciVersionCode.toString().toInteger() : 22)
-        versionName '1.0.21'
+        versionCode (ciVersionCode != null ? ciVersionCode.toString().toInteger() : 23)
+        versionName '1.0.22'
         // Current target phone is ARM64; avoid packaging unused emulator/32-bit ABIs.
         ndk {
             abiFilters 'arm64-v8a'
@@ -34,9 +34,6 @@ dependencies {
     // Official embeddable WireGuard tunnel implementation (Maven Central).
     implementation 'com.wireguard.android:tunnel:1.0.20260102'
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
-
-    // sing-box Android binding; the AAR is fetched by the JitPack build script.
-    implementation 'com.github.singbox-android:libbox:1.14.0'
 
     // Local JVM tests for provider parsing and ranking rules.
     testImplementation 'junit:junit:4.13.2'
