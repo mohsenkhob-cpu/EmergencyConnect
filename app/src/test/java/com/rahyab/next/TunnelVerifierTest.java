@@ -44,7 +44,7 @@ public class TunnelVerifierTest {
     @Test public void multipleHttpsIpEchoFormatsAreSupported() {
         assertEquals("8.8.8.8", TunnelVerifier.decodePublicIp("{\"ip\":\"8.8.8.8\"}", true));
         assertEquals("2001:4860:4860::8888",
-                TunnelVerifier.decodePublicIp("2001:4860:4860::8888\\n", false));
+                TunnelVerifier.decodePublicIp("2001:4860:4860::8888\n", false));
     }
 
     @Test public void ipEchoMustNotAcceptPrivateHostnamesOrHtml() {
