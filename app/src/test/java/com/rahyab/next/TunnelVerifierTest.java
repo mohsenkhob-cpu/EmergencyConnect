@@ -28,6 +28,16 @@ public class TunnelVerifierTest {
         assertTrue(TunnelVerifier.isUsableHtmlResponse(200, "text/html; charset=utf-8", 1024));
     }
 
+    @Test public void redirectsMustRemainOnTrustedHttpsMediaHost() throws Exception {
+        java.net.URL root = new java.net.URL("https://www.youtube.com/");
+        assertTrue(TunnelVerifier.isAllowedMediaRedirect(root, new java.net.URL("https://m.youtube.com/")));
+        assertTrue(TunnelVerifier.isAllowedMediaRedirect(root, new java.net.URL("https://consent.youtube.com/")));
+        assertFalse(TunnelVerifier.isAllowedMediaRedirect(root, new java.net.URL("http://m.youtube.com/")));
+        assertFalse(TunnelVerifier.isAllowedMediaRedirect(root, new java.net.URL("https://youtube.com.evil.test/")));
+        assertFalse(TunnelVerifier.isAllowedMediaRedirect(root, new java.net.URL("https://example.com/")));
+        assertFalse(TunnelVerifier.isAllowedMediaRedirect(root, new java.net.URL("https://www.youtube.com:444/")));
+    }
+
     @Test public void acceptsPublicIpv6Literal() {
         assertTrue(TunnelVerifier.isPublicAddressLiteral("2001:4860:4860::8888"));
     }

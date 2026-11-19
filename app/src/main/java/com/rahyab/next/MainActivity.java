@@ -63,6 +63,7 @@ public class MainActivity extends Activity {
     private int xrayTrialCount;
     private int xrayTrialIndex;
     private String pendingXrayConfig;
+    private String activeXrayEndpointKey;
     private boolean xrayBusy;
     private boolean xrayStopping;
     private boolean xrayReceiverRegistered;
@@ -106,6 +107,11 @@ public class MainActivity extends Activity {
                             "searching");
                     break;
                 case "verified":
+                    if (activeXrayEndpointKey != null) {
+                        getPreferences(MODE_PRIVATE).edit()
+                                .putString("xray_verified_endpoint", activeXrayEndpointKey)
+                                .putLong("xray_verified_at", System.currentTimeMillis()).apply();
+                    }
                     long speed = intent.getLongExtra("download_kbps", -1);
                     if (xrayTrialCount > 0) {
                         clearXrayTrials();
@@ -490,6 +496,8 @@ public class MainActivity extends Activity {
                         + singBoxEvent.getString("last_detail", ""));
         appendReportSection(report, "مرحلهٔ آزمون اینترنت sing-box",
                 singBox.getString("verification_stage", ""));
+        appendReportSection(report, "جزئیات آزمون sing-box",
+                singBox.getString("verification_detail", ""));
         appendReportSection(report, "آخرین خروج فرایند فیلتر محسن به ثبت اندروید",
                 latestProcessExit());
         appendReportSection(report, "ردپای خرابی بومی فیلتر محسن",
@@ -896,8 +904,8 @@ public class MainActivity extends Activity {
 
     private void startWireGuardSearch() {
         String links = getPreferences(MODE_PRIVATE).getString("wireguard_sources", "");
-        if (!links.isEmpty()) fetchWireGuardProfiles(links);
-        else if (!smartWireGuardProfiles.isEmpty()) requestSmartWireGuard();
+        if (!smartWireGuardProfiles.isEmpty()) requestSmartWireGuard();
+        else if (!links.isEmpty()) fetchWireGuardProfiles(links);
         else showWireGuardSources();
     }
 
@@ -912,13 +920,13 @@ public class MainActivity extends Activity {
         quickConnect = true;
         quickWaitingForStop = false;
         remainingEngines.clear();
+        remainingEngines.add("OpenVPN");
         remainingEngines.add("SSTP");
         remainingEngines.add("sing-box");
         if (!smartWireGuardProfiles.isEmpty()
                 || !getPreferences(MODE_PRIVATE).getString("wireguard_sources", "").isEmpty()) {
             remainingEngines.add("WireGuard");
         }
-        remainingEngines.add("OpenVPN");
         tryNextQuickEngine();
     }
 
@@ -1098,12 +1106,23 @@ public class MainActivity extends Activity {
                 if (singBoxStatus != null) {
                     singBoxStatus.edit().putString("verification_stage", "PROBE_STARTED").commit();
                 }
-                TunnelVerifier.Result result = TunnelVerifier.verify(this);
-                boolean engineExited = singBoxProcessExitedAfter(eventTime);
+                TunnelVerifier.Result probeResult = TunnelVerifier.verify(this);
+                boolean processExited = singBoxProcessExitedAfter(eventTime);
+                if (!probeResult.verified && !processExited && verificationAttempt == smartAttempt
+                        && !Thread.currentThread().isInterrupted()) {
+                    android.os.SystemClock.sleep(1500);
+                    if (verificationAttempt == smartAttempt) {
+                        probeResult = TunnelVerifier.verify(this);
+                        processExited = singBoxProcessExitedAfter(eventTime);
+                    }
+                }
+                final TunnelVerifier.Result result = probeResult;
+                final boolean engineExited = processExited;
                 if (singBoxStatus != null) {
                     singBoxStatus.edit().putString("verification_stage",
                             engineExited ? "ENGINE_PROCESS_EXITED"
-                                    : result.verified ? "PROBE_VERIFIED" : "PROBE_FAILED").commit();
+                                    : result.verified ? "PROBE_VERIFIED" : "PROBE_FAILED")
+                            .putString("verification_detail", result.message).commit();
                 }
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed() || verificationAttempt != smartAttempt
@@ -1579,8 +1598,30 @@ public class MainActivity extends Activity {
             try {
                 PublicProxyProvider.XraySources feed = PublicProxyProvider.fetchXray(
                         url -> url.openConnection(java.net.Proxy.NO_PROXY), () -> attempt != smartAttempt,
-                        java.util.Set.of(), 5);
-                java.util.List<String> candidates = feed.candidates();
+                        java.util.Set.of(), 24);
+                java.util.List<String> all = feed.candidates();
+                java.util.List<String> candidates = new java.util.ArrayList<>();
+                if (!all.isEmpty()) {
+                    android.content.SharedPreferences settings = getPreferences(MODE_PRIVATE);
+                    int start = Math.floorMod(settings.getInt("xray_catalog_cursor", 0), all.size());
+                    settings.edit().putInt("xray_catalog_cursor", (start + 5) % all.size()).apply();
+                    for (int offset = 0; offset < all.size() && candidates.size() < 5; offset++) {
+                        candidates.add(all.get((start + offset) % all.size()));
+                    }
+                    String favored = settings.getString("xray_verified_endpoint", "");
+                    long age = System.currentTimeMillis() - settings.getLong("xray_verified_at", 0L);
+                    if (age >= 0 && age < 6 * 60 * 60 * 1000L) {
+                        for (int index = 0; index < all.size(); index++) {
+                            String key = XrayProfile.relayKey(all.get(index));
+                            if (key.equals(favored)) {
+                                candidates.remove(all.get(index));
+                                candidates.add(0, all.get(index));
+                                if (candidates.size() > 5) candidates.remove(candidates.size() - 1);
+                                break;
+                            }
+                        }
+                    }
+                }
                 runOnUiThread(() -> {
                     if (isDestroyed() || attempt != smartAttempt) return;
                     if (candidates.isEmpty()) {
@@ -1647,6 +1688,8 @@ public class MainActivity extends Activity {
             ++smartAttempt;
         }
         xrayBusy = true;
+        try { activeXrayEndpointKey = XrayProfile.relayKey(config); }
+        catch (org.json.JSONException ignored) { activeXrayEndpointKey = null; }
         getPreferences(MODE_PRIVATE).edit().putString("selected_engine", "Xray").apply();
         publishDiscoveryStatus(automatic
                 ? "آزمون سرور Xray " + (++xrayTrialIndex) + " از " + xrayTrialCount
@@ -1756,7 +1799,7 @@ public class MainActivity extends Activity {
 
     private void showWireGuardSources() {
         EditText links = new EditText(this);
-        links.setHint("در هر خط یک لینک مستقیم HTTPS فایل .conf");
+        links.setHint("لینک مستقیم HTTPS فایل .conf (نه صفحهٔ وب)، هر خط یک لینک");
         links.setText(getPreferences(MODE_PRIVATE).getString("wireguard_sources", ""));
         new AlertDialog.Builder(this).setTitle("منابع WireGuard")
                 .setView(links)
@@ -1795,11 +1838,16 @@ public class MainActivity extends Activity {
                 } catch (com.wireguard.config.BadConfigException error) {
                     sourceResults.add("منبع " + checked + " — قالب پروفایل نامعتبر");
                 } catch (java.io.IOException | RuntimeException error) {
-                    // URLs and profile content may contain credentials.
+                    // Never include URL, private keys or profile text in diagnostics.
+                    String code = error.getMessage();
                     String reason = error instanceof java.net.SocketTimeoutException ? "پایان مهلت دریافت"
                             : error instanceof java.net.UnknownHostException ? "خطای DNS"
                             : error instanceof javax.net.ssl.SSLException ? "خطای TLS"
-                            : "نشانی HTTPS نامعتبر یا دریافت ناموفق";
+                            : code != null && code.matches("HTTP [0-9]{3}") ? "خطای " + code
+                            : "HTML_PROFILE".equals(code) ? "لینک صفحه وب است، نه فایل conf"
+                            : "REDIRECT_LIMIT".equals(code) ? "تغییر مسیر بیش از حد"
+                            : "HTTPS_REQUIRED".equals(code) ? "نشانی HTTPS معتبر لازم است"
+                            : "دریافت فایل ناموفق";
                     sourceResults.add("منبع " + checked + " — " + reason);
                 }
             }
@@ -1819,35 +1867,51 @@ public class MainActivity extends Activity {
         });
     }
 
+
     private Config fetchWireGuardProfile(String address)
             throws java.io.IOException, com.wireguard.config.BadConfigException {
         java.net.URL url = new java.net.URL(address);
-        if (!"https".equalsIgnoreCase(url.getProtocol()) || url.getHost().isEmpty()
-                || url.getUserInfo() != null)
-            throw new java.io.IOException("HTTPS required");
-        javax.net.ssl.HttpsURLConnection connection =
-                (javax.net.ssl.HttpsURLConnection) url.openConnection(java.net.Proxy.NO_PROXY);
-        try {
-            connection.setInstanceFollowRedirects(false);
-            connection.setConnectTimeout(5000);
-            connection.setReadTimeout(5000);
-            if (connection.getResponseCode() != 200) throw new java.io.IOException("HTTP error");
-            try (InputStream input = connection.getInputStream();
-                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-                byte[] buffer = new byte[4096];
-                int count;
-                long deadline = android.os.SystemClock.elapsedRealtime() + 8000L;
-                while ((count = input.read(buffer)) != -1) {
-                    if (output.size() + count > 64 * 1024
-                            || android.os.SystemClock.elapsedRealtime() >= deadline)
-                        throw new java.io.IOException("Profile download limit");
-                    output.write(buffer, 0, count);
+        for (int redirect = 0; redirect <= 3; redirect++) {
+            if (!"https".equalsIgnoreCase(url.getProtocol()) || url.getHost().isEmpty()
+                    || url.getUserInfo() != null || url.getHost().endsWith(".local"))
+                throw new java.io.IOException("HTTPS_REQUIRED");
+            javax.net.ssl.HttpsURLConnection connection =
+                    (javax.net.ssl.HttpsURLConnection) url.openConnection(java.net.Proxy.NO_PROXY);
+            try {
+                connection.setInstanceFollowRedirects(false);
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                int code = connection.getResponseCode();
+                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                    String location = connection.getHeaderField("Location");
+                    if (location == null || redirect == 3) throw new java.io.IOException("REDIRECT_LIMIT");
+                    url = new java.net.URL(url, location);
+                    continue;
                 }
-                return Config.parse(new java.io.ByteArrayInputStream(output.toByteArray()));
+                if (code != 200) throw new java.io.IOException("HTTP " + code);
+                try (InputStream input = connection.getInputStream();
+                     ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                    byte[] buffer = new byte[4096];
+                    int count;
+                    long deadline = android.os.SystemClock.elapsedRealtime() + 8000L;
+                    while ((count = input.read(buffer)) != -1) {
+                        if (output.size() + count > 64 * 1024
+                                || android.os.SystemClock.elapsedRealtime() >= deadline)
+                            throw new java.io.IOException("PROFILE_LIMIT");
+                        output.write(buffer, 0, count);
+                    }
+                    byte[] body = output.toByteArray();
+                    String prefix = new String(body, 0, Math.min(body.length, 256),
+                            StandardCharsets.UTF_8).trim().toLowerCase(java.util.Locale.ROOT);
+                    if (prefix.startsWith("<!doctype") || prefix.startsWith("<html"))
+                        throw new java.io.IOException("HTML_PROFILE");
+                    return Config.parse(new java.io.ByteArrayInputStream(body));
+                }
+            } finally {
+                connection.disconnect();
             }
-        } finally {
-            connection.disconnect();
         }
+        throw new java.io.IOException("REDIRECT_LIMIT");
     }
 
     private void requestSmartWireGuard() {
@@ -1880,6 +1944,11 @@ public class MainActivity extends Activity {
                         }
                     }
                     TunnelVerifier.Result result = TunnelVerifier.verify(this);
+                    if (!result.verified && attempt == smartAttempt
+                            && !Thread.currentThread().isInterrupted()) {
+                        android.os.SystemClock.sleep(1200);
+                        if (attempt == smartAttempt) result = TunnelVerifier.verify(this);
+                    }
                     if (attempt != smartAttempt) break;
                     results.append(i + 1).append(" — ").append(result.verified
                             ? "HTTPS تأیید شد"

@@ -336,27 +336,27 @@ public final class PublicProxyProvider {
     static ArrayList<String> buildBatches(String profile) throws Exception {
         JSONArray outbounds = new JSONObject(profile).getJSONArray("outbounds");
         ArrayList<String> batches = new ArrayList<>();
-        JSONObject standalone = null;
         for (int first = 1; first < outbounds.length(); first += 8) {
             JSONArray nodes = new JSONArray();
             for (int i = first; i < Math.min(first + 8, outbounds.length()); i++) {
                 JSONObject node = outbounds.getJSONObject(i);
                 nodes.put(node);
-                JSONObject tls = node.optJSONObject("tls");
-                if (standalone == null && "vless".equals(node.optString("type"))
-                        && "xtls-rprx-vision".equals(node.optString("flow"))
-                        && !node.has("transport") && tls != null && tls.has("reality")) standalone = node;
             }
             batches.add(withResolver(buildProfile(nodes), batches.size()));
         }
-        // Verify one common VLESS profile directly if every URLTest group fails.
-        if (standalone != null) {
-            JSONObject single = new JSONObject(buildProfile(new JSONArray().put(standalone)));
-            String tag = standalone.getString("tag");
-            single.put("outbounds", new JSONArray().put(standalone));
+        // A URLTest group may fail even when an individual relay still works.
+        // Probe a small set of actual individual relays after the grouped tests.
+        int individual = 0;
+        for (int i = 1; i < outbounds.length() && individual < 5; i++) {
+            JSONObject node = outbounds.getJSONObject(i);
+            if (!"vless".equals(node.optString("type"))
+                    && !"trojan".equals(node.optString("type"))) continue;
+            JSONObject single = new JSONObject(buildProfile(new JSONArray().put(node)));
+            String tag = node.getString("tag");
+            single.put("outbounds", new JSONArray().put(node));
             single.getJSONObject("route").put("final", tag);
             single.getJSONObject("dns").getJSONArray("servers").getJSONObject(0).put("detour", tag);
-            batches.add(single.toString());
+            batches.add(withResolver(single.toString(), individual++));
         }
         return batches;
     }

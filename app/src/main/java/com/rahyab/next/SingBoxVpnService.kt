@@ -123,7 +123,12 @@ class SingBoxVpnService : VpnService() {
                     appVersion = "2"
                     appMarketingVersion = "0.2.0"
                 }
-                val transportCheck = checkVlessServerTcp(requestedProfile)
+                val transportCheck = runCatching { checkVlessServerTcp(requestedProfile) }
+                    .getOrElse { error ->
+                        // A TCP reachability preflight is diagnostic, not definitive.
+                        Log.w(TAG, "sing-box preflight unavailable", error)
+                        "TCP_PREFLIGHT_UNAVAILABLE: ${error.javaClass.simpleName}"
+                    }
                 Libbox.setup(setup)
                 val active = server
                 if (active != null) {

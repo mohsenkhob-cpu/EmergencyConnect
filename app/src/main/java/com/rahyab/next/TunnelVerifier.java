@@ -185,27 +185,68 @@ public final class TunnelVerifier {
     }
 
 
-    private static boolean probeMediaHost(Network vpn, String endpoint) {
-        HttpURLConnection connection = null;
+
+    /** Verify real HTML, following no more than three HTTPS redirects within the same site. */
+    private static String probeMediaPage(Network vpn, String endpoint) {
         try {
-            connection = (HttpURLConnection) vpn.openConnection(new URL(endpoint), java.net.Proxy.NO_PROXY);
-            connection.setRequestMethod("GET");
-            connection.setRequestProperty("Connection", "close");
-            connection.setRequestProperty("Accept", "text/html");
-            connection.setRequestProperty("Accept-Encoding", "identity");
-            connection.setConnectTimeout(6000);
-            connection.setReadTimeout(6000);
-            connection.setUseCaches(false);
-            connection.setInstanceFollowRedirects(false);
-            int code = connection.getResponseCode();
-            if (code != HttpURLConnection.HTTP_OK) return false;
-            int bytes = readHtmlPreview(connection.getInputStream());
-            return isUsableHtmlResponse(code, connection.getContentType(), bytes);
-        } catch (IOException | RuntimeException ignored) {
-            return false;
-        } finally {
-            if (connection != null) connection.disconnect();
+            URL origin = new URL(endpoint);
+            URL current = origin;
+            for (int hop = 0; hop < 4 && !Thread.currentThread().isInterrupted(); hop++) {
+                HttpURLConnection connection = null;
+                try {
+                    connection = (HttpURLConnection) vpn.openConnection(current, java.net.Proxy.NO_PROXY);
+                    connection.setRequestMethod("GET");
+                    connection.setRequestProperty("Connection", "close");
+                    connection.setRequestProperty("Accept", "text/html");
+                    connection.setRequestProperty("Accept-Encoding", "identity");
+                    connection.setConnectTimeout(6000);
+                    connection.setReadTimeout(6000);
+                    connection.setUseCaches(false);
+                    connection.setInstanceFollowRedirects(false);
+                    int code = connection.getResponseCode();
+                    if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                        String location = connection.getHeaderField("Location");
+                        if (location == null || location.isEmpty()) return "redirect_missing_location";
+                        URL next = new URL(current, location);
+                        if (!isAllowedMediaRedirect(origin, next)) return "redirect_blocked";
+                        if (hop == 3) return "redirect_limit";
+                        current = next;
+                        continue;
+                    }
+                    if (code != HttpURLConnection.HTTP_OK) return "page_http_" + code;
+                    int bytes = readHtmlPreview(connection.getInputStream());
+                    return isUsableHtmlResponse(code, connection.getContentType(), bytes)
+                            ? "page_verified" : "page_content_failed";
+                } finally {
+                    if (connection != null) connection.disconnect();
+                }
+            }
+            return "redirect_limit";
+        } catch (java.net.UnknownHostException error) {
+            return "dns_failed";
+        } catch (java.net.SocketTimeoutException error) {
+            return "timeout";
+        } catch (javax.net.ssl.SSLException error) {
+            return "tls_failed";
+        } catch (IOException | RuntimeException error) {
+            return "io_failed";
         }
+    }
+
+    static boolean isAllowedMediaRedirect(URL origin, URL destination) {
+        if (origin == null || destination == null || !"https".equalsIgnoreCase(destination.getProtocol())
+                || destination.getUserInfo() != null
+                || (destination.getPort() != -1 && destination.getPort() != 443)) return false;
+        String source = origin.getHost().toLowerCase(java.util.Locale.ROOT);
+        String target = destination.getHost().toLowerCase(java.util.Locale.ROOT);
+        String family = source.equals("youtube.com") || source.endsWith(".youtube.com")
+                ? "youtube.com" : source.equals("instagram.com") || source.endsWith(".instagram.com")
+                ? "instagram.com" : "";
+        return !family.isEmpty() && (target.equals(family) || target.endsWith("." + family));
+    }
+
+    private static boolean probeMediaHost(Network vpn, String endpoint) {
+        return "page_verified".equals(probeMediaPage(vpn, endpoint));
     }
 
     /** A small robots.txt/204 response is NOT proof that a web page can load. */
@@ -230,43 +271,16 @@ public final class TunnelVerifier {
     }
 
 
-    /** Probe the actual YouTube homepage, rather than the easily fetched robots.txt. */
+
+    /** Verify a real YouTube HTML response using the VPN network. */
     static String probeYouTube(Context context) {
         ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
         Network vpn = manager == null ? null : manager.getActiveNetwork();
         NetworkCapabilities capabilities = vpn == null ? null : manager.getNetworkCapabilities(vpn);
         if (capabilities == null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN))
             return "youtube_network_changed";
-
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) vpn.openConnection(
-                    new URL("https://www.youtube.com/"), java.net.Proxy.NO_PROXY);
-            connection.setRequestMethod("GET");
-            connection.setRequestProperty("Accept", "text/html");
-            connection.setRequestProperty("Accept-Encoding", "identity");
-            connection.setConnectTimeout(7000);
-            connection.setReadTimeout(7000);
-            connection.setUseCaches(false);
-            connection.setInstanceFollowRedirects(false);
-            int code = connection.getResponseCode();
-            if (!vpn.equals(manager.getActiveNetwork())) return "youtube_network_changed";
-            if (code != HttpURLConnection.HTTP_OK) return "youtube_page_http_" + code;
-            int bytes = readHtmlPreview(connection.getInputStream());
-            if (!vpn.equals(manager.getActiveNetwork())) return "youtube_network_changed";
-            return isUsableHtmlResponse(code, connection.getContentType(), bytes)
-                    ? "youtube_page_verified" : "youtube_page_content_failed";
-        } catch (java.net.UnknownHostException error) {
-            return "youtube_dns_failed";
-        } catch (java.net.SocketTimeoutException error) {
-            return "youtube_timeout";
-        } catch (javax.net.ssl.SSLException error) {
-            return "youtube_tls_failed";
-        } catch (java.io.IOException | RuntimeException error) {
-            return "youtube_io_failed";
-        } finally {
-            if (connection != null) connection.disconnect();
-        }
+        String result = probeMediaPage(vpn, "https://www.youtube.com/");
+        return vpn.equals(manager.getActiveNetwork()) ? "youtube_" + result : "youtube_network_changed";
     }
 
     /** Distinguish a DNS lookup failure from a failed HTTPS path without changing VPN status. */
