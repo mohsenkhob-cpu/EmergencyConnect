@@ -26,4 +26,21 @@ public class NetworkConnectionPolicyTest {
                         "public-vpn-66.opengw.net:443"));
         assertFalse(NetworkConnectionPolicy.isValidSstpHost("public-vpn-3.opengw.net:99999"));
     }
+    @Test public void sstpMemorySeparatesMciIrancellAndWifi() {
+        assertEquals("wifi", NetworkConnectionPolicy.sstpMemoryKey(1, ""));
+        assertEquals("cell_mci", NetworkConnectionPolicy.sstpMemoryKey(2, "IR-MCI"));
+        assertEquals("cell_mci", NetworkConnectionPolicy.sstpMemoryKey(2, "همراه اول"));
+        assertEquals("cell_irancell", NetworkConnectionPolicy.sstpMemoryKey(2, "MTN Irancell"));
+        assertEquals("cell_irancell", NetworkConnectionPolicy.sstpMemoryKey(2, "ایرانسل"));
+        assertNotEquals(NetworkConnectionPolicy.sstpMemoryKey(2, "IR-MCI"),
+                NetworkConnectionPolicy.sstpMemoryKey(2, "MTN Irancell"));
+    }
+
+    @Test public void missingCarrierCannotReuseAnotherSimsLastRelay() {
+        assertEquals("", NetworkConnectionPolicy.sstpMemoryKey(2, ""));
+        assertEquals("", NetworkConnectionPolicy.sstpMemoryKey(-1, "IR-MCI"));
+        assertEquals("", NetworkConnectionPolicy.sstpMemoryKey(0, "IR-MCI"));
+        assertEquals("cell_other", NetworkConnectionPolicy.sstpMemoryKey(2, "Rightel"));
+    }
+
 }

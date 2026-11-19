@@ -23,7 +23,7 @@ class SstpVpnService : VpnService() {
     private var bestHost: String? = null
     private var bestSpeed = -1L
     private var restoringBest = false
-    private var attemptTransport = -1
+    private var attemptMemoryKey = ""
     private var currentHost = ""
     private var currentStage = ""
     private val diagnostics by lazy { getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE) }
@@ -56,7 +56,8 @@ class SstpVpnService : VpnService() {
             .setContentText("در حال آزمون اتصال SSTP").setOngoing(true).build())
         diagnostics.edit().remove("sstp_attempt_results").apply()
         candidates = ArrayDeque(hosts)
-        attemptTransport = intent.getIntExtra("physical_transport", -1)
+        attemptMemoryKey = intent.getStringExtra("sstp_memory_key").orEmpty()
+            .takeIf { it in setOf("wifi", "cell_mci", "cell_irancell", "cell_other") }.orEmpty()
         active = true
         tryNext()
         return START_NOT_STICKY
@@ -117,10 +118,10 @@ class SstpVpnService : VpnService() {
                     // A successful HTTPS tunnel must not be torn down because
                     // a tiny download sample fell below an arbitrary threshold.
                     // Continuity matters more than speculative speed ranking.
-                    if (attemptTransport >= 0 && currentHost.isNotEmpty()) {
+                    if (attemptMemoryKey.isNotEmpty() && currentHost.isNotEmpty()) {
                         getSharedPreferences("sstp_recent_good", MODE_PRIVATE).edit()
-                            .putString("host_$attemptTransport", currentHost)
-                            .putLong("saved_at_$attemptTransport", System.currentTimeMillis()).apply()
+                            .putString("host_$attemptMemoryKey", currentHost)
+                            .putLong("saved_at_$attemptMemoryKey", System.currentTimeMillis()).apply()
                     }
                     bestHost = null
                     bestSpeed = -1L

@@ -50,6 +50,7 @@ public class MainActivity extends Activity {
     private static final int REQUEST_SSTP_PERMISSION = 4109;
     private Button sstpButton;
     private ArrayList<String> pendingSstpHosts;
+    private String pendingSstpMemoryKey = "";
     private Button smartSingBoxButton;
     private Button smartWireGuardButton;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -2326,6 +2327,25 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** Stable, non-sensitive classification of the actual mobile data provider. */
+    private String currentSstpMemoryKey() {
+        int transport = ir.emergencyconnect.engine.RecentRelayStore.physicalTransport(this);
+        if (transport != 2) return NetworkConnectionPolicy.sstpMemoryKey(transport, "");
+        String operator = "";
+        try {
+            android.telephony.TelephonyManager phone =
+                    getSystemService(android.telephony.TelephonyManager.class);
+            if (phone != null) {
+                phone = phone.createForSubscriptionId(
+                        android.telephony.SubscriptionManager.getDefaultDataSubscriptionId());
+                operator = phone.getNetworkOperatorName();
+            }
+        } catch (RuntimeException ignored) {
+            // Unknown SIMs must not accidentally share the cached MCI relay.
+        }
+        return NetworkConnectionPolicy.sstpMemoryKey(transport, operator);
+    }
+
     private void discoverSstp() {
         recordAttemptNetwork("sstp");
         beginSmartAttempt("در حال دریافت فهرست سرورهای VPN Gate برای SSTP…");
@@ -2339,14 +2359,19 @@ public class MainActivity extends Activity {
                     if (attempt != smartAttempt || isDestroyed()) return;
                     appendAppDiagnostic("SSTP", "میزبان‌های اعلام‌شده برای SSTP: "
                             + feed.advertisedCount() + "؛ کل گزینه‌ها: " + feed.endpoints().size());
-                    int transport = ir.emergencyconnect.engine.RecentRelayStore.physicalTransport(this);
+                    pendingSstpMemoryKey = currentSstpMemoryKey();
                     android.content.SharedPreferences recent =
                             getSharedPreferences("sstp_recent_good", MODE_PRIVATE);
+                    // Old versions stored Wi-Fi under key "1". Never reuse their
+                    // generic cellular key "2" across different SIM operators.
+                    String lookupKey = pendingSstpMemoryKey;
+                    if ("wifi".equals(lookupKey) && !recent.contains("saved_at_wifi"))
+                        lookupKey = "1";
                     long age = System.currentTimeMillis()
-                            - recent.getLong("saved_at_" + transport, 0L);
-                    String previouslyVerified = transport >= 0 && age >= 0
+                            - recent.getLong("saved_at_" + lookupKey, 0L);
+                    String previouslyVerified = !lookupKey.isEmpty() && age >= 0
                             && age < 6L * 60L * 60L * 1000L
-                            ? recent.getString("host_" + transport, "") : "";
+                            ? recent.getString("host_" + lookupKey, "") : "";
                     pendingSstpHosts = NetworkConnectionPolicy.prioritizeSstp(
                             feed.endpoints(), previouslyVerified);
                     if (!previouslyVerified.isEmpty()) appendAppDiagnostic("SSTP",
@@ -2368,9 +2393,9 @@ public class MainActivity extends Activity {
         if (!smartBusy || pendingSstpHosts == null) return;
         Intent intent = new Intent(this, kittoku.osc.service.SstpVpnService.class)
                 .setAction("sstp.start").putStringArrayListExtra("hosts", pendingSstpHosts)
-                .putExtra("physical_transport",
-                        ir.emergencyconnect.engine.RecentRelayStore.physicalTransport(this));
+                .putExtra("sstp_memory_key", pendingSstpMemoryKey);
         pendingSstpHosts = null;
+        pendingSstpMemoryKey = "";
         smartBusy = false;
         publishDiscoveryStatus("در حال آماده‌سازی اتصال SSTP…", "searching");
         try {
@@ -2407,6 +2432,7 @@ public class MainActivity extends Activity {
         getPreferences(MODE_PRIVATE).edit().remove("selected_engine").apply();
         pendingOpenVpnProfiles = null;
         pendingSstpHosts = null;
+        pendingSstpMemoryKey = "";
         smartBusy = false;
         publishDiscoveryStatus("در حال قطع اتصال…", "disconnected");
         // A manual stop must invalidate any not-yet-consumed start request.
