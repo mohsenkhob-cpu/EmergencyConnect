@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets;
  */
 public final class TunnelVerifier {
     private static final String IP_CHECK_URL = "https://api.ipify.org?format=json";
+    private static final String BACKUP_IP_CHECK_URL = "https://icanhazip.com/";
     private static final String DNS_INDEPENDENT_PROBE_URL = "https://1.1.1.1/cdn-cgi/trace";
     private static final int DNS_INDEPENDENT_TIMEOUT_MS = 5000;
     private static final int CONNECT_TIMEOUT_MS = 7000;
@@ -44,7 +45,12 @@ public final class TunnelVerifier {
         static Result failure(String message) { return new Result(false, null, message); }
     }
 
-    /** Must be called on a worker thread. */
+    /**
+     * Confirm an actual public HTTPS egress IP on Android's currently active VPN.
+     * A single blocked echo service must not make a working VPN look disconnected.
+     * Crucially, no direct/underlying-network fallback is ever treated as success.
+     * Must be called on a worker thread.
+     */
     public static Result verify(Context context) {
         ConnectivityManager manager =
                 (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -55,44 +61,79 @@ public final class TunnelVerifier {
             return Result.failure("مسیر VPN تا پایان مهلت ۸ ثانیه‌ای در اندروید فعال نشد");
         }
 
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) vpn.openConnection(new URL(IP_CHECK_URL));
-            connection.setRequestMethod("GET");
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
-            connection.setUseCaches(false);
-            connection.setInstanceFollowRedirects(false);
-            connection.setRequestProperty("Accept", "application/json");
-            connection.setRequestProperty("User-Agent", "RahYabAndroid/0.3");
-
-            int code = connection.getResponseCode();
-            if (code != HttpURLConnection.HTTP_OK) {
-                return Result.failure("آزمون HTTPS پاسخ HTTP " + code + " دریافت کرد");
-            }
-
-            byte[] body;
-            try (InputStream input = connection.getInputStream()) {
-                body = readLimited(input, MAX_RESPONSE_BYTES);
-            }
-            String ip = new JSONObject(new String(body, StandardCharsets.UTF_8)).optString("ip", "").trim();
-            if (!isPublicAddressLiteral(ip)) {
-                return Result.failure("سرویس بررسی، نشانی IP معتبر و عمومی برنگرداند");
-            }
-            if (!vpn.equals(manager.getActiveNetwork())) {
+        String lastFailure = "";
+        boolean dnsFailed = false;
+        String[] endpoints = {IP_CHECK_URL, BACKUP_IP_CHECK_URL};
+        for (int index = 0; index < endpoints.length; index++) {
+            if (Thread.currentThread().isInterrupted())
+                return Result.failure("آزمون اتصال با درخواست کاربر متوقف شد");
+            if (!vpn.equals(manager.getActiveNetwork()))
                 return Result.failure("مسیر فعال شبکه هنگام بررسی تغییر کرد");
+
+            HttpURLConnection connection = null;
+            try {
+                // Pin each test to VPN and do not inherit an unrelated system proxy.
+                connection = (HttpURLConnection) vpn.openConnection(
+                        new URL(endpoints[index]), java.net.Proxy.NO_PROXY);
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                connection.setUseCaches(false);
+                connection.setInstanceFollowRedirects(false);
+                connection.setRequestProperty("Accept", index == 0
+                        ? "application/json" : "text/plain");
+                connection.setRequestProperty("User-Agent", "FilterMohsen/1.0");
+                int code = connection.getResponseCode();
+                if (code != HttpURLConnection.HTTP_OK) {
+                    lastFailure = "سرویس بررسی " + (index + 1) + " پاسخ HTTP " + code + " داد";
+                    continue;
+                }
+                byte[] body;
+                try (InputStream input = connection.getInputStream()) {
+                    body = readLimited(input, MAX_RESPONSE_BYTES);
+                }
+                String ip = decodePublicIp(new String(body, StandardCharsets.UTF_8), index == 0);
+                if (ip == null) {
+                    lastFailure = "سرویس بررسی " + (index + 1) + " نشانی IP عمومی معتبر برنگرداند";
+                    continue;
+                }
+                if (!vpn.equals(manager.getActiveNetwork()))
+                    return Result.failure("مسیر فعال شبکه هنگام بررسی تغییر کرد");
+                return Result.success(ip);
+            } catch (java.net.UnknownHostException e) {
+                dnsFailed = true;
+                lastFailure = "DNS سرویس بررسی " + (index + 1) + " پاسخ نداد";
+            } catch (java.net.SocketTimeoutException e) {
+                lastFailure = "مهلت پاسخ سرویس بررسی " + (index + 1) + " تمام شد";
+            } catch (IOException | RuntimeException e) {
+                lastFailure = "آزمون HTTPS سرویس بررسی " + (index + 1)
+                        + " ناموفق بود (" + e.getClass().getSimpleName() + ")";
+            } finally {
+                if (connection != null) connection.disconnect();
             }
-            return Result.success(ip);
-        } catch (java.net.UnknownHostException e) {
-            return Result.failure("DNS برای api.ipify.org پاسخ نداد (UnknownHostException)؛ "
-                    + probeWithoutDns(manager, vpn));
-        } catch (Exception e) {
-            String message = e.getMessage();
-            return Result.failure("آزمون عبور HTTPS ناموفق بود: "
-                    + (message == null || message.trim().isEmpty()
-                    ? e.getClass().getSimpleName() : message));
-        } finally {
-            if (connection != null) connection.disconnect();
+        }
+        if (Thread.currentThread().isInterrupted())
+            return Result.failure("آزمون اتصال متوقف شد");
+        if (!vpn.equals(manager.getActiveNetwork()))
+            return Result.failure("مسیر فعال شبکه هنگام بررسی تغییر کرد");
+
+        // This is diagnostic information only: IP-literal HTTPS cannot
+        // validate full VPN DNS and MUST NOT mark the tunnel as connected.
+        String diagnostic = dnsFailed ? "؛ " + probeWithoutDns(manager, vpn) : "";
+        return Result.failure("هیچ‌کدام از دو سرویس مستقل بررسی IP از مسیر VPN تأیید نشدند: "
+                + lastFailure + diagnostic);
+    }
+
+    /** Unit-testable decoder: never accept a hostname, HTML, or private address. */
+    static String decodePublicIp(String body, boolean json) {
+        if (body == null || body.length() > MAX_RESPONSE_BYTES) return null;
+        try {
+            String candidate = json
+                    ? new JSONObject(body).optString("ip", "").trim()
+                    : body.trim();
+            return isPublicAddressLiteral(candidate) ? candidate : null;
+        } catch (RuntimeException error) {
+            return null;
         }
     }
 
