@@ -41,4 +41,17 @@ public class TunnelVerifierTest {
     @Test public void acceptsPublicIpv6Literal() {
         assertTrue(TunnelVerifier.isPublicAddressLiteral("2001:4860:4860::8888"));
     }
+    @Test public void multipleHttpsIpEchoFormatsAreSupported() {
+        assertEquals("8.8.8.8", TunnelVerifier.decodePublicIp("{\"ip\":\"8.8.8.8\"}", true));
+        assertEquals("2001:4860:4860::8888",
+                TunnelVerifier.decodePublicIp("2001:4860:4860::8888\\n", false));
+    }
+
+    @Test public void ipEchoMustNotAcceptPrivateHostnamesOrHtml() {
+        assertNull(TunnelVerifier.decodePublicIp("{\"ip\":\"192.168.1.1\"}", true));
+        assertNull(TunnelVerifier.decodePublicIp("{\"ip\":\"google.com\"}", true));
+        assertNull(TunnelVerifier.decodePublicIp("200 OK", false));
+        assertNull(TunnelVerifier.decodePublicIp("<html>8.8.8.8</html>", false));
+        assertNull(TunnelVerifier.decodePublicIp("{bad_json}", true));
+    }
 }
