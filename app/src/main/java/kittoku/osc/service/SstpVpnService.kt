@@ -9,6 +9,7 @@ import com.rahyab.next.TunnelVerifier
 import kittoku.osc.SharedBridge
 import kittoku.osc.control.Controller
 import kittoku.osc.preference.OscPrefKey
+import ir.emergencyconnect.engine.RecentRelayStore
 import kotlinx.coroutines.*
 
 class SstpVpnService : VpnService() {
@@ -22,6 +23,7 @@ class SstpVpnService : VpnService() {
     private var bestHost: String? = null
     private var bestSpeed = -1L
     private var restoringBest = false
+    private var attemptTransport = -1
     private var currentHost = ""
     private var currentStage = ""
     private val diagnostics by lazy { getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE) }
@@ -54,6 +56,7 @@ class SstpVpnService : VpnService() {
             .setContentText("در حال آزمون اتصال SSTP").setOngoing(true).build())
         diagnostics.edit().remove("sstp_attempt_results").apply()
         candidates = ArrayDeque(hosts)
+        attemptTransport = intent.getIntExtra("physical_transport", -1)
         active = true
         tryNext()
         return START_NOT_STICKY
@@ -111,21 +114,18 @@ class SstpVpnService : VpnService() {
                     val speedLabel = if (speed > 0) "نمونهٔ دانلود: $speed کیلوبیت‌برثانیه"
                         else "نمونهٔ دانلود در دسترس نبود"
                     recordResult("عبور اینترنت تأیید شد؛ $speedLabel")
-                    if (!restoringBest && speed < TunnelVerifier.DOWNLOAD_TARGET_KBPS) {
-                        if (bestHost == null || speed > bestSpeed) {
-                            bestHost = currentHost
-                            bestSpeed = speed
-                        }
-                        if (candidates.isNotEmpty() || bestHost != currentHost) {
-                            publish("در حال بررسی سرور سریع‌تر SSTP…", "searching")
-                            controller?.kill(false, null)
-                            return@post
-                        }
+                    // A successful HTTPS tunnel must not be torn down because
+                    // a tiny download sample fell below an arbitrary threshold.
+                    // Continuity matters more than speculative speed ranking.
+                    if (attemptTransport >= 0 && currentHost.isNotEmpty()) {
+                        getSharedPreferences("sstp_recent_good", MODE_PRIVATE).edit()
+                            .putString("host_$attemptTransport", currentHost)
+                            .putLong("saved_at_$attemptTransport", System.currentTimeMillis()).apply()
                     }
                     bestHost = null
                     bestSpeed = -1L
                     restoringBest = false
-                    publish("عبور اینترنت با SSTP تأیید شد؛ $speedLabel", "connected")
+                    publish("عبور اینترنت با SSTP تأیید شد و اتصال حفظ شد؛ $speedLabel", "connected")
                 } else {
                     recordResult(result.message)
                     controller?.kill(false, null)

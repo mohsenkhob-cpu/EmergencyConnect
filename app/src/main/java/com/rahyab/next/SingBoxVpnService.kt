@@ -123,7 +123,7 @@ class SingBoxVpnService : VpnService() {
                     appVersion = "2"
                     appMarketingVersion = "0.2.0"
                 }
-                val transportCheck = runCatching { checkVlessServerTcp(requestedProfile) }
+                val transportCheck = runCatching { checkGeneratedRelayTcp(requestedProfile) }
                     .getOrElse { error ->
                         // A TCP reachability preflight is diagnostic, not definitive.
                         Log.w(TAG, "sing-box preflight unavailable", error)
@@ -160,6 +160,51 @@ class SingBoxVpnService : VpnService() {
             }
         }
         return START_NOT_STICKY
+    }
+
+    /**
+     * Distinguish public relay unreachability from DNS/TUN failures.
+     * At most two numeric-address TCP servers are tested before the core starts.
+     * A negative preflight is diagnostic only; VPN protocols can behave
+     * differently under real TLS and network conditions.
+     * Never record the host, URL, key, SNI or profile in logs/broadcasts.
+     */
+    private fun checkGeneratedRelayTcp(json: String): String? {
+        val root = JSONObject(json)
+        if (root.optJSONObject("dns")?.optString("final") != "rah-yab-dns") return null
+        val outbounds = root.optJSONArray("outbounds") ?: return "RELAY_TCP_NO_OUTBOUNDS"
+        var tested = 0
+        var skippedHostname = 0
+        for (index in 0 until outbounds.length()) {
+            if (tested >= 2 || stopping) break
+            val outbound = outbounds.optJSONObject(index) ?: continue
+            if (outbound.optString("type") !in setOf("vless", "vmess", "trojan")) continue
+            val address = outbound.optString("server")
+            val port = outbound.optInt("server_port")
+            if (!address.matches(Regex("[0-9]{1,3}(\\.[0-9]{1,3}){3}"))
+                    || port !in 1..65535) {
+                skippedHostname++
+                continue
+            }
+            tested++
+            try {
+                Socket().use { socket ->
+                    socket.bind(InetSocketAddress(0))
+                    if (!protect(socket)) return "RELAY_TCP_PROTECT_FAILED"
+                    socket.connect(InetSocketAddress(address, port), 1500)
+                    return "RELAY_TCP_REACHABLE"
+                }
+            } catch (_: java.io.IOException) {
+                // The individual volunteer relay is not reachable over TCP.
+            } catch (_: RuntimeException) {
+                // Keep source-dependent network errors separate from libbox.
+            }
+        }
+        return when {
+            tested > 0 -> "RELAY_TCP_UNREACHABLE_" + tested + "_TESTS"
+            skippedHostname > 0 -> "RELAY_TCP_HOSTNAME_NEEDS_DNS"
+            else -> "RELAY_TCP_NO_COMPATIBLE_ENDPOINT"
+        }
     }
 
     /**

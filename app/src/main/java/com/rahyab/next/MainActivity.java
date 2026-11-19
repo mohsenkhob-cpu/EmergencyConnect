@@ -103,25 +103,22 @@ public class MainActivity extends Activity {
                         smartBusy = false;
                     }
                     publishDiscoveryStatus(
-                            "Xray عبور HTTPS را تأیید کرد ولی صفحهٔ یوتیوب باز نشد؛ اتصال برای آزمایش در مرورگر حفظ شده است.",
-                            "searching");
+                            "Xray: اینترنت HTTPS محدود؛ پخش ویدیوی یوتیوب تأیید نشده است.",
+                            "limited");
                     break;
                 case "verified":
-                    if (activeXrayEndpointKey != null) {
-                        getPreferences(MODE_PRIVATE).edit()
-                                .putString("xray_verified_endpoint", activeXrayEndpointKey)
-                                .putLong("xray_verified_at", System.currentTimeMillis()).apply();
-                    }
+                    // HTML availability does not prove working YouTube video playback.
+                    // Never award a 'best relay' score from this partial probe.
                     long speed = intent.getLongExtra("download_kbps", -1);
                     if (xrayTrialCount > 0) {
                         clearXrayTrials();
                         smartBusy = false;
                     }
                     publishDiscoveryStatus(speed > 0
-                            ? (speed < TunnelVerifier.DOWNLOAD_TARGET_KBPS
-                                    ? "Xray وصل شد؛ سرعت پایین است: " : "Xray وصل شد؛ نمونهٔ دانلود: ")
-                                    + speed + " کیلوبیت‌برثانیه"
-                            : "عبور HTTPS با Xray تأیید شد", "connected");
+                            ? "Xray: عبور HTTPS تأیید شد؛ نمونهٔ دانلود " + speed
+                                    + " کیلوبیت‌برثانیه؛ پخش ویدیو هنوز تأیید نشده"
+                            : "Xray: عبور HTTPS تأیید شد؛ پخش ویدیو هنوز تأیید نشده",
+                            "limited");
                     break;
                 case "health_retry":
                     publishDiscoveryStatus("در حال بررسی دوبارهٔ دسترسی به یوتیوب و اینستاگرام…", "searching");
@@ -133,13 +130,15 @@ public class MainActivity extends Activity {
                     publishDiscoveryStatus("سرعت اتصال پایین است؛ در حال آزمون سرور سریع‌تر Xray…", "searching");
                     break;
                 case "quality_low":
-                    publishDiscoveryStatus("سرعت Xray پایین است؛ اتصال موجود بدون تعویض سرور حفظ شد", "connected");
+                    publishDiscoveryStatus("Xray: اینترنت محدود؛ اتصال موجود حفظ شد و پخش ویدیو تأیید نشده", "limited");
                     break;
                 case "recovered":
                     long recoveredSpeed = intent.getLongExtra("download_kbps", -1);
                     publishDiscoveryStatus(recoveredSpeed > 0
-                            ? "سرور جایگزین Xray وصل شد؛ نمونهٔ دانلود " + recoveredSpeed + " کیلوبیت‌برثانیه"
-                            : "سرور جایگزین Xray وصل شد؛ دسترسی HTTPS تأیید شد", "connected");
+                            ? "سرور جایگزین Xray: HTTPS تأیید شد؛ نمونهٔ دانلود " + recoveredSpeed
+                                    + " کیلوبیت‌برثانیه؛ ویدیو تأیید نشده"
+                            : "سرور جایگزین Xray: HTTPS برقرار است؛ ویدیو تأیید نشده",
+                            "limited");
                     break;
                 case "health_degraded":
                     publishDiscoveryStatus("دسترسی تأیید نشد؛ سرور جایگزین مناسب پیدا نشد", "failed");
@@ -241,6 +240,8 @@ public class MainActivity extends Activity {
                 setStatus("در حال راه‌اندازی موتور sing-box…");
                 singBoxConnectButton.setEnabled(false);
             } else if ("ENGINE_STARTED".equals(event)) {
+                if (detail != null && detail.startsWith("RELAY_TCP_"))
+                    appendAppDiagnostic("sing-box", detail);
                 singBoxConnectButton.setEnabled(true);
                 disconnectButton.setEnabled(true);
                 verifyTunnel("sing-box");
@@ -946,13 +947,25 @@ public class MainActivity extends Activity {
         quickConnect = true;
         quickWaitingForStop = false;
         remainingEngines.clear();
-        remainingEngines.add("OpenVPN");
-        remainingEngines.add("SSTP");
-        remainingEngines.add("sing-box");
-        if (!smartWireGuardProfiles.isEmpty()
-                || !getPreferences(MODE_PRIVATE).getString("wireguard_sources", "").isEmpty()) {
-            remainingEngines.add("WireGuard");
+        String operator = "";
+        if (ir.emergencyconnect.engine.RecentRelayStore.physicalTransport(this) == 2) {
+            try {
+                android.telephony.TelephonyManager phone =
+                        getSystemService(android.telephony.TelephonyManager.class);
+                if (phone != null) {
+                    operator = phone.createForSubscriptionId(
+                            android.telephony.SubscriptionManager.getDefaultDataSubscriptionId())
+                            .getNetworkOperatorName();
+                }
+            } catch (RuntimeException ignored) { }
         }
+        boolean mci = NetworkConnectionPolicy.isMciOperator(operator);
+        remainingEngines.addAll(NetworkConnectionPolicy.quickOrder(mci,
+                !smartWireGuardProfiles.isEmpty()
+                    || !getPreferences(MODE_PRIVATE).getString("wireguard_sources", "").isEmpty()));
+        appendAppDiagnostic("انتخاب خودکار",
+                mci ? "اولویت همراه اول: SSTP سپس OpenVPN"
+                    : "اولویت شبکه: OpenVPN سپس SSTP");
         tryNextQuickEngine();
     }
 
@@ -1634,19 +1647,8 @@ public class MainActivity extends Activity {
                     for (int offset = 0; offset < all.size() && candidates.size() < 5; offset++) {
                         candidates.add(all.get((start + offset) % all.size()));
                     }
-                    String favored = settings.getString("xray_verified_endpoint", "");
-                    long age = System.currentTimeMillis() - settings.getLong("xray_verified_at", 0L);
-                    if (age >= 0 && age < 6 * 60 * 60 * 1000L) {
-                        for (int index = 0; index < all.size(); index++) {
-                            String key = XrayProfile.relayKey(all.get(index));
-                            if (key.equals(favored)) {
-                                candidates.remove(all.get(index));
-                                candidates.add(0, all.get(index));
-                                if (candidates.size() > 5) candidates.remove(candidates.size() - 1);
-                                break;
-                            }
-                        }
-                    }
+                    // Old Xray HTTP-only favorites are intentionally not reused
+                    // until there is evidence of actual media playback.
                 }
                 runOnUiThread(() -> {
                     if (isDestroyed() || attempt != smartAttempt) return;
@@ -2282,7 +2284,18 @@ public class MainActivity extends Activity {
                     if (attempt != smartAttempt || isDestroyed()) return;
                     appendAppDiagnostic("SSTP", "میزبان‌های اعلام‌شده برای SSTP: "
                             + feed.advertisedCount() + "؛ کل گزینه‌ها: " + feed.endpoints().size());
-                    pendingSstpHosts = new ArrayList<>(feed.endpoints());
+                    int transport = ir.emergencyconnect.engine.RecentRelayStore.physicalTransport(this);
+                    android.content.SharedPreferences recent =
+                            getSharedPreferences("sstp_recent_good", MODE_PRIVATE);
+                    long age = System.currentTimeMillis()
+                            - recent.getLong("saved_at_" + transport, 0L);
+                    String previouslyVerified = transport >= 0 && age >= 0
+                            && age < 6L * 60L * 60L * 1000L
+                            ? recent.getString("host_" + transport, "") : "";
+                    pendingSstpHosts = NetworkConnectionPolicy.prioritizeSstp(
+                            feed.endpoints(), previouslyVerified);
+                    if (!previouslyVerified.isEmpty()) appendAppDiagnostic("SSTP",
+                            "آخرین میزبان موفق همین نوع شبکه در اولویت قرار گرفت");
                     Intent permission = VpnService.prepare(this);
                     if (permission == null) launchSstp();
                     else startActivityForResult(permission, REQUEST_SSTP_PERMISSION);
@@ -2299,7 +2312,9 @@ public class MainActivity extends Activity {
     private void launchSstp() {
         if (!smartBusy || pendingSstpHosts == null) return;
         Intent intent = new Intent(this, kittoku.osc.service.SstpVpnService.class)
-                .setAction("sstp.start").putStringArrayListExtra("hosts", pendingSstpHosts);
+                .setAction("sstp.start").putStringArrayListExtra("hosts", pendingSstpHosts)
+                .putExtra("physical_transport",
+                        ir.emergencyconnect.engine.RecentRelayStore.physicalTransport(this));
         pendingSstpHosts = null;
         smartBusy = false;
         publishDiscoveryStatus("در حال آماده‌سازی اتصال SSTP…", "searching");
@@ -2389,8 +2404,10 @@ public class MainActivity extends Activity {
 
     private void sampleLiveTunnelSpeed() {
         String engine = getPreferences(MODE_PRIVATE).getString("selected_engine", "");
-        boolean connected = statusPreferences != null && "connected".equals(
-                statusPreferences.getString("connection_lamp_state", "")) && hasActiveAndroidVpn();
+        boolean connected = statusPreferences != null
+                && ("connected".equals(statusPreferences.getString("connection_lamp_state", ""))
+                    || "limited".equals(statusPreferences.getString("connection_lamp_state", "")))
+                && hasActiveAndroidVpn();
         if (!connected) {
             liveTunnelSpeed.setVisibility(View.GONE);
             if (usageAvailable) tunnelUsage.setText("مصرف آخرین اتصال  •  "
@@ -2471,7 +2488,9 @@ public class MainActivity extends Activity {
         // Do not resurrect an abandoned search after the service heartbeat expires.
         boolean vpnPresent = hasActiveAndroidVpn();
         boolean connected = "connected".equals(lamp) && vpnPresent;
-        if ("connected".equals(lamp) && !connected) lamp = "disconnected";
+        boolean limited = "limited".equals(lamp) && vpnPresent;
+        if (("connected".equals(lamp) && !connected)
+                || ("limited".equals(lamp) && !limited)) lamp = "disconnected";
         boolean searching = smartBusy || ("searching".equals(lamp) && statusAge >= 0L
                 && statusAge <= 90_000L);
         if ("searching".equals(lamp) && !searching) {
@@ -2483,7 +2502,7 @@ public class MainActivity extends Activity {
             lamp = "disconnected";
         }
 
-        String visibleStatus = (connected || searching || "failed".equals(lamp))
+        String visibleStatus = (connected || limited || searching || "failed".equals(lamp))
                 && savedStatus != null && !savedStatus.trim().isEmpty()
                 ? savedStatus
                 : "اتصال برقرار نیست؛ یکی از دکمه‌های اتصال را بزنید.";
@@ -2496,7 +2515,7 @@ public class MainActivity extends Activity {
             connectionOrb.setText("تونل فعال است\nاینترنت تأیید نشد");
             connectionOrb.setBackground(shape(Color.rgb(190, 137, 35), 100));
         }
-        boolean active = connected || searching || smartBusy || vpnPresent || quickConnect || xrayBusy;
+        boolean active = connected || limited || searching || smartBusy || vpnPresent || quickConnect || xrayBusy;
         if (connectButton != null) connectButton.setEnabled(!active && !wireGuardStopPending);
         if (sstpButton != null) sstpButton.setEnabled(!active && !wireGuardStopPending);
         if (smartSingBoxButton != null) smartSingBoxButton.setEnabled(!active && !wireGuardStopPending);
@@ -2524,6 +2543,10 @@ public class MainActivity extends Activity {
             connectionOrb.setText(text.toString());
             connectionOrb.setTextSize(19);
             connectionOrb.setBackground(shape(Color.rgb(24, 139, 91), 100));
+        } else if ("limited".equals(lamp)) {
+            connectionOrb.setText("◐\nاینترنت محدود\nویدیو تأیید نشده");
+            connectionOrb.setTextSize(17);
+            connectionOrb.setBackground(shape(Color.rgb(190, 137, 35), 100));
         } else if ("searching".equals(lamp)) {
             connectionOrb.setText("◌\nدر حال جست‌وجو\nو اتصال");
             connectionOrb.setTextSize(19);
