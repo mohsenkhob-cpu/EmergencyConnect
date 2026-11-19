@@ -104,7 +104,7 @@ public class MainActivity extends Activity {
                         appendAppDiagnostic("Xray", "این سرور فقط اینترنت محدود دارد؛ آزمون گزینه بعدی");
                         publishDiscoveryStatus("سرور Xray محدود بود؛ در حال بررسی سرور بعدی…", "searching");
                         try {
-                            startService(new Intent(this, XrayVpnService.class).setAction(XrayVpnService.STOP));
+                            startService(new Intent(MainActivity.this, XrayVpnService.class).setAction(XrayVpnService.STOP));
                         } catch (RuntimeException ignored) {
                             clearXrayTrials();
                             smartBusy = false;
@@ -131,7 +131,7 @@ public class MainActivity extends Activity {
                                 + " است؛ آزمون گزینه بعدی");
                         publishDiscoveryStatus("سرور Xray کم‌سرعت بود؛ بررسی گزینه بعدی…", "searching");
                         try {
-                            startService(new Intent(this, XrayVpnService.class).setAction(XrayVpnService.STOP));
+                            startService(new Intent(MainActivity.this, XrayVpnService.class).setAction(XrayVpnService.STOP));
                         } catch (RuntimeException ignored) {
                             clearXrayTrials();
                             smartBusy = false;
