@@ -20,6 +20,22 @@ final class NetworkConnectionPolicy {
                 || name.contains("hamrah aval") || name.contains("همراه اول");
     }
 
+    /**
+     * Remember verified SSTP relays independently for Wi-Fi, MCI and Irancell.
+     * Unknown cellular operators never inherit a different SIM's old relay.
+     * The key is intentionally non-identifying: no phone number, IMSI or SSID.
+     */
+    static String sstpMemoryKey(int physicalTransport, String operator) {
+        if (physicalTransport == 1) return "wifi";
+        if (physicalTransport != 2) return "";
+        if (operator == null || operator.trim().isEmpty()) return "";
+        if (isMciOperator(operator)) return "cell_mci";
+        String name = operator.trim().toLowerCase(Locale.ROOT);
+        if (name.contains("irancell") || name.contains("ایرانسل")
+                || name.contains("mtn")) return "cell_irancell";
+        return "cell_other";
+    }
+
     static List<String> quickOrder(boolean onMci, boolean validWireGuardProfiles) {
         ArrayList<String> order = new ArrayList<>();
         if (onMci) {
