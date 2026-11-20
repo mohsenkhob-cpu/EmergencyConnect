@@ -169,11 +169,11 @@ public class VpnGateProviderTest {
     }
 
     @Test public void derivesFallbackOnlyFromVerifiedFormatOfficialTcpProfile() throws Exception {
-        String tcp = "client\\nproto tcp-client\\nremote 203.0.113.10 1498\\n";
-        String udp = "client\\nproto udp\\nremote 203.0.113.11 1194\\n";
-        String csv = "#HostName,IP,Score,Ping,Speed,Country,...\\n"
+        String tcp = "client\nproto tcp-client\nremote 203.0.113.10 1498\n";
+        String udp = "client\nproto udp\nremote 203.0.113.11 1194\n";
+        String csv = "#HostName,IP,Score,Ping,Speed,Country,...\n"
                 + row("vpn123456", "203.0.113.10", "JP", "1200000", "13", tcp)
-                + "\\n" + row("vpn654321", "203.0.113.11", "JP", "9000000", "16", udp);
+                + "\n" + row("vpn654321", "203.0.113.11", "JP", "9000000", "16", udp);
         List<VpnGateProvider.Server> parsed = VpnGateProvider.parse(csv);
         assertEquals(2, parsed.size());
         String candidate = null;
