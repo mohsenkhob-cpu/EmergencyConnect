@@ -43,4 +43,16 @@ public class NetworkConnectionPolicyTest {
         assertEquals("cell_other", NetworkConnectionPolicy.sstpMemoryKey(2, "Rightel"));
     }
 
+    @Test public void preferRecentlyVerifiedSstpOnWifiWithoutRemovingOpenvpnFallback() {
+        assertEquals(List.of("SSTP", "OpenVPN"),
+                NetworkConnectionPolicy.quickOrder(false, false, true));
+        assertEquals(List.of("SSTP", "OpenVPN", "WireGuard"),
+                NetworkConnectionPolicy.quickOrder(false, true, true));
+    }
+
+    @Test public void withoutCurrentNetworkEvidenceDoNotAssumeSstpIsBest() {
+        assertEquals(List.of("OpenVPN", "SSTP"),
+                NetworkConnectionPolicy.quickOrder(false, false, false));
+    }
+
 }
