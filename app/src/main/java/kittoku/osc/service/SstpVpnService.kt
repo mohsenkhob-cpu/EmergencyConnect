@@ -119,9 +119,27 @@ class SstpVpnService : VpnService() {
                     // a tiny download sample fell below an arbitrary threshold.
                     // Continuity matters more than speculative speed ranking.
                     if (attemptMemoryKey.isNotEmpty() && currentHost.isNotEmpty()) {
-                        getSharedPreferences("sstp_recent_good", MODE_PRIVATE).edit()
-                            .putString("host_$attemptMemoryKey", currentHost)
-                            .putLong("saved_at_$attemptMemoryKey", System.currentTimeMillis()).apply()
+                        val memory = getSharedPreferences("sstp_recent_good", MODE_PRIVATE)
+                        val now = System.currentTimeMillis()
+                        val priorHost = memory.getString("host_$attemptMemoryKey", "").orEmpty()
+                        val priorSpeed = memory.getLong("speed_$attemptMemoryKey", -1L)
+                        val savedAt = memory.getLong("saved_at_$attemptMemoryKey", 0L)
+                        val age = now - savedAt
+                        val priorFresh = savedAt > 0L && age >= 0L &&
+                            age < 6L * 60L * 60L * 1000L
+                        // Speed is a short sample, not a guaranteed throughput.
+                        // Keep the better recently verified relay on this network
+                        // rather than overwriting it with a slower single sample.
+                        if (!priorFresh || priorHost == currentHost ||
+                            priorSpeed <= 0L || (speed > 0L && speed >= priorSpeed)) {
+                            val recordedSpeed = if (priorFresh && priorHost == currentHost)
+                                maxOf(priorSpeed, speed) else speed
+                            memory.edit()
+                                .putString("host_$attemptMemoryKey", currentHost)
+                                .putLong("saved_at_$attemptMemoryKey", now)
+                                .putLong("speed_$attemptMemoryKey", recordedSpeed)
+                                .apply()
+                        }
                     }
                     bestHost = null
                     bestSpeed = -1L
