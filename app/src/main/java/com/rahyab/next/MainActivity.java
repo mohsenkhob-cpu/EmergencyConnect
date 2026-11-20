@@ -240,6 +240,7 @@ public class MainActivity extends Activity {
     private android.widget.ProgressBar connectionSpinner;
     private Button connectButton;
     private Button disconnectButton;
+    private Button smartConnectButton;
     private boolean singBoxReceiverRegistered = false;
     private android.content.SharedPreferences statusPreferences;
     private android.content.SharedPreferences.OnSharedPreferenceChangeListener statusPreferenceListener;
@@ -331,6 +332,15 @@ public class MainActivity extends Activity {
         d.setColor(color);
         d.setCornerRadius(dp(radius));
         return d;
+    }
+
+    /** Original colorful cards painted with Android drawables, without image dependencies. */
+    private GradientDrawable gradientCard(int start, int end, int radius) {
+        GradientDrawable result = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR, new int[]{start, end});
+        result.setCornerRadius(dp(radius));
+        result.setStroke(dp(1), 0x33ffffff);
+        return result;
     }
 
     private TextView label(String text, int size, int color, boolean bold) {
@@ -725,32 +735,43 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0xff151f38, 0xff0b1325, 0xff101b30}));
+                new int[]{0xff112c5c, 0xff27245b, 0xff101b3a}));
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(22), dp(26), dp(22), dp(24));
+        page.setPadding(dp(16), dp(22), dp(16), dp(26));
         page.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         scroll.addView(page);
 
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        hero.setPadding(dp(16), dp(12), dp(16), dp(12));
+        hero.setBackground(gradientCard(0xff4a60ee, 0xff158ec1, 24));
+        hero.setElevation(dp(5));
+        page.addView(hero, new LinearLayout.LayoutParams(-1, -2));
+        TextView decoration = label("☀️   ☁️   ✨   🌈", 22, Color.WHITE, false);
+        decoration.setGravity(Gravity.CENTER);
+        hero.addView(decoration);
         TextView brand = label("فیلتر محسن", 29, Color.WHITE, true);
-        brand.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-        page.addView(brand);
-        TextView subtitle = label("انتخاب موتور و بررسی اتصال", 14, 0xffa9bad5, false);
-        subtitle.setGravity(Gravity.RIGHT);
-        page.addView(subtitle);
+        brand.setGravity(Gravity.CENTER);
+        hero.addView(brand);
+        TextView subtitle = label("دوست هوشمند اینترنت شما", 14, 0xffedfcff, false);
+        subtitle.setGravity(Gravity.CENTER);
+        hero.addView(subtitle);
 
         status = label("هنوز به سروری متصل نیستید", 16, Color.rgb(220, 230, 245), true);
-        status.setBackground(shape(Color.rgb(22, 36, 59), 18));
+        status.setBackground(gradientCard(0xff263e76, 0xff24345b, 18));
+        status.setPadding(dp(14), dp(13), dp(14), dp(13));
         LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-1, -2);
         status.setMinHeight(dp(54));
         statusParams.topMargin = dp(16);
         page.addView(status, statusParams);
 
         connectionOrb = label("⏻\nآماده اتصال", 22, Color.WHITE, true);
-        connectionOrb.setBackground(shape(Color.rgb(76, 91, 111), 100));
+        connectionOrb.setBackground(gradientCard(0xff4a6cdb, 0xff46c1d2, 100));
+        connectionOrb.setElevation(dp(8));
         LinearLayout.LayoutParams orbParams = new LinearLayout.LayoutParams(dp(208), dp(208));
         orbParams.gravity = Gravity.CENTER_HORIZONTAL;
-        orbParams.topMargin = dp(22);
+        orbParams.topMargin = dp(16);
         orbParams.bottomMargin = dp(12);
         android.widget.FrameLayout orbFrame = new android.widget.FrameLayout(this);
         page.addView(orbFrame, orbParams);
@@ -770,6 +791,24 @@ public class MainActivity extends Activity {
         orbFrame.addView(connectionSpinner, new android.widget.FrameLayout.LayoutParams(
                 -1, -1, Gravity.CENTER));
 
+        smartConnectButton = new Button(this);
+        smartConnectButton.setText("⚡  اتصال هوشمند");
+        smartConnectButton.setTextSize(21);
+        smartConnectButton.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        smartConnectButton.setAllCaps(false);
+        smartConnectButton.setTextColor(Color.WHITE);
+        smartConnectButton.setBackground(gradientCard(0xff00ba91, 0xff0c91e7, 24));
+        smartConnectButton.setElevation(dp(6));
+        smartConnectButton.setOnClickListener(v -> requestQuickConnection());
+        LinearLayout.LayoutParams smartParams = new LinearLayout.LayoutParams(-1, dp(66));
+        smartParams.topMargin = dp(6);
+        smartParams.bottomMargin = dp(6);
+        page.addView(smartConnectButton, smartParams);
+
+        TextView quickNote = label("با یک لمس، بهترین مسیر موجود آزمایش می‌شود", 12,
+                0xffd7e8ff, false);
+        page.addView(quickNote);
+
         liveTunnelSpeed = label("", 14, Color.WHITE, false);
         liveTunnelSpeed.setVisibility(View.GONE);
         page.addView(liveTunnelSpeed);
@@ -777,7 +816,7 @@ public class MainActivity extends Activity {
         tunnelUsage = label("مصرف این اتصال —", 14, 0xffa9bad5, false);
         page.addView(tunnelUsage);
 
-        TextView engineTitle = label("انتخاب موتور", 16, 0xffdce8fb, true);
+        TextView engineTitle = label("🎮  موتورهای اتصال", 17, 0xffe6fbff, true);
         engineTitle.setGravity(Gravity.RIGHT);
         page.addView(engineTitle);
         LinearLayout topEngines = new LinearLayout(this);
@@ -785,18 +824,18 @@ public class MainActivity extends Activity {
         page.addView(topEngines);
         page.addView(bottomEngines);
 
-        discoveryButton = engineButton(bottomEngines, "OpenVPN", this::startSmartOpenVpnSearch);
-        smartWireGuardButton = engineButton(bottomEngines, "WireGuard", this::startWireGuardSearch);
+        discoveryButton = engineButton(bottomEngines, "🛰 OpenVPN", this::startSmartOpenVpnSearch);
+        smartWireGuardButton = engineButton(bottomEngines, "⚡ WireGuard", this::startWireGuardSearch);
 
-        Button xrayFinder = engineButton(bottomEngines, "فایل‌یاب Xray", this::showXrayFinder);
+        Button xrayFinder = engineButton(bottomEngines, "🌐 Xray", this::showXrayFinder);
         xrayFinder.setContentDescription("فایل‌یاب هوشمند Xray");
-        sstpButton = engineButton(topEngines, "SSTP", this::discoverSstp);
+        sstpButton = engineButton(topEngines, "🔐 SSTP", this::discoverSstp);
 
         LinearLayout advancedPanel = new LinearLayout(this);
         advancedPanel.setOrientation(LinearLayout.VERTICAL);
         advancedPanel.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         advancedPanel.setPadding(dp(12), dp(8), dp(12), dp(12));
-        advancedPanel.setBackground(shape(Color.rgb(17, 29, 48), 18));
+        advancedPanel.setBackground(gradientCard(0xff27346f, 0xff172947, 20));
         advancedPanel.setVisibility(View.GONE);
 
         connectButton = new Button(this);
@@ -839,7 +878,7 @@ public class MainActivity extends Activity {
         disconnectButton.setText("قطع اتصال");
         disconnectButton.setAllCaps(false);
         disconnectButton.setEnabled(false);
-        disconnectButton.setBackground(shape(0xff26344f, 16));
+        disconnectButton.setBackground(gradientCard(0xffca527f, 0xff953b81, 18));
         disconnectButton.setTextColor(0xfff5e9ee);
         LinearLayout.LayoutParams disconnectParams = new LinearLayout.LayoutParams(-1, dp(52));
         disconnectParams.topMargin = dp(10);
@@ -850,7 +889,7 @@ public class MainActivity extends Activity {
         advancedToggle.setText("تنظیمات پیشرفته و ورود دستی  +");
         advancedToggle.setAllCaps(false);
         advancedToggle.setTextColor(Color.rgb(220, 230, 245));
-        advancedToggle.setBackground(shape(Color.rgb(34, 49, 72), 16));
+        advancedToggle.setBackground(gradientCard(0xff46539b, 0xff304b80, 18));
         LinearLayout.LayoutParams advancedToggleParams =
                 new LinearLayout.LayoutParams(-1, dp(50));
         advancedToggleParams.topMargin = dp(16);
@@ -860,7 +899,7 @@ public class MainActivity extends Activity {
         diagnosticsButton.setText("گزارش و عیب‌یابی  •  کپی گزارش");
         diagnosticsButton.setAllCaps(false);
         diagnosticsButton.setTextColor(Color.WHITE);
-        diagnosticsButton.setBackground(shape(Color.rgb(54, 83, 125), 16));
+        diagnosticsButton.setBackground(gradientCard(0xff2b8fba, 0xff236ab5, 18));
         LinearLayout.LayoutParams diagnosticsParams =
                 new LinearLayout.LayoutParams(-1, dp(52));
         diagnosticsParams.topMargin = dp(12);
@@ -940,6 +979,10 @@ public class MainActivity extends Activity {
             startActivityForResult(file, REQUEST_OPENVPN_FILE);
         });
 
+        TextView psiphonNote = label("🧭 سایفون (Psiphon): در حال بررسی؛ هنوز موتور اتصال فعال نیست.", 13,
+                0xffffe5a6, true);
+        psiphonNote.setBackground(gradientCard(0xff68518a, 0xff3d467b, 15));
+        advancedPanel.addView(psiphonNote);
         TextView note = label("فایل WireGuard و OpenVPN و تنظیمات VLESS/REALITY مخصوص Xray قابل وارد کردن هستند.",
                 12, Color.rgb(235, 190, 115), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
@@ -961,9 +1004,18 @@ public class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText(title);
         button.setAllCaps(false);
-        button.setTextColor(0xffdeeaff);
-        button.setBackground(shape(0xff243454, 16));
-        LinearLayout.LayoutParams dimensions = new LinearLayout.LayoutParams(0, dp(54), 1);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(13);
+        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        int first = title.contains("OpenVPN") ? 0xff3264d2
+                : title.contains("SSTP") ? 0xff00a88e
+                : title.contains("Xray") ? 0xffc46bba : 0xffe2934a;
+        int second = title.contains("OpenVPN") ? 0xff4c8ff0
+                : title.contains("SSTP") ? 0xff00b9c7
+                : title.contains("Xray") ? 0xff8948c0 : 0xffe05a7c;
+        button.setBackground(gradientCard(first, second, 17));
+        button.setElevation(dp(3));
+        LinearLayout.LayoutParams dimensions = new LinearLayout.LayoutParams(0, dp(58), 1);
         dimensions.setMargins(dp(4), dp(4), dp(4), dp(4));
         row.addView(button, dimensions);
         button.setOnClickListener(v -> action.run());
@@ -2594,7 +2646,7 @@ public class MainActivity extends Activity {
         renderConnectionOrb(smartBusy ? "searching" : lamp, visibleStatus);
         if ("failed".equals(lamp) && vpnPresent) {
             connectionOrb.setText("تونل فعال است\nاینترنت تأیید نشد");
-            connectionOrb.setBackground(shape(Color.rgb(190, 137, 35), 100));
+            connectionOrb.setBackground(gradientCard(0xffe9a239, 0xffda765d, 100));
         }
         boolean active = connected || limited || searching || smartBusy || vpnPresent || quickConnect || xrayBusy;
         if (connectButton != null) connectButton.setEnabled(!active && !wireGuardStopPending);
@@ -2603,6 +2655,12 @@ public class MainActivity extends Activity {
         if (smartWireGuardButton != null) smartWireGuardButton.setEnabled(!active && !wireGuardStopPending);
         if (disconnectButton != null) disconnectButton.setEnabled(active && !wireGuardStopPending && !xrayStopping);
         if (discoveryButton != null) discoveryButton.setEnabled(!active && !wireGuardStopPending);
+        if (smartConnectButton != null) {
+            boolean ready = !active && !wireGuardStopPending;
+            smartConnectButton.setEnabled(ready);
+            smartConnectButton.setAlpha(ready ? 1.0f : 0.55f);
+            smartConnectButton.setText(ready ? "⚡  اتصال هوشمند" : "⏳  در حال اتصال یا متصل");
+        }
     }
 
     /**
@@ -2623,21 +2681,22 @@ public class MainActivity extends Activity {
             if (speed.find()) text.append("\n").append(speed.group(1)).append(" kbps");
             connectionOrb.setText(text.toString());
             connectionOrb.setTextSize(19);
-            connectionOrb.setBackground(shape(Color.rgb(24, 139, 91), 100));
+            connectionOrb.setBackground(gradientCard(0xff0ab78e, 0xff1cc8c7, 100));
         } else if ("limited".equals(lamp)) {
             connectionOrb.setText("◐\nاینترنت محدود\nویدیو تأیید نشده");
             connectionOrb.setTextSize(17);
-            connectionOrb.setBackground(shape(Color.rgb(190, 137, 35), 100));
+            connectionOrb.setBackground(gradientCard(0xffe9a239, 0xffda765d, 100));
         } else if ("searching".equals(lamp)) {
             connectionOrb.setText("◌\nدر حال جست‌وجو\nو اتصال");
             connectionOrb.setTextSize(19);
-            connectionOrb.setBackground(shape(Color.rgb(190, 137, 35), 100));
+            connectionOrb.setBackground(gradientCard(0xffe9a239, 0xffda765d, 100));
         } else {
             boolean hasFailure = "failed".equals(lamp);
             connectionOrb.setText(hasFailure ? "×\nتلاش دوباره" : "⏻\nاتصال خودکار");
             connectionOrb.setTextSize(20);
-            connectionOrb.setBackground(shape(
-                    hasFailure ? Color.rgb(166, 61, 61) : Color.rgb(76, 91, 111), 100));
+            connectionOrb.setBackground(gradientCard(
+                    hasFailure ? 0xffe85b7d : 0xff506ed9,
+                    hasFailure ? 0xffab486b : 0xff43b4cf, 100));
         }
         connectionOrb.setTextColor(Color.WHITE);
     }
