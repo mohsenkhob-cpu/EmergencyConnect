@@ -198,7 +198,7 @@ jobs:
             -o "$PROJECT/app/libs/libXray.aar" .
           python "$PROJECT/xray/collect_notices.py" "$PROJECT/app/src/main/assets/xray-notices"
       - name: Build debug APK
-        run: gradle --no-daemon -PciVersionCode=28 testDebugUnitTest assembleDebug
+        run: gradle --no-daemon -PciVersionCode=29 testDebugUnitTest assembleDebug
       - name: Verify APK signature, package, ABI, alignment and checksum
         run: |
           set -euo pipefail
@@ -222,7 +222,7 @@ jobs:
           unzip -l "$APK" | awk '$NF == "lib/arm64-v8a/libmohsenxrayjni.so" {hit=1} END {exit !hit}'
           unzip -l "$APK" | awk '$NF == "assets/xray-notices/XTLS-libXray/LICENSE" {hit=1} END {exit !hit}'
           "$TOOLS/zipalign" -c -v 4 "$APK"
-          "$TOOLS/aapt" dump badging "$APK" | grep -F "package: name='com.mohsen.filter' versionCode='28' versionName='1.0.27'"
+          "$TOOLS/aapt" dump badging "$APK" | grep -F "package: name='com.mohsen.filter' versionCode='29' versionName='1.0.28'"
           "$TOOLS/aapt" dump badging "$APK" | grep -F "native-code: 'arm64-v8a'"
           {
             echo "APK bytes: $(stat -c%s "$APK")"
@@ -240,8 +240,8 @@ jobs:
       - name: Publish public download release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: filter-mohsen-1.0.27-${{ github.run_id }}
-          name: Filter Mohsen 1.0.27
+          tag_name: filter-mohsen-1.0.28-${{ github.run_id }}
+          name: Filter Mohsen 1.0.28
           prerelease: true
           generate_release_notes: false
           body: |
