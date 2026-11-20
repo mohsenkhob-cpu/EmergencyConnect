@@ -63,7 +63,16 @@ internal class Controller(internal val bridge: SharedBridge) {
     private fun attachHandler() {
         bridge.handler = CoroutineExceptionHandler { _, throwable ->
             kill(isReconnectionEnabled) {
-                val header = "خطای داخلی: ${throwable.javaClass.simpleName}"
+                // Log only a code location, never exception.message or a stack
+                // trace: those may include server addresses or VPN credentials.
+                val location = throwable.stackTrace.firstOrNull {
+                    it.className.startsWith("kittoku.osc.")
+                        || it.className.startsWith("android.net.")
+                }?.let {
+                    it.className.substringAfterLast('.') + "." + it.methodName
+                }.orEmpty()
+                val header = "خطای داخلی: ${throwable.javaClass.simpleName}" +
+                    if (location.isEmpty()) "" else " در $location"
                 bridge.service.notifyError(bridge.token, header)
             }
         }
