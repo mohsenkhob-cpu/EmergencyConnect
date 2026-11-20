@@ -37,8 +37,14 @@ final class NetworkConnectionPolicy {
     }
 
     static List<String> quickOrder(boolean onMci, boolean validWireGuardProfiles) {
+        return quickOrder(onMci, validWireGuardProfiles, false);
+    }
+
+    /** Prioritize a previously verified SSTP route only for the current network. */
+    static List<String> quickOrder(boolean onMci, boolean validWireGuardProfiles,
+                                   boolean recentSstpVerifiedOnThisNetwork) {
         ArrayList<String> order = new ArrayList<>();
-        if (onMci) {
+        if (onMci || recentSstpVerifiedOnThisNetwork) {
             order.add("SSTP");
             order.add("OpenVPN");
         } else {
