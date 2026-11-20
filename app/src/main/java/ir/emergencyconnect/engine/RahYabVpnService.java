@@ -76,6 +76,9 @@ public final class RahYabVpnService extends VpnService {
                 return thread;
             });
     private volatile java.util.concurrent.ScheduledFuture<?> qualityMonitorFuture;
+    private final Object physicalNetworkObserverLock = new Object();
+    private android.net.ConnectivityManager.NetworkCallback physicalNetworkObserver;
+    private java.util.concurrent.ScheduledFuture<?> physicalNetworkRecoveryTask;
     private final Object nativeSessionLock = new Object();
     private volatile boolean serviceDestroyed;
     // Set at the very first instruction of ACTION_STOP to close the race between
@@ -243,6 +246,7 @@ public final class RahYabVpnService extends VpnService {
         }
         if (ACTION_START.equals(action)) {
             cancelQualityMonitor();
+            stopPhysicalNetworkObserver();
             stopRequested.set(false);
             terminalFailure = false;
             autoCandidatesTried = 0;
@@ -301,6 +305,7 @@ public final class RahYabVpnService extends VpnService {
             autoSearchEnabled = false;
             autoConnected = false;
             cancelQualityMonitor();
+            stopPhysicalNetworkObserver();
             autoProfiles = null;
             activeAutoProfile = null;
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
@@ -416,6 +421,7 @@ public final class RahYabVpnService extends VpnService {
         autoSearchEnabled = false;
         autoConnected = false;
         cancelQualityMonitor();
+        stopPhysicalNetworkObserver();
         autoProfiles = null;
         activeAutoProfile = null;
         CountDownLatch activeAttempt = attemptSignal;
@@ -1073,6 +1079,7 @@ public final class RahYabVpnService extends VpnService {
         cancelQualityMonitor();
         if (!autoSearchEnabled || !autoConnected || stopRequested.get()
                 || serviceDestroyed || qualityMonitorExecutor.isShutdown()) return;
+        startPhysicalNetworkObserver();
         try {
             qualityMonitorFuture = qualityMonitorExecutor.scheduleWithFixedDelay(
                     this::monitorTunnelQuality,
@@ -1084,6 +1091,125 @@ public final class RahYabVpnService extends VpnService {
         } catch (java.util.concurrent.RejectedExecutionException rejected) {
             appendAutoHistory("AUTO_MONITOR_START_FAILED",
                     "صف پایش کیفیت در دسترس نیست");
+        }
+    }
+
+    /**
+     * Observe only the physical network that carried this user-initiated VPN session.
+     * An unrelated mobile/Wi-Fi callback is not a reason to drop a working tunnel.
+     * Registration begins only after verified automatic OpenVPN connectivity.
+     */
+    private void startPhysicalNetworkObserver() {
+        if (searchNetworkHandle <= 0 || stopRequested.get() || serviceDestroyed) return;
+        synchronized (physicalNetworkObserverLock) {
+            if (physicalNetworkObserver != null) return;
+            android.net.ConnectivityManager manager =
+                    getSystemService(android.net.ConnectivityManager.class);
+            if (manager == null) return;
+            final long watchedHandle = searchNetworkHandle;
+            android.net.NetworkRequest request = new android.net.NetworkRequest.Builder()
+                    .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .build();
+            android.net.ConnectivityManager.NetworkCallback observer =
+                    new android.net.ConnectivityManager.NetworkCallback() {
+                        @Override public void onLost(android.net.Network network) {
+                            boolean sessionActive = autoSearchEnabled && autoConnected
+                                    && !serviceDestroyed && !stopRequested.get();
+                            if (!NetworkTransitionPolicy.shouldRecheckLostTransport(
+                                    watchedHandle, network.getNetworkHandle(), sessionActive)) return;
+                            appendAutoHistory("AUTO_PHYSICAL_NETWORK_LOST",
+                                    "شبکه اصلی این نشست از دست رفت؛ پس از مکث، عبور VPN بررسی می‌شود");
+                            schedulePhysicalNetworkRecheck();
+                        }
+                    };
+            try {
+                manager.registerNetworkCallback(request, observer);
+                physicalNetworkObserver = observer;
+                appendAutoHistory("AUTO_PHYSICAL_NETWORK_WATCHING",
+                        "پایش جابه‌جایی شبکه اصلی پس از اتصال موفق فعال شد");
+            } catch (RuntimeException registrationError) {
+                appendAutoHistory("AUTO_PHYSICAL_NETWORK_WATCH_FAILED",
+                        "ثبت پایش شبکه اصلی ممکن نشد: "
+                                + registrationError.getClass().getSimpleName());
+            }
+        }
+    }
+
+    /**
+     * Debounce link loss: the new Wi-Fi or cellular network may take time to
+     * become usable. Two real HTTPS tests on Android's VPN are required before
+     * the existing bounded failover code may touch the live OpenVPN session.
+     */
+    private void schedulePhysicalNetworkRecheck() {
+        synchronized (physicalNetworkObserverLock) {
+            if (qualityMonitorExecutor.isShutdown() || serviceDestroyed || stopRequested.get()) return;
+            if (physicalNetworkRecoveryTask != null) physicalNetworkRecoveryTask.cancel(false);
+            try {
+                physicalNetworkRecoveryTask = qualityMonitorExecutor.schedule(
+                        this::probeAfterPhysicalNetworkLoss, 3, TimeUnit.SECONDS);
+            } catch (java.util.concurrent.RejectedExecutionException ignored) {
+                // Service is stopping; never resurrect a cancelled connection.
+            }
+        }
+    }
+
+    private void probeAfterPhysicalNetworkLoss() {
+        if (!autoSearchEnabled || !autoConnected || serviceDestroyed || stopRequested.get()) return;
+        com.rahyab.next.TunnelVerifier.Result first =
+                com.rahyab.next.TunnelVerifier.verify(this);
+        if (!autoSearchEnabled || !autoConnected || serviceDestroyed || stopRequested.get()) return;
+        if (first.verified) {
+            appendAutoHistory("AUTO_NETWORK_RECHECK_OK",
+                    "پس از تغییر شبکه، عبور HTTPS همچنان برقرار است؛ اتصال حفظ شد");
+            return;
+        }
+        appendAutoHistory("AUTO_NETWORK_RECHECK_RETRY",
+                "آزمون نخست پس از تغییر شبکه ناموفق بود؛ تلاش دوم بدون قطع اتصال انجام می‌شود");
+        synchronized (physicalNetworkObserverLock) {
+            if (qualityMonitorExecutor.isShutdown() || serviceDestroyed || stopRequested.get()) return;
+            try {
+                physicalNetworkRecoveryTask = qualityMonitorExecutor.schedule(() -> {
+                    if (!autoSearchEnabled || !autoConnected || serviceDestroyed || stopRequested.get()) return;
+                    com.rahyab.next.TunnelVerifier.Result second =
+                            com.rahyab.next.TunnelVerifier.verify(this);
+                    boolean stillActive = autoSearchEnabled && autoConnected
+                            && !serviceDestroyed && !stopRequested.get();
+                    if (!NetworkTransitionPolicy.shouldRecoverAfterNetworkLoss(
+                            first.verified, second.verified, stillActive)) {
+                        if (second.verified) appendAutoHistory("AUTO_NETWORK_RECOVERED",
+                                "عبور HTTPS در بررسی دوم بازیابی شد؛ سرور قبلی حفظ شد");
+                        return;
+                    }
+                    appendAutoHistory("AUTO_NETWORK_RECHECK_FAILED",
+                            "دو آزمایش واقعی HTTPS بعد از قطع شبکه اصلی شکست خورد؛ "
+                                    + "بازیابی محدود طبق سقف نشست درخواست شد");
+                    requestAutoFailover("قطع غیرمنتظره شبکه اصلی پس از دو آزمون HTTPS");
+                }, 5, TimeUnit.SECONDS);
+            } catch (java.util.concurrent.RejectedExecutionException ignored) {
+                // A stop/revoke must not queue fresh recovery work.
+            }
+        }
+    }
+
+    /** Release the callback and any pending recovery task on user stop/revoke. */
+    private void stopPhysicalNetworkObserver() {
+        synchronized (physicalNetworkObserverLock) {
+            if (physicalNetworkRecoveryTask != null) {
+                physicalNetworkRecoveryTask.cancel(false);
+                physicalNetworkRecoveryTask = null;
+            }
+            android.net.ConnectivityManager.NetworkCallback observer = physicalNetworkObserver;
+            physicalNetworkObserver = null;
+            if (observer == null) return;
+            android.net.ConnectivityManager manager =
+                    getSystemService(android.net.ConnectivityManager.class);
+            if (manager == null) return;
+            try {
+                manager.unregisterNetworkCallback(observer);
+            } catch (RuntimeException ignored) {
+                // The callback may already be released during VPN revocation.
+            }
         }
     }
 
@@ -1992,9 +2118,10 @@ public final class RahYabVpnService extends VpnService {
         stopRequested.set(true);
         serviceDestroyed = true;
         autoSearchEnabled = false;
-        qualityMonitorExecutor.shutdownNow();
         autoConnected = false;
         cancelQualityMonitor();
+        stopPhysicalNetworkObserver();
+        qualityMonitorExecutor.shutdownNow();
         autoProfiles = null;
         activeAutoProfile = null;
         CountDownLatch activeAttempt = attemptSignal;
@@ -2036,6 +2163,7 @@ public final class RahYabVpnService extends VpnService {
         CountDownLatch activeAttempt = attemptSignal;
         if (activeAttempt != null) activeAttempt.countDown();
         attemptSignal = null;
+        stopPhysicalNetworkObserver();
         sessionExecutor.shutdownNow();
         qualityMonitorExecutor.shutdownNow();
         if (!terminalFailure) setLampState("disconnected");
