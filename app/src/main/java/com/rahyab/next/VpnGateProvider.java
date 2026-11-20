@@ -183,9 +183,12 @@ public final class VpnGateProvider {
             fallback.sort(Comparator.comparingLong((Server server) -> server.advertisedSpeedBytesPerSecond)
                     .reversed().thenComparingInt(server -> server.advertisedPingMs));
             for (Server server : fallback) {
-                String host = server.hostName.trim().toLowerCase(java.util.Locale.ROOT);
-                if (host.matches("public-vpn-[0-9]+")) host += ".opengw.net";
-                if (host.matches("[a-z0-9-]+\\.opengw\\.net")) endpoints.add(host + ":443");
+                // The CSV advertises OpenVPN profiles, not SSTP directly. As
+                // a *candidate* only, reuse a TCP port for known SoftEther
+                // VPN Gate DDNS host patterns; never guess port 443 for UDP
+                // profiles or arbitrary third-party hostnames.
+                String endpoint = sstpCandidateFromTcpProfile(server);
+                if (endpoint != null) endpoints.add(endpoint);
                 if (endpoints.size() >= 4) break;
             }
             for (String endpoint : advertised) {
@@ -198,10 +201,36 @@ public final class VpnGateProvider {
         }
     }
 
+    /**
+     * CSV only supplies OpenVPN metadata. On the official VPN Gate site,
+     * SoftEther's advertised TCP port may also host SSTP; treat this as an
+     * unverified relay candidate and require a real SSL/PPP/HTTPS handshake.
+     */
+    static String sstpCandidateFromTcpProfile(Server server) {
+        if (server == null || server.openVpnProfile == null) return null;
+        String hostname = server.hostName.trim().toLowerCase(java.util.Locale.ROOT);
+        if (hostname.matches("(?:public-vpn-[0-9]+|vpn[0-9]+)")) {
+            hostname += ".opengw.net";
+        }
+        if (!hostname.matches("(?:public-vpn-[0-9]+|vpn[0-9]+)\\.opengw\\.net"))
+            return null;
+        Matcher remoteProto = REMOTE_PROTO_LINE.matcher(server.openVpnProfile);
+        Matcher proto = PROTO_LINE.matcher(server.openVpnProfile);
+        String transport = remoteProto.find() ? remoteProto.group(1)
+                : proto.find() ? proto.group(1) : "";
+        if (!transport.toLowerCase(java.util.Locale.ROOT).startsWith("tcp"))
+            return null;
+        if (server.port < 1 || server.port > 65535) return null;
+        return hostname + ":" + server.port;
+    }
+
     static List<String> parseSstpDirectory(String html) {
         Pattern rows = Pattern.compile("(?is)<tr\\b[^>]*>.*?</tr\\s*>");
+        // The official table omits ':443' for the default SSTP port.
+        // The previous mandatory ':port' pattern silently discarded those rows.
         Pattern endpoint = Pattern.compile(
-                "(?i)SSTP\\s+Hostname\\s*:\\s*([a-z0-9-]+\\.opengw\\.net)\\s*:\\s*([0-9]{1,5})\\b");
+                "(?i)SSTP\\s+Hostname\\s*:\\s*([a-z0-9-]+\\.opengw\\.net)"
+                        + "(?:\\s*:\\s*([0-9]{1,5}))?(?=\\s|$)");
         Pattern speed = Pattern.compile("(?i)([0-9]+(?:\\.[0-9]+)?)\\s+Mbps");
         record Entry(String endpoint, int port, double advertisedMbps) {}
         List<Entry> entries = new ArrayList<>();
@@ -211,7 +240,7 @@ public final class VpnGateProvider {
                     .replaceAll("(?i)&nbsp;|&#160;", " ");
             Matcher address = endpoint.matcher(content);
             if (!address.find()) continue;
-            int port = Integer.parseInt(address.group(2));
+            int port = address.group(2) == null ? 443 : Integer.parseInt(address.group(2));
             if (port < 1 || port > 65535) continue;
             Matcher bandwidth = speed.matcher(content);
             entries.add(new Entry(address.group(1).toLowerCase(java.util.Locale.ROOT) + ":" + port,
