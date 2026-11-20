@@ -1059,11 +1059,25 @@ public class MainActivity extends Activity {
             } catch (RuntimeException ignored) { }
         }
         boolean mci = NetworkConnectionPolicy.isMciOperator(operator);
+        String memoryKey = currentSstpMemoryKey();
+        android.content.SharedPreferences sstpMemory =
+                getSharedPreferences("sstp_recent_good", MODE_PRIVATE);
+        long savedAt = memoryKey.isEmpty() ? 0L
+                : sstpMemory.getLong("saved_at_" + memoryKey, 0L);
+        long memoryAge = System.currentTimeMillis() - savedAt;
+        String savedHost = memoryKey.isEmpty() ? ""
+                : sstpMemory.getString("host_" + memoryKey, "");
+        boolean recentVerifiedSstp = savedAt > 0L && memoryAge >= 0L
+                && memoryAge < 6L * 60L * 60L * 1000L
+                && NetworkConnectionPolicy.isValidSstpHost(savedHost);
         remainingEngines.addAll(NetworkConnectionPolicy.quickOrder(mci,
                 !smartWireGuardProfiles.isEmpty()
-                    || !getPreferences(MODE_PRIVATE).getString("wireguard_sources", "").isEmpty()));
+                    || !getPreferences(MODE_PRIVATE).getString("wireguard_sources", "").isEmpty(),
+                recentVerifiedSstp));
         appendAppDiagnostic("انتخاب خودکار",
                 mci ? "اولویت همراه اول: SSTP سپس OpenVPN"
+                    : recentVerifiedSstp
+                    ? "سرور SSTP موفق اخیر همین شبکه: SSTP سپس OpenVPN"
                     : "اولویت شبکه: OpenVPN سپس SSTP");
         tryNextQuickEngine();
     }
