@@ -1132,8 +1132,12 @@ public class MainActivity extends Activity {
                 if (isDestroyed() || !quickConnect || attempt != smartAttempt) return;
                 nextHealthCheck = android.os.SystemClock.elapsedRealtime() + 10_000L;
                 healthFailures = result.verified ? 0 : healthFailures + 1;
+                if (!result.verified) appendAppDiagnostic("پایش اتصال",
+                        quickEngine + " — شکست بررسی " + healthFailures
+                                + "/2؛ علت: " + result.message);
                 if (healthFailures < 2 || remainingEngines.isEmpty()) return;
-                appendAppDiagnostic("پایش اتصال", quickEngine + " — دو آزمون اینترنت ناموفق");
+                appendAppDiagnostic("پایش اتصال", quickEngine
+                        + " — هر دو بررسی VPN ناموفق؛ آزمایش موتور بعدی");
                 stopBeforeQuickFallback();
             });
         });
