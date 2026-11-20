@@ -124,20 +124,15 @@ public class MainActivity extends Activity {
                     // HTML availability does not prove working YouTube video playback.
                     // Never award a 'best relay' score from this partial probe.
                     long speed = intent.getLongExtra("download_kbps", -1);
-                    if (xrayTrialCount > 0 && !xrayCandidates.isEmpty()
-                            && (speed <= 0 || speed < 500)) {
-                        xrayTryingAlternative = true;
-                        appendAppDiagnostic("Xray", "صفحه یوتیوب پاسخ داد، اما سرعت نمونه "
-                                + (speed <= 0 ? "نامشخص" : speed + " kbps")
-                                + " است؛ آزمون گزینه بعدی");
-                        publishDiscoveryStatus("سرور Xray کم‌سرعت بود؛ بررسی گزینه بعدی…", "searching");
-                        try {
-                            startService(new Intent(MainActivity.this, XrayVpnService.class).setAction(XrayVpnService.STOP));
-                        } catch (RuntimeException ignored) {
-                            clearXrayTrials();
-                            smartBusy = false;
-                        }
-                        break;
+                    // A real HTTPS + YouTube-page result must not be discarded
+                    // only because a tiny download sample is slow/unavailable.
+                    // Retain the first usable relay for browsing rather than
+                    // exhausting the list and leaving the user disconnected.
+                    if (xrayTrialCount > 0 && (speed <= 0 || speed < 500)) {
+                        appendAppDiagnostic("Xray",
+                                "صفحه یوتیوب پاسخ داد؛ سرعت نمونه "
+                                        + (speed <= 0 ? "نامشخص" : speed + " kbps")
+                                        + " است؛ اتصال محدود حفظ شد");
                     }
                     if (xrayTrialCount > 0) {
                         clearXrayTrials();
