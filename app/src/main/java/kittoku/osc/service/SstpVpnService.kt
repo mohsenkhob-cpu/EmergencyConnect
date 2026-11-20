@@ -152,6 +152,15 @@ class SstpVpnService : VpnService() {
     internal fun close(token: Int) {
         main.post {
             if (active && token == generation) {
+                // Distinguish a remote session drop *after* verified HTTPS
+                // from a relay that never carried traffic. Do not expose keys.
+                if (verified) {
+                    recordResult("نشست پس از تأیید HTTPS بسته شد؛ در حال آزمون مسیر جایگزین")
+                    publish("SSTP قبلاً اینترنت داشت، اما نشست بسته شد؛ آزمون سرور بعدی…",
+                        "searching")
+                } else {
+                    recordResult("نشست پیش از تأیید HTTPS بسته شد")
+                }
                 controller = null
                 tryNext()
             }
