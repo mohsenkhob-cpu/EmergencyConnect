@@ -149,4 +149,42 @@ public class VpnGateProviderTest {
         assertEquals("آینه HTTPS ثالث", servers.get(0).source);
     }
 
+    @Test public void parsesOfficialSstpHostnameWithImplicitPort443() {
+        String html = "<table>"
+                + "<tr><td>Line quality 120 Mbps</td>"
+                + "<td>MS-SSTP SSTP Hostname : public-vpn-255.opengw.net By operator</td></tr>"
+                + "<tr><td>Line quality 900 Mbps</td>"
+                + "<td>SSTP Hostname : vpn123456.opengw.net:995 By operator</td></tr>"
+                + "</table>";
+        assertEquals(List.of("public-vpn-255.opengw.net:443", "vpn123456.opengw.net:995"),
+                VpnGateProvider.parseSstpDirectory(html));
+    }
+
+    @Test public void rejectsInvalidSstpHostnameAndPortFromDirectory() {
+        String html = "<tr><td>SSTP Hostname : attacker.example:443</td></tr>"
+                + "<tr><td>SSTP Hostname : vpn123.opengw.net:65536</td></tr>"
+                + "<tr><td>SSTP Hostname : vpn123.opengw.net:8443</td></tr>";
+        assertEquals(List.of("vpn123.opengw.net:8443"),
+                VpnGateProvider.parseSstpDirectory(html));
+    }
+
+    @Test public void derivesFallbackOnlyFromVerifiedFormatOfficialTcpProfile() throws Exception {
+        String tcp = "client\\nproto tcp-client\\nremote 203.0.113.10 1498\\n";
+        String udp = "client\\nproto udp\\nremote 203.0.113.11 1194\\n";
+        String csv = "#HostName,IP,Score,Ping,Speed,Country,...\\n"
+                + row("vpn123456", "203.0.113.10", "JP", "1200000", "13", tcp)
+                + "\\n" + row("vpn654321", "203.0.113.11", "JP", "9000000", "16", udp);
+        List<VpnGateProvider.Server> parsed = VpnGateProvider.parse(csv);
+        assertEquals(2, parsed.size());
+        String candidate = null;
+        int skipped = 0;
+        for (VpnGateProvider.Server server : parsed) {
+            String value = VpnGateProvider.sstpCandidateFromTcpProfile(server);
+            if (value == null) skipped++;
+            else candidate = value;
+        }
+        assertEquals("vpn123456.opengw.net:1498", candidate);
+        assertEquals(1, skipped);
+    }
+
 }
