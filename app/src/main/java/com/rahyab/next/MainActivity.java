@@ -826,6 +826,19 @@ public class MainActivity extends Activity {
         xrayFinder.setContentDescription("فایل‌یاب هوشمند Xray");
         sstpButton = engineButton(topEngines, "🔐 SSTP", this::discoverSstp);
 
+        Button directVpnGate = new Button(this);
+        directVpnGate.setText("🌐  اتصال مستقیم SSTP از VPN Gate");
+        directVpnGate.setTextSize(16);
+        directVpnGate.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        directVpnGate.setAllCaps(false);
+        directVpnGate.setTextColor(Color.WHITE);
+        directVpnGate.setBackground(gradientCard(0xff158976, 0xff236ac3, 20));
+        directVpnGate.setElevation(dp(4));
+        LinearLayout.LayoutParams directParams = new LinearLayout.LayoutParams(-1, dp(57));
+        directParams.setMargins(dp(4), dp(8), dp(4), dp(6));
+        page.addView(directVpnGate, directParams);
+        directVpnGate.setOnClickListener(v -> showVpnGateSstpDialog());
+
         LinearLayout advancedPanel = new LinearLayout(this);
         advancedPanel.setOrientation(LinearLayout.VERTICAL);
         advancedPanel.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
@@ -2409,6 +2422,64 @@ public class MainActivity extends Activity {
             // Unknown SIMs must not accidentally share the cached MCI relay.
         }
         return NetworkConnectionPolicy.sstpMemoryKey(transport, operator);
+    }
+
+    /**
+     * Open SSTP-style manual connection to an exact host picked by the user
+     * from VPN Gate. No server discovery, changing hosts or app-level engine
+     * fallback for this explicit single-server request.
+     */
+    private void showVpnGateSstpDialog() {
+        if (!canStartManualVpn()) return;
+        EditText address = new EditText(this);
+        address.setSingleLine(true);
+        address.setHint("vpn123456.opengw.net:995");
+        address.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        address.setText(getPreferences(MODE_PRIVATE)
+                .getString("vpngate_direct_sstp_host", ""));
+        address.setSelectAllOnFocus(true);
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(18), dp(8), dp(18), dp(4));
+        TextView instructions = label(
+                "آدرس SSTP و پورت را از VPN Gate کپی کن. نام کاربری و رمز هر دو vpn هستند. "
+                        + "برنامه فقط همین سرور را آزمایش می‌کند و خودکار عوضش نمی‌کند.",
+                14, 0xff263c50, false);
+        form.addView(instructions);
+        form.addView(address, new LinearLayout.LayoutParams(-1, dp(58)));
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("اتصال مستقیم با Open SSTP")
+                .setView(form)
+                .setPositiveButton("اتصال به همین سرور", null)
+                .setNegativeButton("انصراف", null)
+                .create();
+        dialog.show();
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String endpoint = NetworkConnectionPolicy.parseVpnGateSstp(
+                    address.getText().toString());
+            if (endpoint == null) {
+                address.setError("فقط آدرس SSTP از VPN Gate مانند vpn123.opengw.net:995");
+                return;
+            }
+            if (!canStartManualVpn()) return;
+            dialog.dismiss();
+            // Hostname is public VPN Gate data; never store credentials.
+            getPreferences(MODE_PRIVATE).edit()
+                    .putString("vpngate_direct_sstp_host", endpoint)
+                    .putString("selected_engine", "SSTP").apply();
+            recordAttemptNetwork("sstp");
+            beginSmartAttempt("در حال اتصال مستقیم SSTP به " + endpoint);
+            appendAppDiagnostic("SSTP",
+                    "حالت دستی Open SSTP؛ فقط میزبان انتخابی " + endpoint
+                            + "؛ بدون تعویض خودکار سرور");
+            pendingSstpHosts = new ArrayList<>();
+            pendingSstpHosts.add(endpoint);
+            pendingSstpMemoryKey = "";
+            Intent permission = VpnService.prepare(this);
+            if (permission == null) launchSstp();
+            else startActivityForResult(permission, REQUEST_SSTP_PERMISSION);
+        });
     }
 
     private void discoverSstp() {
