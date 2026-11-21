@@ -1189,15 +1189,29 @@ public class MainActivity extends Activity {
         if (now < nextHealthCheck) return;
         nextHealthCheck = Long.MAX_VALUE;
         int attempt = smartAttempt;
+        String monitoredEngine = quickEngine;
         worker.execute(() -> {
-            TunnelVerifier.Result result = TunnelVerifier.verify(this);
+            boolean nativeCore = "Fluxcore".equals(monitoredEngine)
+                    || "Aether".equals(monitoredEngine);
+            boolean verified;
+            String failureReason;
+            if (nativeCore) {
+                // The native engine is excluded from its own VPN routing.
+                // Test actual HTTPS through its SOCKS5, with active TUN.
+                verified = NativeCoreVpnService.verifyLiveTraffic();
+                failureReason = "پل تونل یا HTTPS موتور پاسخ نداد";
+            } else {
+                TunnelVerifier.Result result = TunnelVerifier.verify(this);
+                verified = result.verified;
+                failureReason = result.message;
+            }
             runOnUiThread(() -> {
                 if (isDestroyed() || !quickConnect || attempt != smartAttempt) return;
                 nextHealthCheck = android.os.SystemClock.elapsedRealtime() + 10_000L;
-                healthFailures = result.verified ? 0 : healthFailures + 1;
-                if (!result.verified) appendAppDiagnostic("پایش اتصال",
-                        quickEngine + " — شکست بررسی " + healthFailures
-                                + "/2؛ علت: " + result.message);
+                healthFailures = verified ? 0 : healthFailures + 1;
+                if (!verified) appendAppDiagnostic("پایش اتصال",
+                        monitoredEngine + " — شکست بررسی " + healthFailures
+                                + "/2؛ علت: " + failureReason);
                 if (healthFailures < 2 || remainingEngines.isEmpty()) return;
                 appendAppDiagnostic("پایش اتصال", quickEngine
                         + " — هر دو بررسی VPN ناموفق؛ آزمایش موتور بعدی");
@@ -2675,6 +2689,9 @@ public class MainActivity extends Activity {
     }
 
     private boolean hasActiveAndroidVpn() {
+        // A VpnService that excludes its own UID sees Wi-Fi/cellular as its
+        // default network, even while all other apps use the native tunnel.
+        if (NativeCoreVpnService.hasRunningTunnel()) return true;
         android.net.ConnectivityManager manager =
                 getSystemService(android.net.ConnectivityManager.class);
         if (manager == null) return false;
