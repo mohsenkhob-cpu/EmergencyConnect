@@ -820,7 +820,12 @@ public class MainActivity extends Activity {
         page.addView(bottomEngines);
 
         discoveryButton = engineButton(bottomEngines, "🛰 OpenVPN", this::startSmartOpenVpnSearch);
+        // Standalone WireGuard has been retired from the user interface.
+        // Keep the legacy view reference until its internal lifecycle handlers
+        // are fully removed, so older callbacks remain null-safe.
         smartWireGuardButton = engineButton(bottomEngines, "⚡ WireGuard", this::startWireGuardSearch);
+        smartWireGuardButton.setVisibility(View.GONE);
+        smartWireGuardButton.setEnabled(false);
 
         Button xrayFinder = engineButton(bottomEngines, "🌐 Xray", this::showXrayFinder);
         xrayFinder.setContentDescription("فایل‌یاب هوشمند Xray");
@@ -854,12 +859,15 @@ public class MainActivity extends Activity {
         connectButton.setBackground(shape(Color.rgb(31, 151, 137), 18));
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(-1, dp(58));
         buttonParams.topMargin = dp(24);
+        // Legacy standalone WireGuard import is no longer a user-facing mode.
+        connectButton.setVisibility(View.GONE);
         advancedPanel.addView(connectButton, buttonParams);
         connectButton.setOnClickListener(v -> chooseWireGuardFile());
 
         Button vpnBookLink = new Button(this);
         vpnBookLink.setText("ساخت فایل رایگان WireGuard — VPNBook");
         vpnBookLink.setAllCaps(false);
+        vpnBookLink.setVisibility(View.GONE);
         advancedPanel.addView(vpnBookLink);
         vpnBookLink.setOnClickListener(v -> openWireGuardWebsite(
                 "https://www.vpnbook.com/freevpn/wireguard-vpn"));
@@ -867,16 +875,19 @@ public class MainActivity extends Activity {
         Button protonLink = new Button(this);
         protonLink.setText("دریافت فایل WireGuard — Proton VPN");
         protonLink.setAllCaps(false);
+        protonLink.setVisibility(View.GONE);
         advancedPanel.addView(protonLink);
         protonLink.setOnClickListener(v -> openWireGuardWebsite(
                 "https://protonvpn.com/support/wireguard-configurations"));
 
         TextView wgHelp = label("VPNBook رایگان است؛ فایل‌ها ۷ روز اعتبار دارند. فایل .conf را دریافت کنید و با دکمه «انتخاب فایل WireGuard» وارد کنید.",
                 12, Color.rgb(235, 190, 115), false);
+        wgHelp.setVisibility(View.GONE);
         advancedPanel.addView(wgHelp);
 
         Button wireGuardSources = new Button(this);
         wireGuardSources.setText("منابع آنلاین WireGuard");
+        wireGuardSources.setVisibility(View.GONE);
         advancedPanel.addView(wireGuardSources);
         wireGuardSources.setOnClickListener(v -> {
             if (smartWireGuardButton.isEnabled()) showWireGuardSources();
@@ -990,11 +1001,13 @@ public class MainActivity extends Activity {
         TextView psiphonNote = label("🧭 سایفون (Psiphon): در حال بررسی؛ هنوز موتور اتصال فعال نیست.", 13,
                 0xffffe5a6, true);
         psiphonNote.setBackground(gradientCard(0xff68518a, 0xff3d467b, 15));
-        advancedPanel.addView(psiphonNote);
+        // Psiphon was an inactive placeholder, not a usable VPN core.
+        // Remove its misleading visible entry. It is not included in auto-connect.
         TextView note = label("فایل WireGuard و OpenVPN و تنظیمات VLESS/REALITY مخصوص Xray قابل وارد کردن هستند.",
                 12, Color.rgb(235, 190, 115), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
         noteParams.topMargin = dp(24);
+        note.setText("فایل OpenVPN و تنظیمات VLESS/REALITY مخصوص Xray قابل وارد کردن هستند.");
         advancedPanel.addView(note, noteParams);
         setContentView(scroll);
     }
@@ -1083,9 +1096,7 @@ public class MainActivity extends Activity {
         boolean recentVerifiedSstp = savedAt > 0L && memoryAge >= 0L
                 && memoryAge < 6L * 60L * 60L * 1000L
                 && NetworkConnectionPolicy.isValidSstpHost(savedHost);
-        remainingEngines.addAll(NetworkConnectionPolicy.quickOrder(mci,
-                !smartWireGuardProfiles.isEmpty()
-                    || !getPreferences(MODE_PRIVATE).getString("wireguard_sources", "").isEmpty(),
+        remainingEngines.addAll(NetworkConnectionPolicy.quickOrder(mci, false,
                 recentVerifiedSstp));
         appendAppDiagnostic("انتخاب خودکار",
                 mci ? "اولویت همراه اول: SSTP سپس OpenVPN"
@@ -1110,7 +1121,7 @@ public class MainActivity extends Activity {
         switch (quickEngine) {
             case "SSTP" -> discoverSstp();
             case "sing-box" -> startSmartSingBox();
-            case "WireGuard" -> startWireGuardSearch();
+            // Standalone WireGuard is intentionally absent from quick-connect.
             case "OpenVPN" -> startSmartOpenVpnSearch();
         }
     }
