@@ -342,16 +342,32 @@ internal class SSLTerminal(private val bridge: SharedBridge) {
                     buffer.position(startPayload)
 
                     inboundBuffer.slide()
-
+                    val available = inboundBuffer.capacityAfterLimit
+                    if (available <= 0) {
+                        // A TLS record larger than the packet buffer cannot be
+                        // completed. Stop with a typed I/O error instead of
+                        // passing an invalid ByteBuffer range to the engine.
+                        throw java.io.IOException("SSTP_TLS_PACKET_BUFFER_EXHAUSTED")
+                    }
                     try {
                         val readSize = socketInputStream.read(
                             inboundBuffer.array(),
                             inboundBuffer.limit(),
-                            inboundBuffer.capacityAfterLimit
+                            available
                         )
-
-                        inboundBuffer.limit(inboundBuffer.limit() + readSize)
-                    } catch (_: SocketTimeoutException) { }
+                        // read() returns -1 on normal remote EOF, *not* a byte
+                        // count. Decrementing limit by -1 could previously
+                        // throw IllegalArgumentException on an empty buffer.
+                        if (readSize < 0) {
+                            throw java.io.EOFException("SSTP_TLS_REMOTE_EOF")
+                        }
+                        if (readSize > 0) {
+                            inboundBuffer.limit(inboundBuffer.limit() + readSize)
+                        }
+                    } catch (_: SocketTimeoutException) {
+                        // No complete TLS record yet; retry until the
+                        // controller's normal liveness guard expires.
+                    }
                 }
 
                 else -> {
