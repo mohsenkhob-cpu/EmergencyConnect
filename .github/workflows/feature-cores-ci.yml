@@ -1,0 +1,312 @@
+name: Build Fluxcore Aether feature APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/fluxcore-aether-replace-wireguard-psiphon
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: filter-mohsen-native-cores-feature
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Locate Android SDK tools
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager was not found under $SDK_ROOT"
+            exit 1
+          fi
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+      - name: Install Android SDK packages
+        run: |
+          yes | "$SDKMANAGER" --licenses
+          "$SDKMANAGER" "platform-tools"
+          "$SDKMANAGER" "platforms;android-35"
+          "$SDKMANAGER" "build-tools;35.0.0"
+          "$SDKMANAGER" "ndk;27.2.12479018"
+      - name: Wait for matching native build from this commit
+        id: native-wait
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Checking native source changes for commit $GITHUB_SHA"
+          CHANGED_FILES="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '[.files[].filename] | .[]')"
+          if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(overlay/native/|.github/workflows/openvpn-native-ci.yml$)'; then
+            REQUIRE_EXACT_SHA=true
+          else
+            REQUIRE_EXACT_SHA=false
+          fi
+          echo "Require exact native commit: $REQUIRE_EXACT_SHA"
+          for attempt in $(seq 1 120); do
+            RUN_JSON="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/openvpn-native-ci.yml/runs?branch=rahyab-next&per_page=30")"
+            if [ "$REQUIRE_EXACT_SHA" = true ]; then
+              MATCH="$(printf '%s' "$RUN_JSON" | jq -r --arg sha "$GITHUB_SHA" '[.workflow_runs[] | select(.head_sha == $sha)] | sort_by(.created_at) | last // empty')"
+            else
+              MATCH="$(printf '%s' "$RUN_JSON" | jq -r '[.workflow_runs[]] | sort_by(.created_at) | last // empty')"
+            fi
+            if [ -n "$MATCH" ]; then
+              STATUS="$(printf '%s' "$MATCH" | jq -r '.status')"
+              CONCLUSION="$(printf '%s' "$MATCH" | jq -r '.conclusion // empty')"
+              RUN_ID="$(printf '%s' "$MATCH" | jq -r '.id')"
+              echo "Native run $RUN_ID: status=$STATUS conclusion=$CONCLUSION"
+              if [ "$STATUS" = "completed" ]; then
+                if [ "$CONCLUSION" = "success" ]; then
+                  echo "native_run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                echo "Matching native build did not succeed: $CONCLUSION"
+                exit 1
+              fi
+            else
+              echo "Matching native workflow run is not visible yet."
+            fi
+            sleep 30
+          done
+          echo "Timed out waiting for the matching native build."
+          exit 1
+      - name: Locate latest successful OpenVPN 3 native artifact
+        id: native-artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID="${{ steps.native-wait.outputs.native_run_id }}"
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful OpenVPN 3 native build was confirmed."
+            exit 1
+          fi
+          ARTIFACT_COUNT="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --jq '[.artifacts[] | select(.name == "RahYab-OpenVPN3-native-arm64-compile-check" and .expired == false)] | length')"
+          if [ "$ARTIFACT_COUNT" -lt 1 ]; then
+            echo "The latest successful native workflow has no usable ARM64 artifact."
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Using successful native build run $RUN_ID"
+
+      - name: Download verified OpenVPN 3 ARM64 native library
+        uses: actions/download-artifact@v4
+        with:
+          name: RahYab-OpenVPN3-native-arm64-compile-check
+          repository: mohsenkhob-cpu/EmergencyConnect
+          run-id: ${{ steps.native-artifact.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: app/src/main/jniLibs/arm64-v8a
+      - name: Verify packaged OpenVPN 3 JNI ABI
+        run: |
+          LIB="app/src/main/jniLibs/arm64-v8a/libopenvpn3_jni.so"
+          test -s "$LIB"
+          file "$LIB" | grep -q "ARM aarch64"
+          readelf -Ws "$LIB" | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession"
+          readelf -Ws "$LIB" | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService"
+      - name: Strip native debug sections to reduce APK size
+        run: |
+          NDK_ROOT="$ANDROID_HOME/ndk/27.2.12479018"
+          STRIP="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          test -x "$STRIP"
+          find app/src/main/jniLibs -type f -name '*.so' -print0 | while IFS= read -r -d '' LIB; do
+            BEFORE="$(stat -c%s "$LIB")"
+            "$STRIP" --strip-debug "$LIB"
+            AFTER="$(stat -c%s "$LIB")"
+            echo "$(basename "$LIB"): $BEFORE -> $AFTER bytes"
+          done
+          readelf -Ws app/src/main/jniLibs/arm64-v8a/libopenvpn3_jni.so | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeStartSession"
+          readelf -Ws app/src/main/jniLibs/arm64-v8a/libopenvpn3_jni.so | grep -q "Java_ir_emergencyconnect_engine_OpenVpn3Bridge_nativeBindTunService"
+      - name: Prepare Gradle's actual Android signing directory
+        run: mkdir -p "$HOME/.config/.android"
+      - name: Reuse Gradle debug signing key across CI builds
+        uses: actions/cache@v4
+        with:
+          path: ~/.config/.android/debug.keystore
+          key: filter-mohsen-gradle-debug-keystore-v1
+      - name: Ensure Gradle's effective debug signing key exists
+        run: |
+          KEYSTORE="$HOME/.config/.android/debug.keystore"
+          if [ ! -s "$KEYSTORE" ]; then
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE" \
+              -storepass android \
+              -alias AndroidDebugKey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          test -s "$KEYSTORE"
+          chmod 600 "$KEYSTORE"
+          keytool -list -keystore "$KEYSTORE" -storepass android -alias AndroidDebugKey
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Verify experimental OpenVPN JNI and TUN safety contracts
+        run: bash overlay/native/android-jni/check_session_gate.sh
+      - name: Report effective Android signing configuration
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:signingReport | tee signing-report.txt
+          echo "Signing report saved for diagnosis."
+      - name: Set up Go for libXray
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Build pinned Android libXray and collect notices
+        run: |
+          set -euo pipefail
+          PROJECT="$PWD"
+          XRAY="$RUNNER_TEMP/libxray"
+          git init "$XRAY"
+          git -C "$XRAY" fetch --depth=1 https://github.com/XTLS/libXray.git 5a0f7d8d1c28b34afb5727b04b26a10f6dbac7e3
+          git -C "$XRAY" checkout --detach FETCH_HEAD
+          cp xray/android_tun.go "$XRAY/"
+          mkdir -p app/libs app/src/main/assets/xray-notices
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          cd "$XRAY"
+          MOBILE="$(go mod download -json golang.org/x/mobile | jq -er '.Dir')"
+          cp -R "$MOBILE" "$RUNNER_TEMP/xray-mobile"
+          chmod -R u+w "$RUNNER_TEMP/xray-mobile"
+          python "$PROJECT/xray/isolate_gomobile.py" "$RUNNER_TEMP/xray-mobile"
+          go mod edit -replace="golang.org/x/mobile=$RUNNER_TEMP/xray-mobile"
+          (cd "$RUNNER_TEMP/xray-mobile" && go install ./cmd/gomobile ./cmd/gobind)
+          mkdir -p "$PROJECT/app/src/main/assets/xray-notices/golang.org/x/mobile"
+          cp "$MOBILE/LICENSE" "$MOBILE/PATENTS" "$PROJECT/app/src/main/assets/xray-notices/golang.org/x/mobile/"
+          gomobile init
+          (cd "$RUNNER_TEMP/xray-mobile" && go install ./cmd/gobind)
+          gomobile bind -target=android/arm64 -androidapi 26 -trimpath \
+            -ldflags='-checklinkname=0 -s -w -buildid= -extldflags=-Wl,-z,max-page-size=16384,--pack-dyn-relocs=android' \
+            -o "$PROJECT/app/libs/libXray.aar" .
+          python "$PROJECT/xray/collect_notices.py" "$PROJECT/app/src/main/assets/xray-notices"
+      - name: Build pinned Fluxcore ARM64 native executable and notices
+        run: |
+          set -euo pipefail
+          SRC="$RUNNER_TEMP/mohsen-fluxcore"
+          git init "$SRC"
+          git -C "$SRC" fetch --depth=1 https://github.com/FossilizedProgrammer/fluxcore.git c807bef11d0a7f87057874db6d9af8d8b5584f41
+          git -C "$SRC" checkout --detach FETCH_HEAD
+          test "$(git -C "$SRC" rev-parse HEAD)" = c807bef11d0a7f87057874db6d9af8d8b5584f41
+          mkdir -p app/src/main/jniLibs/arm64-v8a app/src/main/assets/engine-notices/fluxcore
+          NDK="$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          (
+            cd "$SRC"
+            env GOOS=android GOARCH=arm64 CGO_ENABLED=1 CC="$NDK/aarch64-linux-android26-clang"               CXX="$NDK/aarch64-linux-android26-clang++"               go build -trimpath               -ldflags="-s -w -extldflags=-Wl,-z,max-page-size=16384"               -o "$GITHUB_WORKSPACE/app/src/main/jniLibs/arm64-v8a/libfluxcore.so" .
+          )
+          cp "$SRC/LICENSE" "$SRC/NOTICE" app/src/main/assets/engine-notices/fluxcore/
+          file app/src/main/jniLibs/arm64-v8a/libfluxcore.so
+          readelf -h app/src/main/jniLibs/arm64-v8a/libfluxcore.so | grep -q "AArch64"
+      - name: Package official Aether ARM64 native executable and AGPL notices
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/mohsen-aether"
+          mkdir -p "$ROOT" app/src/main/assets/engine-notices/aether
+          URL="https://github.com/CluvexStudio/Aether/releases/download/v2.4.0"
+          curl -fL --retry 3 "$URL/aether-android-arm64.tar.gz" -o "$ROOT/aether.tar.gz"
+          curl -fL --retry 3 "$URL/aether-android-arm64.tar.gz.sha256" -o "$ROOT/aether.sha256"
+          EXPECTED="$(grep -oE '[0-9a-fA-F]{64}' "$ROOT/aether.sha256" | head -1 | tr '[:upper:]' '[:lower:]')"
+          test "${#EXPECTED}" -eq 64
+          ACTUAL="$(sha256sum "$ROOT/aether.tar.gz" | awk '{print $1}')"
+          test "$EXPECTED" = "$ACTUAL"
+          mkdir -p "$ROOT/extracted"
+          tar -xzf "$ROOT/aether.tar.gz" -C "$ROOT/extracted"
+          BINARY="$(find "$ROOT/extracted" -type f -name 'aether' -print -quit)"
+          if [ -z "$BINARY" ]; then
+            while IFS= read -r -d '' CANDIDATE; do
+              if readelf -h "$CANDIDATE" 2>/dev/null | grep -q 'Machine:.*AArch64'; then
+                BINARY="$CANDIDATE"
+                break
+              fi
+            done < <(find "$ROOT/extracted" -type f -print0)
+          fi
+          test -n "$BINARY"
+          readelf -h "$BINARY" | grep -q "AArch64"
+          cp "$BINARY" app/src/main/jniLibs/arm64-v8a/libaether.so
+          chmod 755 app/src/main/jniLibs/arm64-v8a/libaether.so
+          git clone --depth 1 --branch v2.4.0 https://github.com/CluvexStudio/Aether.git "$ROOT/source"
+          cp "$ROOT/source/LICENSE" app/src/main/assets/engine-notices/aether/LICENSE
+          printf '%s\n' 'Aether AGPL-3.0, source: https://github.com/CluvexStudio/Aether/tree/v2.4.0'             'Unmodified Android release executable v2.4.0. License and full corresponding source available at that link.'             > app/src/main/assets/engine-notices/aether/SOURCE.txt
+          file app/src/main/jniLibs/arm64-v8a/libaether.so
+      - name: Build MIT hev-socks5-tunnel JNI TUN bridge for Android ARM64
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/mohsen-tunbridge"
+          mkdir -p "$ROOT"
+          git clone --recursive --depth 1 --branch 2.20.0             https://github.com/heiher/hev-socks5-tunnel.git "$ROOT/jni"
+          "$ANDROID_HOME/ndk/27.2.12479018/ndk-build" -C "$ROOT"             APP_ABI=arm64-v8a APP_PLATFORM=android-29 -j2
+          LIB="$ROOT/libs/arm64-v8a/libhev-socks5-tunnel.so"
+          test -s "$LIB"
+          cp "$LIB" app/src/main/jniLibs/arm64-v8a/
+          mkdir -p app/src/main/assets/engine-notices/hev-socks5-tunnel
+          cp "$ROOT/jni/LICENSE" app/src/main/assets/engine-notices/hev-socks5-tunnel/LICENSE
+          file app/src/main/jniLibs/arm64-v8a/libhev-socks5-tunnel.so
+          readelf -h app/src/main/jniLibs/arm64-v8a/libhev-socks5-tunnel.so | grep -q "AArch64"
+          for LIB in libfluxcore.so libaether.so libhev-socks5-tunnel.so; do
+            test -s "app/src/main/jniLibs/arm64-v8a/$LIB"
+          done
+      - name: Build debug APK
+        run: gradle --no-daemon -PciVersionCode=32 testDebugUnitTest assembleDebug
+      - name: Verify APK signature, package, ABI, alignment and checksum
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          test -s "$APK"
+          unzip -tq "$APK"
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          KEYSTORE="$HOME/.config/.android/debug.keystore"
+          test -s "$KEYSTORE"
+          EXPECTED_SIGNER="$(keytool -list -v -keystore "$KEYSTORE" -storepass android -alias AndroidDebugKey | awk -F': ' '/SHA256:/ {gsub(/:/, "", $2); print tolower($2); exit}')"
+          ACTUAL_SIGNER="$( "$TOOLS/apksigner" verify --print-certs "$APK" | awk -F": " '/Signer #1 certificate SHA-256 digest:/ {print tolower($2)}' )"
+          test -n "$EXPECTED_SIGNER"
+          echo "Persistent keystore signer: $EXPECTED_SIGNER"
+          echo "APK signer:                 $ACTUAL_SIGNER"
+          # Feature branch uses an ephemeral isolated signer, not the production
+          # key. Only the production branch may publish an APK installable over
+          # the user's existing signed package.
+          if [ "$ACTUAL_SIGNER" != "$EXPECTED_SIGNER" ]; then
+            echo "ERROR: APK signer does not match the persistent Gradle debug keystore. Refusing to publish."
+            exit 1
+          fi
+          unzip -l "$APK" | awk '$NF == "lib/arm64-v8a/libmohsenxrayjni.so" {hit=1} END {exit !hit}'
+          unzip -l "$APK" | awk '$NF == "assets/xray-notices/XTLS-libXray/LICENSE" {hit=1} END {exit !hit}'
+          for ENGINE in libfluxcore.so libaether.so libhev-socks5-tunnel.so; do
+            unzip -l "$APK" | awk -v name="lib/arm64-v8a/$ENGINE" '$NF == name {found=1} END {exit !found}'
+          done
+          for NOTICE in fluxcore/LICENSE fluxcore/NOTICE aether/LICENSE hev-socks5-tunnel/LICENSE; do
+            unzip -l "$APK" | awk -v name="assets/engine-notices/$NOTICE" '$NF == name {found=1} END {exit !found}'
+          done
+          "$TOOLS/zipalign" -c -v 4 "$APK"
+          "$TOOLS/aapt" dump badging "$APK" | grep -F "package: name='com.mohsen.filter' versionCode='32' versionName='1.0.31'"
+          "$TOOLS/aapt" dump badging "$APK" | grep -F "native-code: 'arm64-v8a'"
+          {
+            echo "APK bytes: $(stat -c%s "$APK")"
+            sha256sum "$APK"
+            "$TOOLS/apksigner" verify --print-certs "$APK" | grep -E "Signer #1 certificate SHA-256 digest:"
+          } | tee "app/build/outputs/apk/debug/APK-INTEGRITY.txt"
+      - name: Upload verified APK and integrity report
+        uses: actions/upload-artifact@v4
+        with:
+          name: Filter-Mohsen-debug
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/debug/APK-INTEGRITY.txt
+          if-no-files-found: error
