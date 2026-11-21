@@ -22,6 +22,15 @@
             </intent-filter>
         </activity>
         <service
+            android:name=".NativeCoreVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Native Fluxcore and Aether VPN engines with full tunnel" />
+            <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
+        </service>
+        <service
             android:name=".XrayVpnService"
             android:process=":xray"
             android:permission="android.permission.BIND_VPN_SERVICE"
