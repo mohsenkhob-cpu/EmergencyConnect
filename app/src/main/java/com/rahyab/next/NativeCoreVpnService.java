@@ -48,6 +48,7 @@ public final class NativeCoreVpnService extends VpnService {
     private volatile ParcelFileDescriptor tunCopy;
     private volatile String currentEngine = "";
     private volatile Thread worker;
+    private static volatile NativeCoreVpnService activeInstance;
     private final Object teardownLock = new Object();
     private static final int SOCKS_PORT = 18080;
     private static final int HTTP_PORT = 18081;
@@ -80,6 +81,7 @@ public final class NativeCoreVpnService extends VpnService {
         startForeground(7511, notification);
 
         stopped = false;
+        activeInstance = this;
         currentEngine = requested;
         int token = generation.incrementAndGet();
         report(requested + " — جست‌وجوی مسیر قابل‌دسترسی…", "searching");
@@ -261,12 +263,15 @@ public final class NativeCoreVpnService extends VpnService {
             return "ساخت تونل ناموفق: " + error.getClass().getSimpleName();
         }
 
-        // An HTTPS probe must be explicitly pinned to the actual VPN interface.
-        // Verifying only a SOCKS listener would not prove Android TUN routing.
-        TunnelVerifier.Result verify = TunnelVerifier.verify(this);
+        // An excluded app UID cannot always bind a direct test to its own
+        // Android VPN. Such a failed probe is NOT proof that user apps are
+        // offline. Require (1) authenticated HTTPS from the actual native
+        // SOCKS engine and (2) an established, running TUN/tun2socks bridge.
+        // Never say "VPN HTTPS verified" unless that separate test really passed.
+        if (!NativeProxyProbe.verify(SOCKS_PORT) || !hasRunningTunnel())
+            return "پل VPN یا عبور HTTPS موتور تأیید نشد";
         if (!current(token)) return null;
-        if (!verify.verified) return "آزمون HTTPS از مسیر VPN: " + verify.message;
-        report(name + " — اینترنت از مسیر VPN تأیید شد", "connected");
+        report(name + " — HTTPS موتور تأیید شد؛ تونل VPN فعال است", "connected");
 
         int consecutiveFailures = 0;
         while (current(token)) {
@@ -276,13 +281,14 @@ public final class NativeCoreVpnService extends VpnService {
                     || !TProxyService.TProxyIsRunning()) {
                 return "تونل یا موتور بسته شد";
             }
-            TunnelVerifier.Result health = TunnelVerifier.verify(this);
+            boolean reachable = NativeProxyProbe.verify(SOCKS_PORT)
+                    && hasRunningTunnel();
             if (!current(token)) return null;
-            if (health.verified) {
+            if (reachable) {
                 consecutiveFailures = 0;
-                report(name + " — اتصال پایدار؛ HTTPS تأیید شد", "connected");
+                report(name + " — عبور HTTPS موتور و پل VPN فعال است", "connected");
             } else if (++consecutiveFailures >= 2) {
-                return "دو آزمون اینترنت متوالی ناموفق بود";
+                return "دو آزمون واقعی HTTPS موتور متوالی ناموفق بود";
             } else {
                 report(name + " — افت موقت کیفیت؛ بررسی مجدد…", "connected");
             }
@@ -366,12 +372,29 @@ public final class NativeCoreVpnService extends VpnService {
     }
 
     @Override public void onDestroy() {
+        if (activeInstance == this) activeInstance = null;
         stopped = true;
         generation.incrementAndGet();
         Thread old = worker;
         if (old != null) old.interrupt();
         synchronized (teardownLock) { teardownNative(); }
         super.onDestroy();
+    }
+
+    /** The app UID is excluded from VPN; getActiveNetwork() may be Wi-Fi
+     * even while other apps are using our live TUN. Check the service owner. */
+    public static boolean hasRunningTunnel() {
+        NativeCoreVpnService instance = activeInstance;
+        if (instance == null || instance.stopped || instance.tun == null
+                || instance.engineProcess == null || !instance.engineProcess.isAlive())
+            return false;
+        try { return TProxyService.TProxyIsRunning(); }
+        catch (RuntimeException | LinkageError error) { return false; }
+    }
+
+    /** Worker-thread-only verified HTTPS via local native engine's SOCKS5. */
+    public static boolean verifyLiveTraffic() {
+        return hasRunningTunnel() && NativeProxyProbe.verify(SOCKS_PORT);
     }
 
     public static long[] tunnelBytes() {
