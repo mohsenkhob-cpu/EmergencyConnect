@@ -99,12 +99,34 @@ public final class NativeCoreVpnService extends VpnService {
 
     private void report(String message, String lamp) {
         try {
-            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+            String old = prefs.getString("app_event_history", "");
+            String stamp = new java.text.SimpleDateFormat(
+                    "yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                    .format(new java.util.Date());
+            // All messages are locally authored, and native stdout, identity,
+            // gateway secrets and connection keys are never persisted.
+            String safe = message.replace('\n', ' ').replace('\r', ' ');
+            String history = old.isEmpty() ? stamp + " | موتور جدید | " + safe
+                    : old + "\n" + stamp + " | موتور جدید | " + safe;
+            String[] lines = history.split("\n");
+            if (lines.length > 120) {
+                StringBuilder tail = new StringBuilder();
+                for (int i = lines.length - 120; i < lines.length; i++) {
+                    if (tail.length() > 0) tail.append('\n');
+                    tail.append(lines[i]);
+                }
+                history = tail.toString();
+            }
+            prefs.edit()
                 .putString("service_status_message", message)
                 .putString("connection_lamp_state", lamp)
-                .putLong("service_status_updated_at", System.currentTimeMillis()).apply();
-            // No private identity, saved credentials or raw process output.
-        } catch (RuntimeException ignored) { }
+                .putLong("service_status_updated_at", System.currentTimeMillis())
+                .putString("app_event_history", history).apply();
+        } catch (RuntimeException ignored) {
+            // Diagnostics must never crash a working tunnel.
+        }
     }
 
     private void runSession(String name, int token) {
