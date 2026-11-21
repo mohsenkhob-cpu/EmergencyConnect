@@ -14,7 +14,7 @@ public class NetworkConnectionPolicyTest {
     }
 
     @Test public void otherNetworksPreserveVerifiedOpenvpnFirst() {
-        assertEquals(List.of("OpenVPN", "SSTP", "WireGuard"),
+        assertEquals(List.of("OpenVPN", "SSTP"),
                 NetworkConnectionPolicy.quickOrder(false, true));
     }
 
@@ -46,7 +46,7 @@ public class NetworkConnectionPolicyTest {
     @Test public void preferRecentlyVerifiedSstpOnWifiWithoutRemovingOpenvpnFallback() {
         assertEquals(List.of("SSTP", "OpenVPN"),
                 NetworkConnectionPolicy.quickOrder(false, false, true));
-        assertEquals(List.of("SSTP", "OpenVPN", "WireGuard"),
+        assertEquals(List.of("SSTP", "OpenVPN"),
                 NetworkConnectionPolicy.quickOrder(false, true, true));
     }
 
