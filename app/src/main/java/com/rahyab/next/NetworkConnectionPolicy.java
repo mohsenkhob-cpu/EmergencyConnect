@@ -67,6 +67,26 @@ final class NetworkConnectionPolicy {
         return result;
     }
 
+    /**
+     * Read the same DDNS hostname/port users copy from VPN Gate into
+     * Open SSTP Client. Reject IPs, URLs and arbitrary hosts so we never
+     * silently send VPN credentials to a non-VPN-Gate endpoint.
+     */
+    static String parseVpnGateSstp(String input) {
+        if (input == null) return null;
+        String value = input.trim().toLowerCase(Locale.ROOT);
+        int marker = value.indexOf("sstp hostname");
+        if (marker >= 0) {
+            int separator = value.indexOf(':', marker);
+            if (separator < 0) return null;
+            value = value.substring(separator + 1).trim().split("\\s+")[0];
+        }
+        if (!value.matches("[a-z0-9-]+\\.opengw\\.net(?::[0-9]{1,5})?"))
+            return null;
+        if (!value.contains(":")) value += ":443";
+        return isValidSstpHost(value) ? value : null;
+    }
+
     static boolean isValidSstpHost(String endpoint) {
         return endpoint != null &&
                 endpoint.matches("(?i)[a-z0-9-]+\\.opengw\\.net:[1-9][0-9]{0,4}")
