@@ -20,4 +20,19 @@ public final class NetworkTransitionPolicy {
         return userInitiatedSessionActive
                 && !firstVpnProbeSucceeded && !secondVpnProbeSucceeded;
     }
+    /**
+     * Ignore recently unreachable OpenVPN endpoints only on the same
+     * underlying network. The cooldown is short and reversible: a network
+     * switch or 30-minute expiry permits retesting.
+     */
+    public static boolean isRelayOnNoRouteCooldown(
+            String candidate, String failedEndpoint, long nowMs, long failureAtMs,
+            long networkHandle, long failureNetworkHandle, int transport, int failureTransport) {
+        return candidate != null && !candidate.isEmpty()
+                && candidate.equals(failedEndpoint)
+                && networkHandle > 0L && networkHandle == failureNetworkHandle
+                && transport >= 0 && transport == failureTransport
+                && failureAtMs > 0L && nowMs >= failureAtMs
+                && nowMs - failureAtMs < 30L * 60L * 1000L;
+    }
 }
