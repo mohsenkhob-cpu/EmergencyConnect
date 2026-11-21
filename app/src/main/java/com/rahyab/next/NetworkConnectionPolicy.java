@@ -51,7 +51,8 @@ final class NetworkConnectionPolicy {
             order.add("OpenVPN");
             order.add("SSTP");
         }
-        if (validWireGuardProfiles) order.add("WireGuard");
+        // Standalone WireGuard is retired; Fluxcore will manage its own
+        // private WireGuard/AmneziaWG transport once separately integrated.
         return order;
     }
 
