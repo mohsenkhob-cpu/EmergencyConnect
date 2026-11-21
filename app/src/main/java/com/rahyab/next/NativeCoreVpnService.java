@@ -42,6 +42,7 @@ public final class NativeCoreVpnService extends VpnService {
 
     private final AtomicInteger generation = new AtomicInteger();
     private volatile boolean stopped = true;
+    private volatile boolean closing = false;
     private volatile Process engineProcess;
     private volatile ParcelFileDescriptor tun;
     private volatile ParcelFileDescriptor tunCopy;
@@ -63,8 +64,8 @@ public final class NativeCoreVpnService extends VpnService {
             stopSelf(startId);
             return START_NOT_STICKY;
         }
-        if (!stopped) {
-            report("برای تعویض موتور ابتدا اتصال قبلی را قطع کنید", "failed");
+        if (!stopped || closing) {
+            report("اتصال قبلی هنوز در حال آزادسازی است؛ پس از اتمام دوباره تلاش کنید", "failed");
             return START_NOT_STICKY;
         }
 
@@ -123,8 +124,11 @@ public final class NativeCoreVpnService extends VpnService {
             if (current(token)) report(name + " — خطای موتور: "
                     + error.getClass().getSimpleName(), "failed");
         } finally {
-            synchronized (teardownLock) { teardownNative(); }
+            // The STOP command can invalidate this generation while a new
+            // session is being scheduled. A stale worker must never close the
+            // newer session's TUN/process.
             if (generation.get() == token) {
+                synchronized (teardownLock) { teardownNative(); }
                 stopped = true;
                 stopForeground(STOP_FOREGROUND_REMOVE);
                 stopSelf();
@@ -288,14 +292,20 @@ public final class NativeCoreVpnService extends VpnService {
 
     private File prepareCertificateBundle() {
         File certs = new File(getFilesDir(), "nativecore-ca-roots.pem");
-        if (certs.isFile() && certs.length() > 1000) return certs;
+        if (certs.isFile() && certs.length() > 1000
+                && System.currentTimeMillis() - certs.lastModified()
+                        < 7L * 24L * 60L * 60L * 1000L) return certs;
         try {
             KeyStore store = KeyStore.getInstance("AndroidCAStore");
             store.load(null);
             try (FileOutputStream out = new FileOutputStream(certs)) {
                 java.util.Enumeration<String> aliases = store.aliases();
                 while (aliases.hasMoreElements()) {
-                    Certificate cert = store.getCertificate(aliases.nextElement());
+                    String alias = aliases.nextElement();
+                    // Match Android's system trust anchors rather than
+                    // accidentally trusting user-added debugging roots.
+                    if (!alias.startsWith("system:")) continue;
+                    Certificate cert = store.getCertificate(alias);
                     if (cert == null) continue;
                     out.write("-----BEGIN CERTIFICATE-----\n".getBytes(StandardCharsets.US_ASCII));
                     out.write(Base64.getMimeEncoder(64, new byte[] { '\n' })
@@ -334,14 +344,19 @@ public final class NativeCoreVpnService extends VpnService {
 
     private void stopAndExit() {
         stopped = true;
+        closing = true;
         generation.incrementAndGet();
         Thread old = worker;
         if (old != null) old.interrupt();
         report("اتصال " + currentEngine + " قطع شد", "disconnected");
         new Thread(() -> {
-            synchronized (teardownLock) { teardownNative(); }
-            stopForeground(STOP_FOREGROUND_REMOVE);
-            stopSelf();
+            try {
+                synchronized (teardownLock) { teardownNative(); }
+            } finally {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+                stopSelf();
+                closing = false;
+            }
         }, "mohsen-core-stop").start();
     }
 
