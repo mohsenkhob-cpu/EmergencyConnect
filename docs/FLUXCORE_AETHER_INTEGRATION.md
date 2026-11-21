@@ -13,7 +13,9 @@ Requested behavior:
 - WireGuard is removed from the auto-connect priority order; tests updated.
 - The inactive Psiphon status label is removed.
 - Legacy WireGuard implementation is retained temporarily in source to avoid breaking old lifecycle code during the transition.
-- **Fluxcore and Aether are not integrated yet. No new APK is ready or endorsed for testing.**
+- Fluxcore and Aether now have a separately implemented Java VpnService, a native SOCKS5 HTTPS probe, and a dedicated upstream tun2socks bridge.
+- The CI builds pinned Fluxcore from MIT source, packages the official AGPL Aether ARM64 release with matching release checksum, and builds the MIT TUN bridge from source.
+- **Android instrumentation and on-device VPN connectivity have NOT yet been validated. APK build success must not be confused with a working tunnel.**
 
 ## Upstream sources and licenses
 
@@ -43,4 +45,4 @@ Requested behavior:
 - Verify no VPN/TUN traffic escapes through the physical network when the connection claims to be active, and ensure the app itself doesn't loop its own transport sockets.
 - No false success screen and no placeholder buttons.
 
-**Status: partial implementation on an unmerged feature branch, not ready for distribution.**
+**Status: feature branch builds the full native integration. It requires a successful final CI run and real handset tests before any claim of connection quality or production readiness.**
