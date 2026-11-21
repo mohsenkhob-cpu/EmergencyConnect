@@ -1072,7 +1072,7 @@ public class MainActivity extends Activity {
     }
 
     private void requestNativeCore(String engine) {
-        if (!canStartManualVpn() && !quickConnect) return;
+        if (!quickConnect && !canStartManualVpn()) return;
         if (!NativeCoreVpnService.FLUXCORE.equals(engine)
                 && !NativeCoreVpnService.AETHER.equals(engine)) return;
         beginSmartAttempt("در حال آماده‌سازی " + engine + "…");
