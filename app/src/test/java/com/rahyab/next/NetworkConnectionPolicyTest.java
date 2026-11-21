@@ -9,12 +9,12 @@ public class NetworkConnectionPolicyTest {
         assertTrue(NetworkConnectionPolicy.isMciOperator("IR-MCI"));
         assertTrue(NetworkConnectionPolicy.isMciOperator("همراه اول"));
         assertFalse(NetworkConnectionPolicy.isMciOperator("Irancell"));
-        assertEquals(List.of("SSTP", "OpenVPN"),
+        assertEquals(List.of("Fluxcore", "Aether", "SSTP", "OpenVPN"),
                 NetworkConnectionPolicy.quickOrder(true, false));
     }
 
     @Test public void otherNetworksPreserveVerifiedOpenvpnFirst() {
-        assertEquals(List.of("OpenVPN", "SSTP", "WireGuard"),
+        assertEquals(List.of("Fluxcore", "Aether", "OpenVPN", "SSTP"),
                 NetworkConnectionPolicy.quickOrder(false, true));
     }
 
@@ -44,14 +44,14 @@ public class NetworkConnectionPolicyTest {
     }
 
     @Test public void preferRecentlyVerifiedSstpOnWifiWithoutRemovingOpenvpnFallback() {
-        assertEquals(List.of("SSTP", "OpenVPN"),
+        assertEquals(List.of("Fluxcore", "Aether", "SSTP", "OpenVPN"),
                 NetworkConnectionPolicy.quickOrder(false, false, true));
-        assertEquals(List.of("SSTP", "OpenVPN", "WireGuard"),
+        assertEquals(List.of("Fluxcore", "Aether", "SSTP", "OpenVPN"),
                 NetworkConnectionPolicy.quickOrder(false, true, true));
     }
 
     @Test public void withoutCurrentNetworkEvidenceDoNotAssumeSstpIsBest() {
-        assertEquals(List.of("OpenVPN", "SSTP"),
+        assertEquals(List.of("Fluxcore", "Aether", "OpenVPN", "SSTP"),
                 NetworkConnectionPolicy.quickOrder(false, false, false));
     }
 

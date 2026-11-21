@@ -48,6 +48,8 @@ public class MainActivity extends Activity {
     private volatile int smartAttempt;
     private boolean smartBusy;
     private static final int REQUEST_SSTP_PERMISSION = 4109;
+    private static final int REQUEST_NATIVE_CORE_PERMISSION = 4114;
+    private String pendingNativeCore;
     private Button sstpButton;
     private ArrayList<String> pendingSstpHosts;
     private String pendingSstpMemoryKey = "";
@@ -820,11 +822,20 @@ public class MainActivity extends Activity {
         page.addView(bottomEngines);
 
         discoveryButton = engineButton(bottomEngines, "🛰 OpenVPN", this::startSmartOpenVpnSearch);
+        // Standalone WireGuard has been retired from the user interface.
+        // Keep the legacy view reference until its internal lifecycle handlers
+        // are fully removed, so older callbacks remain null-safe.
         smartWireGuardButton = engineButton(bottomEngines, "⚡ WireGuard", this::startWireGuardSearch);
+        smartWireGuardButton.setVisibility(View.GONE);
+        smartWireGuardButton.setEnabled(false);
 
         Button xrayFinder = engineButton(bottomEngines, "🌐 Xray", this::showXrayFinder);
         xrayFinder.setContentDescription("فایل‌یاب هوشمند Xray");
         sstpButton = engineButton(topEngines, "🔐 SSTP", this::discoverSstp);
+        engineButton(topEngines, "🌊 فلاکس‌کور", () ->
+                requestNativeCore(NativeCoreVpnService.FLUXCORE));
+        engineButton(topEngines, "✨ اِتِر", () ->
+                requestNativeCore(NativeCoreVpnService.AETHER));
 
         Button directVpnGate = new Button(this);
         directVpnGate.setText("🌐  اتصال مستقیم SSTP از VPN Gate");
@@ -854,12 +865,15 @@ public class MainActivity extends Activity {
         connectButton.setBackground(shape(Color.rgb(31, 151, 137), 18));
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(-1, dp(58));
         buttonParams.topMargin = dp(24);
+        // Legacy standalone WireGuard import is no longer a user-facing mode.
+        connectButton.setVisibility(View.GONE);
         advancedPanel.addView(connectButton, buttonParams);
         connectButton.setOnClickListener(v -> chooseWireGuardFile());
 
         Button vpnBookLink = new Button(this);
         vpnBookLink.setText("ساخت فایل رایگان WireGuard — VPNBook");
         vpnBookLink.setAllCaps(false);
+        vpnBookLink.setVisibility(View.GONE);
         advancedPanel.addView(vpnBookLink);
         vpnBookLink.setOnClickListener(v -> openWireGuardWebsite(
                 "https://www.vpnbook.com/freevpn/wireguard-vpn"));
@@ -867,16 +881,19 @@ public class MainActivity extends Activity {
         Button protonLink = new Button(this);
         protonLink.setText("دریافت فایل WireGuard — Proton VPN");
         protonLink.setAllCaps(false);
+        protonLink.setVisibility(View.GONE);
         advancedPanel.addView(protonLink);
         protonLink.setOnClickListener(v -> openWireGuardWebsite(
                 "https://protonvpn.com/support/wireguard-configurations"));
 
         TextView wgHelp = label("VPNBook رایگان است؛ فایل‌ها ۷ روز اعتبار دارند. فایل .conf را دریافت کنید و با دکمه «انتخاب فایل WireGuard» وارد کنید.",
                 12, Color.rgb(235, 190, 115), false);
+        wgHelp.setVisibility(View.GONE);
         advancedPanel.addView(wgHelp);
 
         Button wireGuardSources = new Button(this);
         wireGuardSources.setText("منابع آنلاین WireGuard");
+        wireGuardSources.setVisibility(View.GONE);
         advancedPanel.addView(wireGuardSources);
         wireGuardSources.setOnClickListener(v -> {
             if (smartWireGuardButton.isEnabled()) showWireGuardSources();
@@ -990,11 +1007,13 @@ public class MainActivity extends Activity {
         TextView psiphonNote = label("🧭 سایفون (Psiphon): در حال بررسی؛ هنوز موتور اتصال فعال نیست.", 13,
                 0xffffe5a6, true);
         psiphonNote.setBackground(gradientCard(0xff68518a, 0xff3d467b, 15));
-        advancedPanel.addView(psiphonNote);
+        // Psiphon was an inactive placeholder, not a usable VPN core.
+        // Remove its misleading visible entry. It is not included in auto-connect.
         TextView note = label("فایل WireGuard و OpenVPN و تنظیمات VLESS/REALITY مخصوص Xray قابل وارد کردن هستند.",
                 12, Color.rgb(235, 190, 115), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
         noteParams.topMargin = dp(24);
+        note.setText("فایل OpenVPN و تنظیمات VLESS/REALITY مخصوص Xray قابل وارد کردن هستند.");
         advancedPanel.addView(note, noteParams);
         setContentView(scroll);
     }
@@ -1017,9 +1036,13 @@ public class MainActivity extends Activity {
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         int first = title.contains("OpenVPN") ? 0xff3264d2
                 : title.contains("SSTP") ? 0xff00a88e
+                : title.contains("فلاکس") ? 0xff138b93
+                : title.contains("اِتِر") ? 0xff7659c7
                 : title.contains("Xray") ? 0xffc46bba : 0xffe2934a;
         int second = title.contains("OpenVPN") ? 0xff4c8ff0
                 : title.contains("SSTP") ? 0xff00b9c7
+                : title.contains("فلاکس") ? 0xff00b5a6
+                : title.contains("اِتِر") ? 0xffb068e6
                 : title.contains("Xray") ? 0xff8948c0 : 0xffe05a7c;
         button.setBackground(gradientCard(first, second, 17));
         button.setElevation(dp(3));
@@ -1046,6 +1069,34 @@ public class MainActivity extends Activity {
         if (!smartWireGuardProfiles.isEmpty()) requestSmartWireGuard();
         else if (!links.isEmpty()) fetchWireGuardProfiles(links);
         else showWireGuardSources();
+    }
+
+    private void requestNativeCore(String engine) {
+        if (!quickConnect && !canStartManualVpn()) return;
+        if (!NativeCoreVpnService.FLUXCORE.equals(engine)
+                && !NativeCoreVpnService.AETHER.equals(engine)) return;
+        beginSmartAttempt("در حال آماده‌سازی " + engine + "…");
+        pendingNativeCore = engine;
+        getPreferences(MODE_PRIVATE).edit().putString("selected_engine", engine).apply();
+        recordAttemptNetwork(engine);
+        Intent permission = VpnService.prepare(this);
+        if (permission == null) launchNativeCore();
+        else startActivityForResult(permission, REQUEST_NATIVE_CORE_PERMISSION);
+    }
+
+    private void launchNativeCore() {
+        if (!smartBusy || pendingNativeCore == null) return;
+        String engine = pendingNativeCore;
+        pendingNativeCore = null;
+        smartBusy = false;
+        publishDiscoveryStatus(engine + " — آماده‌سازی موتور و آزمون HTTPS…", "searching");
+        Intent service = new Intent(this, NativeCoreVpnService.class)
+                .setAction(NativeCoreVpnService.START)
+                .putExtra(NativeCoreVpnService.EXTRA_ENGINE, engine);
+        try { startForegroundService(service); }
+        catch (RuntimeException error) {
+            completeSmartAttempt(engine + " — سرویس شروع نشد", false);
+        }
     }
 
     private void requestQuickConnection() {
@@ -1083,15 +1134,11 @@ public class MainActivity extends Activity {
         boolean recentVerifiedSstp = savedAt > 0L && memoryAge >= 0L
                 && memoryAge < 6L * 60L * 60L * 1000L
                 && NetworkConnectionPolicy.isValidSstpHost(savedHost);
-        remainingEngines.addAll(NetworkConnectionPolicy.quickOrder(mci,
-                !smartWireGuardProfiles.isEmpty()
-                    || !getPreferences(MODE_PRIVATE).getString("wireguard_sources", "").isEmpty(),
+        remainingEngines.addAll(NetworkConnectionPolicy.quickOrder(mci, false,
                 recentVerifiedSstp));
         appendAppDiagnostic("انتخاب خودکار",
-                mci ? "اولویت همراه اول: SSTP سپس OpenVPN"
-                    : recentVerifiedSstp
-                    ? "سرور SSTP موفق اخیر همین شبکه: SSTP سپس OpenVPN"
-                    : "اولویت شبکه: OpenVPN سپس SSTP");
+                "اولویت مسیرهای تأییدشده: فلاکس‌کور، اتر؛ سپس "
+                + (mci || recentVerifiedSstp ? "SSTP و OpenVPN" : "OpenVPN و SSTP"));
         tryNextQuickEngine();
     }
 
@@ -1105,12 +1152,15 @@ public class MainActivity extends Activity {
             return;
         }
         quickAttemptDeadline = android.os.SystemClock.elapsedRealtime()
-                + ("OpenVPN".equals(quickEngine) ? 220_000L : 110_000L);
+                + ("Fluxcore".equals(quickEngine) ? 145_000L
+                    : "Aether".equals(quickEngine) ? 335_000L
+                    : "OpenVPN".equals(quickEngine) ? 220_000L : 110_000L);
         appendAppDiagnostic("انتخاب خودکار", "آزمون " + quickEngine);
         switch (quickEngine) {
+            case "Fluxcore", "Aether" -> requestNativeCore(quickEngine);
             case "SSTP" -> discoverSstp();
             case "sing-box" -> startSmartSingBox();
-            case "WireGuard" -> startWireGuardSearch();
+            // Standalone WireGuard is intentionally absent from quick-connect.
             case "OpenVPN" -> startSmartOpenVpnSearch();
         }
     }
@@ -1139,15 +1189,29 @@ public class MainActivity extends Activity {
         if (now < nextHealthCheck) return;
         nextHealthCheck = Long.MAX_VALUE;
         int attempt = smartAttempt;
+        String monitoredEngine = quickEngine;
         worker.execute(() -> {
-            TunnelVerifier.Result result = TunnelVerifier.verify(this);
+            boolean nativeCore = "Fluxcore".equals(monitoredEngine)
+                    || "Aether".equals(monitoredEngine);
+            boolean verified;
+            String failureReason;
+            if (nativeCore) {
+                // The native engine is excluded from its own VPN routing.
+                // Test actual HTTPS through its SOCKS5, with active TUN.
+                verified = NativeCoreVpnService.verifyLiveTraffic();
+                failureReason = "پل تونل یا HTTPS موتور پاسخ نداد";
+            } else {
+                TunnelVerifier.Result result = TunnelVerifier.verify(this);
+                verified = result.verified;
+                failureReason = result.message;
+            }
             runOnUiThread(() -> {
                 if (isDestroyed() || !quickConnect || attempt != smartAttempt) return;
                 nextHealthCheck = android.os.SystemClock.elapsedRealtime() + 10_000L;
-                healthFailures = result.verified ? 0 : healthFailures + 1;
-                if (!result.verified) appendAppDiagnostic("پایش اتصال",
-                        quickEngine + " — شکست بررسی " + healthFailures
-                                + "/2؛ علت: " + result.message);
+                healthFailures = verified ? 0 : healthFailures + 1;
+                if (!verified) appendAppDiagnostic("پایش اتصال",
+                        monitoredEngine + " — شکست بررسی " + healthFailures
+                                + "/2؛ علت: " + failureReason);
                 if (healthFailures < 2 || remainingEngines.isEmpty()) return;
                 appendAppDiagnostic("پایش اتصال", quickEngine
                         + " — هر دو بررسی VPN ناموفق؛ آزمایش موتور بعدی");
@@ -1399,6 +1463,14 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_QUICK_PERMISSION) {
             if (resultCode == RESULT_OK) startQuickConnection();
+            return;
+        }
+        if (requestCode == REQUEST_NATIVE_CORE_PERMISSION) {
+            if (resultCode == RESULT_OK) launchNativeCore();
+            else {
+                pendingNativeCore = null;
+                if (smartBusy) completeSmartAttempt("اجازه VPN برای موتور جدید داده نشد", false);
+            }
             return;
         }
         if (requestCode == REQUEST_SSTP_PERMISSION) {
@@ -2569,12 +2641,20 @@ public class MainActivity extends Activity {
         pendingOpenVpnProfiles = null;
         pendingSstpHosts = null;
         pendingSstpMemoryKey = "";
+        pendingNativeCore = null;
         smartBusy = false;
         publishDiscoveryStatus("در حال قطع اتصال…", "disconnected");
         // A manual stop must invalidate any not-yet-consumed start request.
         getSharedPreferences("rah_yab_pending_start", MODE_PRIVATE).edit()
                 .clear().commit();
         setStatus("در حال قطع همه موتورهای VPN…");
+        Intent stopNative = new Intent(this, NativeCoreVpnService.class);
+        if ("Fluxcore".equals(selectedEngine) || "Aether".equals(selectedEngine)) {
+            try { startService(stopNative.setAction(NativeCoreVpnService.STOP)); }
+            catch (RuntimeException ignored) { stopService(stopNative); }
+        } else {
+            stopService(stopNative);
+        }
         Intent stopSstp = new Intent(this, kittoku.osc.service.SstpVpnService.class);
         if ("SSTP".equals(selectedEngine)) {
             try { startService(stopSstp.setAction("sstp.stop")); }
@@ -2609,6 +2689,9 @@ public class MainActivity extends Activity {
     }
 
     private boolean hasActiveAndroidVpn() {
+        // A VpnService that excludes its own UID sees Wi-Fi/cellular as its
+        // default network, even while all other apps use the native tunnel.
+        if (NativeCoreVpnService.hasRunningTunnel()) return true;
         android.net.ConnectivityManager manager =
                 getSystemService(android.net.ConnectivityManager.class);
         if (manager == null) return false;
@@ -2638,7 +2721,7 @@ public class MainActivity extends Activity {
         previousSpeedEngine = engine;
         long[] current = switch (engine) {
             case "SSTP" -> kittoku.osc.service.SstpVpnService.tunnelBytes();
-            case "WireGuard" -> wireGuardTunnelBytes();
+            case "Fluxcore", "Aether" -> NativeCoreVpnService.tunnelBytes();
             case "sing-box" -> SingBoxVpnService.tunnelBytes(this);
             case "OpenVPN" -> ir.emergencyconnect.engine.OpenVpn3Bridge.tunnelBytes();
             default -> null;
