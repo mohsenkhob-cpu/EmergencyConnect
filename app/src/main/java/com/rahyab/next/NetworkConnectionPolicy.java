@@ -44,6 +44,11 @@ final class NetworkConnectionPolicy {
     static List<String> quickOrder(boolean onMci, boolean validWireGuardProfiles,
                                    boolean recentSstpVerifiedOnThisNetwork) {
         ArrayList<String> order = new ArrayList<>();
+        // Both new native engines were confirmed on MCI and Mokhaberat Wi-Fi
+        // in the reference app. Try them first, but still require actual
+        // on-device HTTPS verification before claiming this app connected.
+        order.add("Fluxcore");
+        order.add("Aether");
         if (onMci || recentSstpVerifiedOnThisNetwork) {
             order.add("SSTP");
             order.add("OpenVPN");
