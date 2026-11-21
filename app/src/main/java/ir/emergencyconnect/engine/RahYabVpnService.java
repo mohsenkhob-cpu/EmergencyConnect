@@ -97,6 +97,7 @@ public final class RahYabVpnService extends VpnService {
     private static final int AUTO_MAX_CANDIDATES_PER_REQUEST = 12;
     private volatile int autoCandidatesTried;
     private volatile String activeAutoProfile;
+    private volatile String currentAutoAttemptEndpoint = "";
     private volatile String activeTunnelExitIp;
     private volatile long activeTunnelLatencyMs = -1L;
     private volatile long activeTunnelThroughputKbps = -1L;
@@ -477,6 +478,7 @@ public final class RahYabVpnService extends VpnService {
             if (isSessionCancelled()) return;
             String profile = autoProfiles.get(i);
             String endpoint = profileEndpoint(profile);
+            currentAutoAttemptEndpoint = endpoint;
             synchronized (triedServerEndpoints) {
                 if (!endpoint.isEmpty()) triedServerEndpoints.add(endpoint);
             }
@@ -979,6 +981,9 @@ public final class RahYabVpnService extends VpnService {
 
     private void rememberVerifiedRelay(String profile, String endpoint) {
         if (endpoint.isEmpty()) return;
+        android.content.SharedPreferences noRoute =
+                getSharedPreferences("rah_yab_recent_no_route", MODE_PRIVATE);
+        if (endpoint.equals(noRoute.getString("endpoint", ""))) noRoute.edit().clear().apply();
         RecentRelayStore.save(this, profile, endpoint, profileProtocol(profile), searchTransport);
         if (searchNetworkHandle == 0) return;
         getSharedPreferences("rah_yab_recent_relay", MODE_PRIVATE).edit()
@@ -989,9 +994,28 @@ public final class RahYabVpnService extends VpnService {
                 .apply();
     }
 
+    private boolean isOpenVpnNoRouteCoolingDown(String endpoint) {
+        android.content.SharedPreferences blocked =
+                getSharedPreferences("rah_yab_recent_no_route", MODE_PRIVATE);
+        return NetworkTransitionPolicy.isRelayOnNoRouteCooldown(
+                endpoint, blocked.getString("endpoint", ""), System.currentTimeMillis(),
+                blocked.getLong("failed_at", 0L), searchNetworkHandle,
+                blocked.getLong("network", 0L), searchTransport,
+                blocked.getInt("transport", -1));
+    }
+
     private void prioritizeRecentRelay(ArrayList<String> profiles) {
+        // Never repeat the already unreachable TCP endpoint ahead of usable
+        // alternatives merely because it succeeded yesterday.
+        if (profiles.size() > 1) {
+            int before = profiles.size();
+            profiles.removeIf(candidate -> isOpenVpnNoRouteCoolingDown(
+                    profileEndpoint(candidate)));
+            if (profiles.size() != before) appendAutoHistory(
+                    "AUTO_NO_ROUTE_COOLDOWN", "سرور فاقد مسیر شبکه موقتاً از آزمون اول حذف شد");
+        }
         RecentRelayStore.Entry verified = RecentRelayStore.load(this, searchTransport);
-        if (verified != null) {
+        if (verified != null && !isOpenVpnNoRouteCoolingDown(verified.endpoint)) {
             profiles.removeIf(candidate -> verified.endpoint.equals(profileEndpoint(candidate))
                     && verified.protocol.equals(profileProtocol(candidate)));
             profiles.add(0, verified.profile);
@@ -1006,6 +1030,7 @@ public final class RahYabVpnService extends VpnService {
         long age = android.os.SystemClock.elapsedRealtime() - recent.getLong("saved_at", 0L);
         if (age < 0 || age >= RECENT_RELAY_MAX_AGE_MS) return;
         String endpoint = recent.getString("endpoint", "");
+        if (isOpenVpnNoRouteCoolingDown(endpoint)) return;
         String protocol = recent.getString("protocol", "");
         for (int i = 0; i < profiles.size(); i++) {
             String profile = profiles.get(i);
@@ -1991,6 +2016,19 @@ public final class RahYabVpnService extends VpnService {
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
         String lowerInfo = safeInfo.toLowerCase(java.util.Locale.ROOT);
         String failureClass = classifyNativeFailure(name, lowerInfo, error || fatal);
+        if ("NO_ROUTE".equals(failureClass) && autoSearchEnabled
+                && !stopRequested.get() && !nativeStopInProgress.get()) {
+            String candidate = currentAutoAttemptEndpoint;
+            if (!candidate.isEmpty()
+                    && lowerInfo.contains(candidate.toLowerCase(java.util.Locale.ROOT))
+                    && searchNetworkHandle > 0L && searchTransport >= 0) {
+                getSharedPreferences("rah_yab_recent_no_route", MODE_PRIVATE).edit()
+                        .putString("endpoint", candidate)
+                        .putLong("failed_at", System.currentTimeMillis())
+                        .putLong("network", searchNetworkHandle)
+                        .putInt("transport", searchTransport).apply();
+            }
+        }
         boolean disconnectEvent = "DISCONNECTED".equals(name) || "EXITING".equals(name);
         // Native stop() itself emits DISCONNECTED. Suppress that lifecycle callback
         // for user stops and for internal per-candidate timeout/cleanup.
