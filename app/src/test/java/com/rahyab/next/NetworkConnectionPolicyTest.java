@@ -55,4 +55,22 @@ public class NetworkConnectionPolicyTest {
                 NetworkConnectionPolicy.quickOrder(false, false, false));
     }
 
+    @Test public void acceptsExactSstpAddressCopiedFromVpnGate() {
+        assertEquals("vpn979681105.opengw.net:1621",
+                NetworkConnectionPolicy.parseVpnGateSstp("vpn979681105.opengw.net:1621"));
+        assertEquals("vpn979681105.opengw.net:443",
+                NetworkConnectionPolicy.parseVpnGateSstp("vpn979681105.opengw.net"));
+        assertEquals("public-vpn-255.opengw.net:443",
+                NetworkConnectionPolicy.parseVpnGateSstp(
+                        "SSTP Hostname : public-vpn-255.opengw.net:443 By admin"));
+    }
+
+    @Test public void refusesInvalidOrNonVpnGateSstpHosts() {
+        assertNull(NetworkConnectionPolicy.parseVpnGateSstp("1.2.3.4:443"));
+        assertNull(NetworkConnectionPolicy.parseVpnGateSstp("https://vpn979681105.opengw.net"));
+        assertNull(NetworkConnectionPolicy.parseVpnGateSstp("evil.example.com:443"));
+        assertNull(NetworkConnectionPolicy.parseVpnGateSstp("vpn979681105.opengw.net:65536"));
+        assertNull(NetworkConnectionPolicy.parseVpnGateSstp("vpn979681105.opengw.net:0"));
+    }
+
 }
