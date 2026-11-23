@@ -30,8 +30,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * The app UID is excluded from its own TUN to prevent an engine's discovery
  * sockets from recursively entering the VPN. Verification is always via
- * engine SOCKS5 + authenticated public HTTPS and, once established, by
- * explicitly binding to Android's actual active VPN Network.
+ * engine SOCKS5 + authenticated public HTTPS, plus an independent check
+ * that the Android TUN and forwarding bridge are running.
  */
 public final class NativeCoreVpnService extends VpnService {
     public static final String START = "com.mohsen.filter.nativecore.START";
@@ -203,7 +203,13 @@ public final class NativeCoreVpnService extends VpnService {
                 lastFailure = "اجرای فایل موتور ممکن نشد";
                 continue;
             }
-            engineProcess = child;
+            synchronized (teardownLock) {
+                if (!current(token)) {
+                    child.destroyForcibly();
+                    return null;
+                }
+                engineProcess = child;
+            }
             Thread drain = new Thread(() -> {
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8))) {
@@ -252,28 +258,31 @@ public final class NativeCoreVpnService extends VpnService {
             if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false);
             builder.addDisallowedApplication(getPackageName()); // engine's own transport bypass
             builder.addDnsServer(flux ? "9.9.9.9" : "1.1.1.1");
-            ParcelFileDescriptor created = builder.establish();
-            if (created == null) return "اندروید اجازه تونل نداد";
-            tun = created;
-            tunCopy = ParcelFileDescriptor.dup(created.getFileDescriptor());
-            try {
-                Os.fcntlInt(tunCopy.getFileDescriptor(), OsConstants.F_SETFD,
-                        OsConstants.FD_CLOEXEC);
-            } catch (Exception ignored) { }
-            File tunConfig = new File(workDir, "tunnel.yml");
-            String mapped = flux ? "mapdns:\n    address: 9.9.9.9\n"
-                    + "    port: 53\n    network: 100.64.0.0\n"
-                    + "    netmask: 255.192.0.0\n    cache-size: 10000\n" : "";
-            String config = "tunnel:\n  mtu: 1500\n  ipv4: 172.19.0.2\n"
-                    + "  ipv6: 'fd00::2'\n  icmp: 'reply'\n"
-                    + "socks5:\n  address: 127.0.0.1\n  port: " + SOCKS_PORT
-                    + "\n  udp: 'udp'\n" + mapped
-                    + "misc:\n  task-stack-size: 32768\n  log-level: warn\n";
-            try (FileOutputStream output = new FileOutputStream(tunConfig)) {
-                output.write(config.getBytes(StandardCharsets.UTF_8));
+            synchronized (teardownLock) {
+                if (!current(token)) return null;
+                ParcelFileDescriptor created = builder.establish();
+                if (created == null) return "اندروید اجازه تونل نداد";
+                tun = created;
+                tunCopy = ParcelFileDescriptor.dup(created.getFileDescriptor());
+                try {
+                    Os.fcntlInt(tunCopy.getFileDescriptor(), OsConstants.F_SETFD,
+                            OsConstants.FD_CLOEXEC);
+                } catch (Exception ignored) { }
+                File tunConfig = new File(workDir, "tunnel.yml");
+                String mapped = flux ? "mapdns:\n    address: 9.9.9.9\n"
+                        + "    port: 53\n    network: 100.64.0.0\n"
+                        + "    netmask: 255.192.0.0\n    cache-size: 10000\n" : "";
+                String config = "tunnel:\n  mtu: 1500\n  ipv4: 172.19.0.2\n"
+                        + "  ipv6: 'fd00::2'\n  icmp: 'reply'\n"
+                        + "socks5:\n  address: 127.0.0.1\n  port: " + SOCKS_PORT
+                        + "\n  udp: 'udp'\n" + mapped
+                        + "misc:\n  task-stack-size: 32768\n  log-level: warn\n";
+                try (FileOutputStream output = new FileOutputStream(tunConfig)) {
+                    output.write(config.getBytes(StandardCharsets.UTF_8));
+                }
+                if (!TProxyService.TProxyStartService(tunConfig.getAbsolutePath(),
+                        tunCopy.getFd())) return "پل انتقال ترافیک VPN راه‌اندازی نشد";
             }
-            if (!TProxyService.TProxyStartService(tunConfig.getAbsolutePath(),
-                    tunCopy.getFd())) return "پل انتقال ترافیک VPN راه‌اندازی نشد";
             boolean bridge = false;
             for (int i = 0; i < 20 && current(token); i++) {
                 if (TProxyService.TProxyIsRunning()) { bridge = true; break; }
@@ -307,8 +316,10 @@ public final class NativeCoreVpnService extends VpnService {
                     && hasRunningTunnel();
             if (!current(token)) return null;
             if (reachable) {
+                if (consecutiveFailures > 0) {
+                    report(name + " — آزمون HTTPS موتور دوباره پاسخ داد", "connected");
+                }
                 consecutiveFailures = 0;
-                report(name + " — عبور HTTPS موتور و پل VPN فعال است", "connected");
             } else if (++consecutiveFailures >= 2) {
                 return "دو آزمون واقعی HTTPS موتور متوالی ناموفق بود";
             } else {
@@ -394,13 +405,22 @@ public final class NativeCoreVpnService extends VpnService {
     }
 
     @Override public void onDestroy() {
-        if (activeInstance == this) activeInstance = null;
         stopped = true;
         generation.incrementAndGet();
         Thread old = worker;
         if (old != null) old.interrupt();
         synchronized (teardownLock) { teardownNative(); }
+        if (activeInstance == this) activeInstance = null;
         super.onDestroy();
+    }
+
+    public static boolean isSessionRunning() {
+        return activeInstance != null;
+    }
+
+    public static String runningEngine() {
+        NativeCoreVpnService instance = activeInstance;
+        return instance != null && !instance.stopped ? instance.currentEngine : "";
     }
 
     /** The app UID is excluded from VPN; getActiveNetwork() may be Wi-Fi
@@ -412,11 +432,6 @@ public final class NativeCoreVpnService extends VpnService {
             return false;
         try { return TProxyService.TProxyIsRunning(); }
         catch (RuntimeException | LinkageError error) { return false; }
-    }
-
-    /** Worker-thread-only verified HTTPS via local native engine's SOCKS5. */
-    public static boolean verifyLiveTraffic() {
-        return hasRunningTunnel() && NativeProxyProbe.verify(SOCKS_PORT);
     }
 
     public static long[] tunnelBytes() {

@@ -216,6 +216,10 @@ public class MainActivity extends Activity {
     private TextView connectionOrb;
     private TextView liveTunnelSpeed;
     private TextView tunnelUsage;
+    private TextView activeEngineLabel;
+    private View connectionRing;
+    private static long openDiagnosticSessionStartedAt;
+    private long diagnosticSessionStartedAt;
     private boolean usageAvailable;
     private long receivedBytes;
     private long sentBytes;
@@ -223,6 +227,7 @@ public class MainActivity extends Activity {
     private String quickEngine;
     private boolean quickWaitingForStop;
     private long quickAttemptDeadline;
+    private boolean quickEngineConnected;
     private long nextHealthCheck;
     private int healthFailures;
     private final java.util.ArrayDeque<String> remainingEngines = new java.util.ArrayDeque<>();
@@ -237,11 +242,11 @@ public class MainActivity extends Activity {
     private android.widget.ProgressBar connectionSpinner;
     private Button connectButton;
     private Button disconnectButton;
-    private Button smartConnectButton;
     private boolean singBoxReceiverRegistered = false;
     private android.content.SharedPreferences statusPreferences;
     private android.content.SharedPreferences.OnSharedPreferenceChangeListener statusPreferenceListener;
     private String lastRenderedServiceStatus = "";
+    private String lastDisplayLamp = "";
     // A periodic foreground-only refresh is a fallback if a preference callback
     // is delayed or missed by the Android process/UI lifecycle.
     private final android.os.Handler statusRefreshHandler =
@@ -251,8 +256,15 @@ public class MainActivity extends Activity {
             if (status == null || isFinishing() || isDestroyed()) return;
             refreshServiceStatusFromPreferences();
             sampleLiveTunnelSpeed();
-            updateQuickConnection();
             statusRefreshHandler.postDelayed(this, 1000L);
+        }
+    };
+
+    private final Runnable quickRefreshRunnable = new Runnable() {
+        @Override public void run() {
+            if (!quickConnect || isFinishing() || isDestroyed()) return;
+            updateQuickConnection();
+            if (quickConnect) statusRefreshHandler.postDelayed(this, 1000L);
         }
     };
 
@@ -352,7 +364,10 @@ public class MainActivity extends Activity {
     }
 
     private void setStatus(String value) {
-        if (status != null) status.setText(value);
+        if (status != null) {
+            status.setText(value);
+            status.setVisibility(View.VISIBLE);
+        }
         appendAppDiagnostic("وضعیت", value);
     }
 
@@ -411,6 +426,26 @@ public class MainActivity extends Activity {
                 .apply();
     }
 
+    private void resetDiagnosticHistory() {
+        var prefs = getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
+        var editor = prefs.edit();
+        for (String key : prefs.getAll().keySet()) {
+            // These keys also coordinate currently running services and the UI.
+            switch (key) {
+                case "service_status_message", "service_status_updated_at", "connection_lamp_state",
+                     "service_claimed_request_id", "service_start_cancelled_request_id",
+                     "auto_current_endpoint" -> { }
+                default -> editor.remove(key);
+            }
+        }
+        editor.apply();
+        getSharedPreferences("rahyab_singbox_status", MODE_PRIVATE).edit().clear().apply();
+    }
+
+    @Override public void onBackPressed() {
+        finish();
+    }
+
     private String buildDiagnosticReport() {
         android.content.SharedPreferences prefs =
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE);
@@ -418,6 +453,9 @@ public class MainActivity extends Activity {
                 getSharedPreferences("rahyab_singbox_status", MODE_PRIVATE);
         StringBuilder report = new StringBuilder();
         report.append("گزارش عیب‌یابی فیلتر محسن\n");
+        report.append("آغاز این نشست: ").append(new java.text.SimpleDateFormat(
+                "yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                .format(new java.util.Date(diagnosticSessionStartedAt))).append('\n');
         report.append("زمان تهیه: ").append(new java.text.SimpleDateFormat(
                 "yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
                 .format(new java.util.Date())).append('\n');
@@ -439,6 +477,10 @@ public class MainActivity extends Activity {
 
         if (usageAvailable) report.append("مصرف آخرین اتصال — دریافت ")
                 .append(receivedBytes).append(" بایت، ارسال ").append(sentBytes).append(" بایت\n");
+        appendReportSection(report, "شبکه آخرین آزمون فلاکس‌کور",
+                prefs.getString("attempt_network_Fluxcore", ""));
+        appendReportSection(report, "شبکه آخرین آزمون اتر",
+                prefs.getString("attempt_network_Aether", ""));
         appendReportSection(report, "شبکه آخرین آزمون SSTP",
                 prefs.getString("attempt_network_sstp", ""));
         appendReportSection(report, "شبکه آخرین آزمون OpenVPN",
@@ -453,10 +495,12 @@ public class MainActivity extends Activity {
                 prefs.getString("sstp_attempt_results", ""));
         appendReportSection(report, "رویدادهای برنامه",
                 redactProfileLinks(prefs.getString("app_event_history", "")));
-        appendReportSection(report, "زمان آغاز آخرین جست‌وجوی هوشمند",
+        appendReportSection(report, "زمان آغاز آخرین اتصال خودکار",
+                prefs.getString("quick_connection_started_at", ""));
+        appendReportSection(report, "نتیجه آخرین اتصال خودکار",
+                prefs.getString("quick_connection_result", ""));
+        appendReportSection(report, "زمان آغاز آخرین جست‌وجوی OpenVPN",
                 prefs.getString("discovery_attempt_started_at", ""));
-        appendReportSection(report, "نتیجه آخرین جست‌وجوی هوشمند",
-                prefs.getString("discovery_attempt_result", ""));
         appendReportSection(report, "رویدادهای موتور OpenVPN",
                 prefs.getString("native_event_history", ""));
         appendReportSection(report, "آخرین وضعیت سرویس",
@@ -582,7 +626,7 @@ public class MainActivity extends Activity {
         java.io.File directory = getExternalFilesDir(null);
         if (directory == null) directory = getFilesDir();
         java.io.File file = new java.io.File(directory, "CrashReport-.log");
-        if (!file.isFile()) return "";
+        if (!file.isFile() || file.lastModified() < diagnosticSessionStartedAt) return "";
         try (java.io.RandomAccessFile input = new java.io.RandomAccessFile(file, "r")) {
             int length = (int) Math.min(input.length(), 128 * 1024L);
             if (length == 0) return "";
@@ -637,7 +681,8 @@ public class MainActivity extends Activity {
         try {
             for (android.app.ApplicationExitInfo exit :
                     manager.getHistoricalProcessExitReasons(getPackageName(), 0, 12)) {
-                if (exit.getReason() != android.app.ApplicationExitInfo.REASON_CRASH_NATIVE) continue;
+                if (exit.getTimestamp() < diagnosticSessionStartedAt
+                        || exit.getReason() != android.app.ApplicationExitInfo.REASON_CRASH_NATIVE) continue;
                 String time = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
                         java.util.Locale.US).format(new java.util.Date(exit.getTimestamp()));
                 String header = time + " | " + exit.getProcessName() + "\n";
@@ -664,6 +709,7 @@ public class MainActivity extends Activity {
                     manager.getHistoricalProcessExitReasons(getPackageName(), 0, 1);
             if (exits.isEmpty()) return "";
             android.app.ApplicationExitInfo exit = exits.get(0);
+            if (exit.getTimestamp() < diagnosticSessionStartedAt) return "";
             int reason = exit.getReason();
             String label;
             switch (reason) {
@@ -688,10 +734,15 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static String diagnosticTimestamp() {
+        return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+                .format(new java.util.Date());
+    }
+
     private void appendReportSection(StringBuilder report, String title, String value) {
+        if (value == null || value.trim().isEmpty()) return;
         report.append("===== ").append(title).append(" =====\n");
-        report.append(value == null || value.trim().isEmpty()
-                ? "اطلاعاتی ثبت نشده است" : value).append("\n\n");
+        report.append(value).append("\n\n");
     }
 
     private void showDiagnosticsDialog() {
@@ -725,6 +776,12 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        diagnosticSessionStartedAt = state == null ? 0L : openDiagnosticSessionStartedAt;
+        if (diagnosticSessionStartedAt == 0L) {
+            diagnosticSessionStartedAt = System.currentTimeMillis();
+            openDiagnosticSessionStartedAt = diagnosticSessionStartedAt;
+            resetDiagnosticHistory();
+        }
         wireGuardBackend = new GoBackend(getApplicationContext());
         getWindow().setStatusBarColor(Color.rgb(9, 18, 35));
         getWindow().setNavigationBarColor(Color.rgb(9, 18, 35));
@@ -763,55 +820,66 @@ public class MainActivity extends Activity {
         statusParams.topMargin = dp(16);
         page.addView(status, statusParams);
 
-        connectionOrb = label("⏻\nآماده اتصال", 22, Color.WHITE, true);
-        connectionOrb.setBackground(gradientCard(0xff4a6cdb, 0xff46c1d2, 100));
-        connectionOrb.setElevation(dp(8));
-        LinearLayout.LayoutParams orbParams = new LinearLayout.LayoutParams(dp(208), dp(208));
-        orbParams.gravity = Gravity.CENTER_HORIZONTAL;
-        orbParams.topMargin = dp(16);
-        orbParams.bottomMargin = dp(12);
         android.widget.FrameLayout orbFrame = new android.widget.FrameLayout(this);
+        LinearLayout.LayoutParams orbParams = new LinearLayout.LayoutParams(-1, dp(270));
+        orbParams.topMargin = dp(10);
+        orbParams.bottomMargin = dp(12);
         page.addView(orbFrame, orbParams);
-        android.widget.FrameLayout.LayoutParams circleParams =
-                new android.widget.FrameLayout.LayoutParams(dp(184), dp(184), Gravity.CENTER);
-        orbFrame.addView(connectionOrb, circleParams);
-        connectionOrb.setOnClickListener(v -> {
-            if (disconnectButton.isEnabled() || quickConnect) disconnectAllEngines();
-            else requestQuickConnection();
-        });
+
+        connectionRing = new View(this) {
+            private final android.graphics.Paint paint = new android.graphics.Paint(
+                    android.graphics.Paint.ANTI_ALIAS_FLAG);
+
+            @Override protected void onDraw(android.graphics.Canvas canvas) {
+                float center = getWidth() / 2f;
+                float radius = center - dp(5);
+                paint.setStyle(android.graphics.Paint.Style.STROKE);
+                paint.setStrokeWidth(dp(2));
+                paint.setColor(0xff325974);
+                canvas.drawCircle(center, center, radius, paint);
+
+                float angle = (android.os.SystemClock.elapsedRealtime() % 12_000L) * 0.03f;
+                paint.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+                paint.setStrokeWidth(dp(4));
+                paint.setColor(0xff7df2d4);
+                for (int arc = 0; arc < 3; arc++) {
+                    canvas.drawArc(center - radius, center - radius, center + radius, center + radius,
+                            angle + arc * 120f, 27f, false, paint);
+                }
+                if (isShown() && getWindowVisibility() == View.VISIBLE) postInvalidateDelayed(32L);
+            }
+
+            @Override protected void onWindowVisibilityChanged(int visibility) {
+                super.onWindowVisibilityChanged(visibility);
+                if (visibility == View.VISIBLE) invalidate();
+            }
+        };
+        connectionRing.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        connectionRing.setVisibility(View.GONE);
+        orbFrame.addView(connectionRing, new android.widget.FrameLayout.LayoutParams(
+                dp(192), dp(192), Gravity.CENTER));
+
         connectionSpinner = new android.widget.ProgressBar(this);
-        connectionSpinner.setIndeterminate(true);
         connectionSpinner.setIndeterminateTintList(
                 android.content.res.ColorStateList.valueOf(0xff74f2c7));
         connectionSpinner.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         connectionSpinner.setVisibility(View.GONE);
         orbFrame.addView(connectionSpinner, new android.widget.FrameLayout.LayoutParams(
-                -1, -1, Gravity.CENTER));
+                dp(204), dp(204), Gravity.CENTER));
 
-        smartConnectButton = new Button(this);
-        smartConnectButton.setText("⚡  اتصال هوشمند");
-        smartConnectButton.setTextSize(21);
-        smartConnectButton.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        smartConnectButton.setAllCaps(false);
-        smartConnectButton.setTextColor(Color.WHITE);
-        smartConnectButton.setBackground(gradientCard(0xff00ba91, 0xff0c91e7, 24));
-        smartConnectButton.setElevation(dp(6));
-        smartConnectButton.setOnClickListener(v -> requestQuickConnection());
-        LinearLayout.LayoutParams smartParams = new LinearLayout.LayoutParams(-1, dp(66));
-        smartParams.topMargin = dp(6);
-        smartParams.bottomMargin = dp(6);
-        page.addView(smartConnectButton, smartParams);
+        connectionOrb = label("⏻\nاتصال خودکار", 20, Color.WHITE, true);
+        connectionOrb.setBackground(gradientCard(0xff4a6cdb, 0xff46c1d2, 100));
+        orbFrame.addView(connectionOrb, new android.widget.FrameLayout.LayoutParams(
+                dp(156), dp(156), Gravity.CENTER));
+        connectionOrb.setOnClickListener(v -> {
+            if (disconnectButton.isEnabled()) stopFromScreen();
+            else requestQuickConnection();
+        });
 
-        TextView quickNote = label("با یک لمس، بهترین مسیر موجود آزمایش می‌شود", 12,
-                0xffd7e8ff, false);
-        page.addView(quickNote);
-
-        liveTunnelSpeed = label("", 14, Color.WHITE, false);
-        liveTunnelSpeed.setVisibility(View.GONE);
-        page.addView(liveTunnelSpeed);
-
-        tunnelUsage = label("مصرف این اتصال —", 14, 0xffa9bad5, false);
-        page.addView(tunnelUsage);
+        activeEngineLabel = addOrbMetric(orbFrame, Gravity.TOP | Gravity.CENTER_HORIZONTAL,
+                "موتور اتصال", 144);
+        tunnelUsage = addOrbMetric(orbFrame, Gravity.BOTTOM | Gravity.END, "مصرف اتصال", 112);
+        liveTunnelSpeed = addOrbMetric(orbFrame, Gravity.BOTTOM | Gravity.START, "سرعت لحظه‌ای", 138);
 
         TextView engineTitle = label("🎮  موتورهای اتصال", 17, 0xffe6fbff, true);
         engineTitle.setGravity(Gravity.RIGHT);
@@ -908,7 +976,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams disconnectParams = new LinearLayout.LayoutParams(-1, dp(52));
         disconnectParams.topMargin = dp(10);
         page.addView(disconnectButton, disconnectParams);
-        disconnectButton.setOnClickListener(v -> disconnectAllEngines());
+        disconnectButton.setOnClickListener(v -> stopFromScreen());
 
         Button advancedToggle = new Button(this);
         advancedToggle.setText("تنظیمات پیشرفته و ورود دستی  +");
@@ -1106,7 +1174,8 @@ public class MainActivity extends Activity {
     }
 
     private void startQuickConnection() {
-        if (quickConnect || smartBusy || wireGuardStopPending || xrayBusy || hasActiveAndroidVpn()) return;
+        if (quickConnect || smartBusy || wireGuardStopPending || xrayBusy
+                || NativeCoreVpnService.isSessionRunning() || hasActiveAndroidVpn()) return;
         quickConnect = true;
         quickWaitingForStop = false;
         remainingEngines.clear();
@@ -1139,16 +1208,24 @@ public class MainActivity extends Activity {
         appendAppDiagnostic("انتخاب خودکار",
                 "اولویت مسیرهای تأییدشده: فلاکس‌کور، اتر؛ سپس "
                 + (mci || recentVerifiedSstp ? "SSTP و OpenVPN" : "OpenVPN و SSTP"));
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("quick_connection_started_at", diagnosticTimestamp())
+                .apply();
         tryNextQuickEngine();
+        statusRefreshHandler.removeCallbacks(quickRefreshRunnable);
+        statusRefreshHandler.post(quickRefreshRunnable);
     }
 
     private void tryNextQuickEngine() {
         quickEngine = remainingEngines.poll();
         healthFailures = 0;
+        quickEngineConnected = false;
         nextHealthCheck = android.os.SystemClock.elapsedRealtime() + 20_000L;
         if (quickEngine == null) {
             quickConnect = false;
             publishDiscoveryStatus("اتصال خودکار تأیید نشد", "failed");
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("quick_connection_result", "اتصال تأیید نشد").apply();
             return;
         }
         quickAttemptDeadline = android.os.SystemClock.elapsedRealtime()
@@ -1156,6 +1233,8 @@ public class MainActivity extends Activity {
                     : "Aether".equals(quickEngine) ? 335_000L
                     : "OpenVPN".equals(quickEngine) ? 220_000L : 110_000L);
         appendAppDiagnostic("انتخاب خودکار", "آزمون " + quickEngine);
+        getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                .putString("quick_connection_result", "در حال آزمون " + quickEngine).apply();
         switch (quickEngine) {
             case "Fluxcore", "Aether" -> requestNativeCore(quickEngine);
             case "SSTP" -> discoverSstp();
@@ -1171,7 +1250,8 @@ public class MainActivity extends Activity {
         boolean activeVpn = hasActiveAndroidVpn();
         long now = android.os.SystemClock.elapsedRealtime();
         if (quickWaitingForStop) {
-            if (!activeVpn && !wireGuardStopPending && now >= quickAttemptDeadline) {
+            if (!activeVpn && !wireGuardStopPending && !NativeCoreVpnService.isSessionRunning()
+                    && now >= quickAttemptDeadline) {
                 quickWaitingForStop = false;
                 tryNextQuickEngine();
             } else if (now >= quickAttemptDeadline + 5_000L) {
@@ -1180,31 +1260,32 @@ public class MainActivity extends Activity {
             }
             return;
         }
-        if ("failed".equals(lamp) || ("connected".equals(lamp) && !activeVpn)
+        boolean nativeCore = "Fluxcore".equals(quickEngine) || "Aether".equals(quickEngine);
+        if (nativeCore && quickEngineConnected && "searching".equals(lamp)
+                && NativeCoreVpnService.isSessionRunning()) {
+            // The native service owns recovery after a successful connection.
+            return;
+        }
+        if ("failed".equals(lamp) || ("connected".equals(lamp) && !activeVpn
+                    && !(nativeCore && NativeCoreVpnService.isSessionRunning()))
                 || (!"connected".equals(lamp) && now >= quickAttemptDeadline)) {
             stopBeforeQuickFallback();
             return;
         }
-        if (!"connected".equals(lamp)) return;
-        if (now < nextHealthCheck) return;
+        if (!"connected".equals(lamp) || !activeVpn) return;
+        if (!quickEngineConnected) {
+            quickEngineConnected = true;
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("quick_connection_result", "تونل " + quickEngine + " فعال شد").apply();
+        }
+        if (nativeCore || now < nextHealthCheck) return;
         nextHealthCheck = Long.MAX_VALUE;
         int attempt = smartAttempt;
         String monitoredEngine = quickEngine;
         worker.execute(() -> {
-            boolean nativeCore = "Fluxcore".equals(monitoredEngine)
-                    || "Aether".equals(monitoredEngine);
-            boolean verified;
-            String failureReason;
-            if (nativeCore) {
-                // The native engine is excluded from its own VPN routing.
-                // Test actual HTTPS through its SOCKS5, with active TUN.
-                verified = NativeCoreVpnService.verifyLiveTraffic();
-                failureReason = "پل تونل یا HTTPS موتور پاسخ نداد";
-            } else {
-                TunnelVerifier.Result result = TunnelVerifier.verify(this);
-                verified = result.verified;
-                failureReason = result.message;
-            }
+            TunnelVerifier.Result result = TunnelVerifier.verify(this);
+            boolean verified = result.verified;
+            String failureReason = result.message;
             runOnUiThread(() -> {
                 if (isDestroyed() || !quickConnect || attempt != smartAttempt) return;
                 nextHealthCheck = android.os.SystemClock.elapsedRealtime() + 10_000L;
@@ -1768,6 +1849,7 @@ public class MainActivity extends Activity {
         boolean searching = "searching".equals(getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE)
                 .getString("connection_lamp_state", ""));
         if (!searching && !smartBusy && !quickConnect && !wireGuardStopPending && !xrayBusy
+                && !NativeCoreVpnService.isSessionRunning()
                 && !hasActiveAndroidVpn()) return true;
         Toast.makeText(this, "اول اتصال یا آزمون فعلی را قطع کنید", Toast.LENGTH_SHORT).show();
         return false;
@@ -2241,8 +2323,7 @@ public class MainActivity extends Activity {
                 .putString("service_status_message", message)
                 .putLong("service_status_updated_at", System.currentTimeMillis())
                 .putString("connection_lamp_state", lampState)
-                .putString("discovery_attempt_result", message)
-                .commit();
+                .apply();
     }
 
     private void beginFreshDiscoveryDiagnostics() {
@@ -2252,7 +2333,6 @@ public class MainActivity extends Activity {
                 .putString("discovery_attempt_started_at",
                         new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS",
                                 java.util.Locale.US).format(new java.util.Date()))
-                .putString("discovery_attempt_result", "جست‌وجو آغاز شد")
                 .remove("native_last_event")
                 .remove("native_event_history")
                 .remove("native_last_event_at")
@@ -2613,6 +2693,16 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void stopFromScreen() {
+        if (quickConnect) {
+            getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                    .putString("quick_connection_result", "توقف به درخواست کاربر — " + quickEngine)
+                    .apply();
+        }
+        appendAppDiagnostic("فرمان اتصال", "درخواست قطع از صفحهٔ اصلی");
+        disconnectAllEngines();
+    }
+
     private void disconnectAllEngines() {
         pendingXrayConfig = null;
         if (xrayTrialCount > 0) {
@@ -2631,8 +2721,8 @@ public class MainActivity extends Activity {
             }
             return;
         }
-        quickConnect = false;
         if (wireGuardStopPending) return;
+        quickConnect = false;
         wireGuardStopPending = true;
         disconnectButton.setEnabled(false);
         String selectedEngine = getPreferences(MODE_PRIVATE).getString("selected_engine", "");
@@ -2702,21 +2792,33 @@ public class MainActivity extends Activity {
                 && capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN);
     }
 
+    private TextView addOrbMetric(android.widget.FrameLayout frame, int gravity, String title, int width) {
+        TextView metric = label(title, 12, 0xffe6fbff, true);
+        metric.setBackground(gradientCard(0xff21385e, 0xff174e63, 14));
+        metric.setVisibility(View.GONE);
+        frame.addView(metric, new android.widget.FrameLayout.LayoutParams(dp(width), -2, gravity));
+        return metric;
+    }
+
+    private String connectionEngine() {
+        String nativeEngine = NativeCoreVpnService.runningEngine();
+        return nativeEngine.isEmpty() ? getPreferences(MODE_PRIVATE).getString("selected_engine", "")
+                : nativeEngine;
+    }
+
     private void sampleLiveTunnelSpeed() {
-        String engine = getPreferences(MODE_PRIVATE).getString("selected_engine", "");
-        boolean connected = statusPreferences != null
-                && ("connected".equals(statusPreferences.getString("connection_lamp_state", ""))
-                    || "limited".equals(statusPreferences.getString("connection_lamp_state", "")))
-                && hasActiveAndroidVpn();
-        if (!connected) {
-            liveTunnelSpeed.setVisibility(View.GONE);
-            if (usageAvailable) tunnelUsage.setText("مصرف آخرین اتصال  •  "
-                    + android.text.format.Formatter.formatFileSize(this, receivedBytes + sentBytes));
+        if (connectionRing.getVisibility() != View.VISIBLE) {
             previousTunnelBytes = null;
             previousSpeedEngine = null;
             return;
         }
-        liveTunnelSpeed.setVisibility(View.VISIBLE);
+        String engine = connectionEngine();
+        activeEngineLabel.setText("موتور اتصال\n" + switch (engine) {
+            case "Fluxcore" -> "فلاکس‌کور";
+            case "Aether" -> "اِتِر";
+            case "" -> "نامشخص";
+            default -> engine;
+        });
         if (!engine.equals(previousSpeedEngine)) previousTunnelBytes = null;
         previousSpeedEngine = engine;
         long[] current = switch (engine) {
@@ -2724,26 +2826,27 @@ public class MainActivity extends Activity {
             case "Fluxcore", "Aether" -> NativeCoreVpnService.tunnelBytes();
             case "sing-box" -> SingBoxVpnService.tunnelBytes(this);
             case "OpenVPN" -> ir.emergencyconnect.engine.OpenVpn3Bridge.tunnelBytes();
+            case "WireGuard" -> wireGuardTunnelBytes();
             default -> null;
         };
         if (current != null) {
             receivedBytes = current[0];
             sentBytes = current[1];
             usageAvailable = true;
-            tunnelUsage.setText("مصرف این اتصال  •  "
-                    + android.text.format.Formatter.formatFileSize(this, receivedBytes + sentBytes));
         }
+        tunnelUsage.setText("مصرف اتصال\n" + (current == null ? "در دسترس نیست"
+                : android.text.format.Formatter.formatFileSize(this, receivedBytes + sentBytes)));
         long now = android.os.SystemClock.elapsedRealtime();
         long elapsed = now - previousTunnelSampleAt;
-        if (current != null && previousTunnelBytes != null && elapsed > 0
+        if (current == null) {
+            liveTunnelSpeed.setText("سرعت لحظه‌ای\nدر دسترس نیست");
+        } else if (previousTunnelBytes != null && elapsed > 0
                 && current[0] >= previousTunnelBytes[0] && current[1] >= previousTunnelBytes[1]) {
-            liveTunnelSpeed.setText("دریافت "
-                    + Math.round((current[0] - previousTunnelBytes[0]) * 8.0 / elapsed)
-                    + " kbps  |  ارسال "
-                    + Math.round((current[1] - previousTunnelBytes[1]) * 8.0 / elapsed)
-                    + " kbps");
+            long download = Math.round((current[0] - previousTunnelBytes[0]) * 8.0 / elapsed);
+            long upload = Math.round((current[1] - previousTunnelBytes[1]) * 8.0 / elapsed);
+            liveTunnelSpeed.setText("سرعت لحظه‌ای (kbps)\n↓ " + download + "    ↑ " + upload);
         } else {
-            liveTunnelSpeed.setText("سرعت لحظه‌ای —");
+            liveTunnelSpeed.setText("سرعت لحظه‌ای\nدر حال اندازه‌گیری");
         }
         previousTunnelBytes = current;
         previousTunnelSampleAt = now;
@@ -2791,12 +2894,13 @@ public class MainActivity extends Activity {
         boolean limited = "limited".equals(lamp) && vpnPresent;
         if (("connected".equals(lamp) && !connected)
                 || ("limited".equals(lamp) && !limited)) lamp = "disconnected";
-        boolean searching = smartBusy || ("searching".equals(lamp) && statusAge >= 0L
-                && statusAge <= 90_000L);
+        boolean nativeBusy = NativeCoreVpnService.isSessionRunning();
+        boolean searching = smartBusy || ("searching".equals(lamp)
+                && (nativeBusy || quickConnect || (statusAge >= 0L && statusAge <= 90_000L)));
         if ("searching".equals(lamp) && !searching) {
             diagnostics.edit().putString("connection_lamp_state", "disconnected")
                     .putString("service_status_message",
-                            "جست‌وجوی قبلی متوقف یا منقضی شده است؛ برای شروع دوباره اتصال هوشمند را بزنید.")
+                            "جست‌وجوی قبلی منقضی شد؛ برای شروع دوباره دایرهٔ اتصال را بزنید.")
                     .putLong("service_status_updated_at", System.currentTimeMillis())
                     .apply();
             lamp = "disconnected";
@@ -2806,66 +2910,81 @@ public class MainActivity extends Activity {
                 && savedStatus != null && !savedStatus.trim().isEmpty()
                 ? savedStatus
                 : "اتصال برقرار نیست؛ یکی از دکمه‌های اتصال را بزنید.";
-        if (!visibleStatus.equals(lastRenderedServiceStatus)) {
+        boolean stopping = (wireGuardStopPending && !quickWaitingForStop) || xrayStopping;
+        String displayLamp = stopping ? "stopping" : searching ? "searching"
+                : "failed".equals(lamp) && vpnPresent ? "unverified" : lamp;
+        if (!visibleStatus.equals(lastRenderedServiceStatus) || !displayLamp.equals(lastDisplayLamp)) {
             lastRenderedServiceStatus = visibleStatus;
+            lastDisplayLamp = displayLamp;
             setStatus(visibleStatus);
+            status.setVisibility("disconnected".equals(displayLamp)
+                    || ("connected".equals(displayLamp) && !visibleStatus.contains("افت"))
+                    ? View.GONE : View.VISIBLE);
         }
-        renderConnectionOrb(smartBusy ? "searching" : lamp, visibleStatus);
-        if ("failed".equals(lamp) && vpnPresent) {
-            connectionOrb.setText("تونل فعال است\nاینترنت تأیید نشد");
-            connectionOrb.setBackground(gradientCard(0xffe9a239, 0xffda765d, 100));
-        }
-        boolean active = connected || limited || searching || smartBusy || vpnPresent || quickConnect || xrayBusy;
+        renderConnectionOrb(displayLamp);
+        boolean active = connected || limited || searching || vpnPresent || quickConnect
+                || xrayBusy || nativeBusy || stopping;
+        connectionOrb.setEnabled(!stopping && !wireGuardStopPending);
+        connectionOrb.setContentDescription(connectionOrb.getText() + (active && !stopping ? "، لمس برای قطع" : ""));
         if (connectButton != null) connectButton.setEnabled(!active && !wireGuardStopPending);
         if (sstpButton != null) sstpButton.setEnabled(!active && !wireGuardStopPending);
         if (smartSingBoxButton != null) smartSingBoxButton.setEnabled(!active && !wireGuardStopPending);
         if (smartWireGuardButton != null) smartWireGuardButton.setEnabled(!active && !wireGuardStopPending);
         if (disconnectButton != null) disconnectButton.setEnabled(active && !wireGuardStopPending && !xrayStopping);
         if (discoveryButton != null) discoveryButton.setEnabled(!active && !wireGuardStopPending);
-        if (smartConnectButton != null) {
-            boolean ready = !active && !wireGuardStopPending;
-            smartConnectButton.setEnabled(ready);
-            smartConnectButton.setAlpha(ready ? 1.0f : 0.55f);
-            smartConnectButton.setText(ready ? "⚡  اتصال هوشمند" : "⏳  در حال اتصال یا متصل");
+        if (disconnectButton != null) {
+            disconnectButton.setVisibility(active ? View.VISIBLE : View.GONE);
+            disconnectButton.setText(searching ? "لغو اتصال" : "قطع اتصال");
         }
     }
 
-    /**
-     * Render the central indicator from the service's verified lamp state.
-     * A native CONNECTED callback alone never turns this indicator green.
-     */
-    private void renderConnectionOrb(String lamp, String serviceMessage) {
+    private void renderConnectionOrb(String lamp) {
         if (connectionOrb == null) return;
-
-        connectionSpinner.setVisibility("searching".equals(lamp) ? View.VISIBLE : View.GONE);
-        if ("connected".equals(lamp)) {
-            StringBuilder text = new StringBuilder("●\nمتصل");
-            java.util.regex.Matcher latency = java.util.regex.Pattern
-                    .compile("تأخیر\\s+(\\d+)\\s*ms").matcher(serviceMessage);
-            java.util.regex.Matcher speed = java.util.regex.Pattern
-                    .compile("دریافت\\s+(\\d+)\\s*kbps").matcher(serviceMessage);
-            if (latency.find()) text.append("\n").append(latency.group(1)).append(" ms");
-            if (speed.find()) text.append("\n").append(speed.group(1)).append(" kbps");
-            connectionOrb.setText(text.toString());
-            connectionOrb.setTextSize(19);
-            connectionOrb.setBackground(gradientCard(0xff0ab78e, 0xff1cc8c7, 100));
-        } else if ("limited".equals(lamp)) {
-            connectionOrb.setText("◐\nاینترنت محدود\nویدیو تأیید نشده");
-            connectionOrb.setTextSize(17);
-            connectionOrb.setBackground(gradientCard(0xffe9a239, 0xffda765d, 100));
-        } else if ("searching".equals(lamp)) {
-            connectionOrb.setText("◌\nدر حال جست‌وجو\nو اتصال");
-            connectionOrb.setTextSize(19);
-            connectionOrb.setBackground(gradientCard(0xffe9a239, 0xffda765d, 100));
-        } else {
-            boolean hasFailure = "failed".equals(lamp);
-            connectionOrb.setText(hasFailure ? "×\nتلاش دوباره" : "⏻\nاتصال خودکار");
-            connectionOrb.setTextSize(20);
-            connectionOrb.setBackground(gradientCard(
-                    hasFailure ? 0xffe85b7d : 0xff506ed9,
-                    hasFailure ? 0xffab486b : 0xff43b4cf, 100));
+        boolean connected = "connected".equals(lamp);
+        boolean limited = "limited".equals(lamp);
+        int metricsVisibility = connected || limited || "unverified".equals(lamp) ? View.VISIBLE : View.GONE;
+        if (connectionRing.getVisibility() != metricsVisibility) {
+            connectionRing.setVisibility(metricsVisibility);
+            activeEngineLabel.setVisibility(metricsVisibility);
+            tunnelUsage.setVisibility(metricsVisibility);
+            liveTunnelSpeed.setVisibility(metricsVisibility);
+            if (metricsVisibility == View.VISIBLE) sampleLiveTunnelSpeed();
         }
-        connectionOrb.setTextColor(Color.WHITE);
+        connectionSpinner.setVisibility("searching".equals(lamp) ? View.VISIBLE : View.GONE);
+        String message;
+        int start;
+        int end;
+        switch (lamp) {
+            case "connected" -> {
+                message = NativeCoreVpnService.runningEngine().isEmpty() ? "متصل" : "تونل فعال";
+                start = 0xff087e6b;
+                end = 0xff137e94;
+            }
+            case "limited", "searching", "stopping", "unverified" -> {
+                message = switch (lamp) {
+                    case "limited" -> "اینترنت محدود";
+                    case "stopping" -> "در حال قطع";
+                    case "unverified" -> "اینترنت تأیید نشد";
+                    default -> "در حال اتصال";
+                };
+                start = 0xffa25e12;
+                end = 0xff975335;
+            }
+            case "failed" -> {
+                message = "تلاش دوباره";
+                start = 0xffa64464;
+                end = 0xff823e68;
+            }
+            default -> {
+                message = "⏻\nاتصال خودکار";
+                start = 0xff4562c9;
+                end = 0xff2587ad;
+            }
+        }
+        if (!message.contentEquals(connectionOrb.getText())) {
+            connectionOrb.setText(message);
+            connectionOrb.setBackground(gradientCard(start, end, 100));
+        }
     }
 
     @Override protected void onResume() {
@@ -2903,7 +3022,12 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         if (xrayReceiverRegistered) unregisterReceiver(xrayReceiver);
         ++smartAttempt;
+        if (isFinishing()) {
+            openDiagnosticSessionStartedAt = 0L;
+            resetDiagnosticHistory();
+        }
         statusRefreshHandler.removeCallbacks(statusRefreshRunnable);
+        statusRefreshHandler.removeCallbacks(quickRefreshRunnable);
         if (statusPreferences != null && statusPreferenceListener != null) {
             statusPreferences.unregisterOnSharedPreferenceChangeListener(statusPreferenceListener);
         }
