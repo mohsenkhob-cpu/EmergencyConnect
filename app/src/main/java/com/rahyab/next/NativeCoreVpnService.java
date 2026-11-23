@@ -3,6 +3,8 @@ package com.rahyab.next;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.VpnService;
 import android.content.Intent;
 import android.os.Build;
@@ -21,7 +23,7 @@ import java.security.KeyStore;
 import java.security.cert.Certificate;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -52,6 +54,52 @@ public final class NativeCoreVpnService extends VpnService {
     private final Object teardownLock = new Object();
     private static final int SOCKS_PORT = 18080;
     private static final int HTTP_PORT = 18081;
+    private final Object networkLock = new Object();
+    private record Uplink(Network network, long changedAt) { }
+    private volatile Uplink uplink = new Uplink(null, 0L);
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private long establishedAt;
+
+    private void watchDefaultNetwork() {
+        ConnectivityManager manager = getSystemService(ConnectivityManager.class);
+        if (manager == null) return;
+        synchronized (networkLock) {
+            uplink = new Uplink(manager.getActiveNetwork(), 0L);
+        }
+        ConnectivityManager.NetworkCallback callback = new ConnectivityManager.NetworkCallback() {
+            @Override public void onAvailable(Network network) { update(network, null); }
+            @Override public void onLost(Network network) { update(null, network); }
+
+            private void update(Network next, Network lost) {
+                synchronized (networkLock) {
+                    if (networkCallback != this || (lost != null && !lost.equals(uplink.network()))
+                            || Objects.equals(uplink.network(), next)) return;
+                    uplink = new Uplink(next, SystemClock.elapsedRealtime());
+                    networkLock.notifyAll();
+                }
+            }
+        };
+        synchronized (networkLock) { networkCallback = callback; }
+        try {
+            manager.registerDefaultNetworkCallback(callback);
+        } catch (RuntimeException ignored) {
+            synchronized (networkLock) { networkCallback = null; }
+        }
+    }
+
+    private void stopWatchingNetwork() {
+        ConnectivityManager.NetworkCallback callback;
+        synchronized (networkLock) {
+            callback = networkCallback;
+            networkCallback = null;
+            networkLock.notifyAll();
+        }
+        ConnectivityManager manager = getSystemService(ConnectivityManager.class);
+        if (manager != null && callback != null) {
+            try { manager.unregisterNetworkCallback(callback); }
+            catch (RuntimeException ignored) { }
+        }
+    }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null || STOP.equals(intent.getAction())) {
@@ -83,6 +131,7 @@ public final class NativeCoreVpnService extends VpnService {
         stopped = false;
         activeInstance = this;
         currentEngine = requested;
+        watchDefaultNetwork();
         int token = generation.incrementAndGet();
         report(requested + " — جست‌وجوی مسیر قابل‌دسترسی…", "searching");
         Thread thread = new Thread(() -> runSession(requested, token),
@@ -135,9 +184,14 @@ public final class NativeCoreVpnService extends VpnService {
             // overlapping native engines or two TUN bridges.
             for (int attempt = 1; attempt <= 3 && current(token); attempt++) {
                 synchronized (teardownLock) { teardownNative(); }
+                establishedAt = 0L;
                 String error = startOne(name, token);
                 if (!current(token)) return;
                 if (error == null) return; // user-initiated stop
+                if (establishedAt > 0L && SystemClock.elapsedRealtime() - establishedAt >= 60_000L) {
+                    // A healthy session gets a fresh recovery budget.
+                    attempt = 1;
+                }
                 report(name + " — " + error + "؛ تلاش " + attempt + " از ۳", "searching");
                 if (attempt < 3) Thread.sleep(2500L * attempt);
             }
@@ -304,29 +358,60 @@ public final class NativeCoreVpnService extends VpnService {
         if (!current(token)) return null;
         report(name + " — HTTPS موتور تأیید شد؛ تونل VPN فعال است", "connected");
 
+        establishedAt = SystemClock.elapsedRealtime();
+        Uplink observed = uplink;
+        long nextProbe = establishedAt + 30_000L;
         int consecutiveFailures = 0;
+        boolean waitingForNetwork = false;
+        boolean recheckingAfterHandoff = false;
         while (current(token)) {
-            Thread.sleep(30_000L);
-            if (!current(token)) return null;
-            if (engineProcess == null || !engineProcess.isAlive()
-                    || !TProxyService.TProxyIsRunning()) {
-                return "تونل یا موتور بسته شد";
-            }
-            boolean reachable = NativeProxyProbe.verify(SOCKS_PORT)
-                    && hasRunningTunnel();
-            if (!current(token)) return null;
-            if (reachable) {
-                if (consecutiveFailures > 0) {
-                    report(name + " — آزمون HTTPS موتور دوباره پاسخ داد", "connected");
-                }
+            Uplink route = uplink;
+            if (route != observed) {
+                observed = route;
                 consecutiveFailures = 0;
+                nextProbe = route.changedAt() + 2_000L;
+                recheckingAfterHandoff = true;
+            }
+            if (route.network() == null && route.changedAt() != 0L) {
+                if (!waitingForNetwork) {
+                    waitingForNetwork = true;
+                    report(name + " — منتظر برگشت اینترنت گوشی…", "searching");
+                }
+                waitForNetworkOrTime(token, route, 30_000L);
+                continue;
+            }
+            long delay = nextProbe - SystemClock.elapsedRealtime();
+            if (delay > 0L) {
+                waitForNetworkOrTime(token, route, delay);
+                continue;
+            }
+            if (!hasRunningTunnel()) return "تونل یا موتور بسته شد";
+            boolean reachable = NativeProxyProbe.verify(SOCKS_PORT);
+            if (!current(token)) return null;
+            if (route != uplink) continue;
+            if (reachable) {
+                if (waitingForNetwork || consecutiveFailures > 0 || recheckingAfterHandoff) {
+                    report(name + " — عبور HTTPS دوباره تأیید شد", "connected");
+                }
+                waitingForNetwork = false;
+                recheckingAfterHandoff = false;
+                consecutiveFailures = 0;
+                nextProbe = SystemClock.elapsedRealtime() + 30_000L;
             } else if (++consecutiveFailures >= 2) {
-                return "دو آزمون واقعی HTTPS موتور متوالی ناموفق بود";
+                return "دو آزمون پیاپی HTTPS موتور ناموفق بود";
             } else {
-                report(name + " — افت موقت کیفیت؛ بررسی مجدد…", "connected");
+                report(name + " — افت موقت کیفیت؛ بررسی مجدد…",
+                        waitingForNetwork ? "searching" : "connected");
+                nextProbe = SystemClock.elapsedRealtime() + 5_000L;
             }
         }
         return null;
+    }
+
+    private void waitForNetworkOrTime(int token, Uplink route, long delay) throws InterruptedException {
+        synchronized (networkLock) {
+            if (current(token) && uplink == route) networkLock.wait(delay);
+        }
     }
 
     private File prepareCertificateBundle() {
@@ -367,7 +452,10 @@ public final class NativeCoreVpnService extends VpnService {
                 process.destroyForcibly();
                 process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS);
             }
-        } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+        } catch (InterruptedException ignored) {
+            process.destroyForcibly();
+            Thread.currentThread().interrupt();
+        }
         if (engineProcess == process) engineProcess = null;
     }
 
@@ -382,6 +470,7 @@ public final class NativeCoreVpnService extends VpnService {
     }
 
     private void stopAndExit() {
+        if (closing) return;
         stopped = true;
         closing = true;
         generation.incrementAndGet();
@@ -406,6 +495,7 @@ public final class NativeCoreVpnService extends VpnService {
 
     @Override public void onDestroy() {
         stopped = true;
+        stopWatchingNetwork();
         generation.incrementAndGet();
         Thread old = worker;
         if (old != null) old.interrupt();
@@ -432,6 +522,10 @@ public final class NativeCoreVpnService extends VpnService {
             return false;
         try { return TProxyService.TProxyIsRunning(); }
         catch (RuntimeException | LinkageError error) { return false; }
+    }
+
+    static long sampleDownloadKbps() {
+        return hasRunningTunnel() ? NativeProxyProbe.sampleDownloadKbps(SOCKS_PORT) : -1L;
     }
 
     public static long[] tunnelBytes() {

@@ -230,6 +230,11 @@ public class MainActivity extends Activity {
     private boolean quickEngineConnected;
     private long nextHealthCheck;
     private int healthFailures;
+    private long nextSpeedCheck;
+    private boolean speedCheckRunning;
+    private String qualityNetwork = "";
+    private final QuickSpeedPolicy quickSpeed = new QuickSpeedPolicy();
+    private java.util.List<String> quickEngineOrder = java.util.Collections.emptyList();
     private final java.util.ArrayDeque<String> remainingEngines = new java.util.ArrayDeque<>();
     private static final int REQUEST_QUICK_PERMISSION = 4110;
     private long[] previousTunnelBytes;
@@ -499,6 +504,8 @@ public class MainActivity extends Activity {
                 prefs.getString("quick_connection_started_at", ""));
         appendReportSection(report, "نتیجه آخرین اتصال خودکار",
                 prefs.getString("quick_connection_result", ""));
+        appendReportSection(report, "آخرین آزمون سرعت اتصال خودکار",
+                prefs.getString("quick_speed_result", ""));
         appendReportSection(report, "زمان آغاز آخرین جست‌وجوی OpenVPN",
                 prefs.getString("discovery_attempt_started_at", ""));
         appendReportSection(report, "رویدادهای موتور OpenVPN",
@@ -740,7 +747,7 @@ public class MainActivity extends Activity {
     }
 
     private void appendReportSection(StringBuilder report, String title, String value) {
-        if (value == null || value.trim().isEmpty()) return;
+        if (value == null || value.trim().isEmpty() || "|".equals(value.trim())) return;
         report.append("===== ").append(title).append(" =====\n");
         report.append(value).append("\n\n");
     }
@@ -1179,6 +1186,8 @@ public class MainActivity extends Activity {
         quickConnect = true;
         quickWaitingForStop = false;
         remainingEngines.clear();
+        quickSpeed.reset();
+        qualityNetwork = physicalNetworkSnapshot();
         String operator = "";
         if (ir.emergencyconnect.engine.RecentRelayStore.physicalTransport(this) == 2) {
             try {
@@ -1203,8 +1212,8 @@ public class MainActivity extends Activity {
         boolean recentVerifiedSstp = savedAt > 0L && memoryAge >= 0L
                 && memoryAge < 6L * 60L * 60L * 1000L
                 && NetworkConnectionPolicy.isValidSstpHost(savedHost);
-        remainingEngines.addAll(NetworkConnectionPolicy.quickOrder(mci, false,
-                recentVerifiedSstp));
+        quickEngineOrder = NetworkConnectionPolicy.quickOrder(mci, false, recentVerifiedSstp);
+        remainingEngines.addAll(quickEngineOrder);
         appendAppDiagnostic("انتخاب خودکار",
                 "اولویت مسیرهای تأییدشده: فلاکس‌کور، اتر؛ سپس "
                 + (mci || recentVerifiedSstp ? "SSTP و OpenVPN" : "OpenVPN و SSTP"));
@@ -1218,6 +1227,13 @@ public class MainActivity extends Activity {
 
     private void tryNextQuickEngine() {
         quickEngine = remainingEngines.poll();
+        if (quickEngine == null && qualityNetwork.equals(physicalNetworkSnapshot())) {
+            quickEngine = quickSpeed.restoreBest(android.os.SystemClock.elapsedRealtime());
+            if (quickEngine != null) appendAppDiagnostic("پایش سرعت",
+                    "بازگشت به سریع‌ترین موتورِ اندازه‌گیری‌شده — " + quickEngine);
+        }
+        quickSpeed.engineChanged();
+        speedCheckRunning = false;
         healthFailures = 0;
         quickEngineConnected = false;
         nextHealthCheck = android.os.SystemClock.elapsedRealtime() + 20_000L;
@@ -1229,7 +1245,8 @@ public class MainActivity extends Activity {
             return;
         }
         quickAttemptDeadline = android.os.SystemClock.elapsedRealtime()
-                + ("Fluxcore".equals(quickEngine) ? 145_000L
+                + (quickSpeed.comparing() ? 75_000L
+                    : "Fluxcore".equals(quickEngine) ? 145_000L
                     : "Aether".equals(quickEngine) ? 335_000L
                     : "OpenVPN".equals(quickEngine) ? 220_000L : 110_000L);
         appendAppDiagnostic("انتخاب خودکار", "آزمون " + quickEngine);
@@ -1275,9 +1292,12 @@ public class MainActivity extends Activity {
         if (!"connected".equals(lamp) || !activeVpn) return;
         if (!quickEngineConnected) {
             quickEngineConnected = true;
+            nextSpeedCheck = now + (quickSpeed.comparing() ? 3000L : 12_000L);
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("quick_connection_result", "تونل " + quickEngine + " فعال شد").apply();
         }
+        if (now >= nextSpeedCheck && !speedCheckRunning && quickSpeed.canMeasure(now))
+            checkQuickDownloadSpeed(nativeCore);
         if (nativeCore || now < nextHealthCheck) return;
         nextHealthCheck = Long.MAX_VALUE;
         int attempt = smartAttempt;
@@ -1293,10 +1313,79 @@ public class MainActivity extends Activity {
                 if (!verified) appendAppDiagnostic("پایش اتصال",
                         monitoredEngine + " — شکست بررسی " + healthFailures
                                 + "/2؛ علت: " + failureReason);
-                if (healthFailures < 2 || remainingEngines.isEmpty()) return;
+                if (healthFailures < 2 || (remainingEngines.isEmpty() && !quickSpeed.comparing())) return;
                 appendAppDiagnostic("پایش اتصال", quickEngine
                         + " — هر دو بررسی VPN ناموفق؛ آزمایش موتور بعدی");
                 stopBeforeQuickFallback();
+            });
+        });
+    }
+
+    private String physicalNetworkSnapshot() {
+        android.net.ConnectivityManager manager = getSystemService(android.net.ConnectivityManager.class);
+        if (manager == null) return "";
+        java.util.TreeSet<Long> handles = new java.util.TreeSet<>();
+        for (android.net.Network network : manager.getAllNetworks()) {
+            android.net.NetworkCapabilities capabilities = manager.getNetworkCapabilities(network);
+            if (capabilities != null
+                    && capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    && capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_VPN))
+                handles.add(network.getNetworkHandle());
+        }
+        return handles.isEmpty() ? "" : handles.toString();
+    }
+
+    private void checkQuickDownloadSpeed(boolean nativeCore) {
+        speedCheckRunning = true;
+        String engine = quickEngine;
+        int attempt = smartAttempt;
+        final String network = physicalNetworkSnapshot();
+        worker.execute(() -> {
+            long speed = nativeCore ? NativeCoreVpnService.sampleDownloadKbps()
+                    : TunnelVerifier.sampleDownloadKbps(this);
+            runOnUiThread(() -> {
+                if (isDestroyed() || isFinishing() || !quickConnect || smartAttempt != attempt
+                        || !engine.equals(quickEngine)) return;
+                speedCheckRunning = false;
+                long now = android.os.SystemClock.elapsedRealtime();
+                nextSpeedCheck = now + 90_000L;
+                String currentNetwork = physicalNetworkSnapshot();
+                if (!qualityNetwork.equals(currentNetwork)) {
+                    quickSpeed.reset();
+                    qualityNetwork = currentNetwork;
+                }
+                if (currentNetwork.isEmpty() || !network.equals(currentNetwork)
+                        || !hasActiveAndroidVpn() || !"connected".equals(
+                                statusPreferences.getString("connection_lamp_state", ""))) {
+                    quickSpeed.engineChanged();
+                    nextSpeedCheck = now + 5000L;
+                    return;
+                }
+                String measurement = engine + " — " + (speed < 0 ? "نمونه در دسترس نبود"
+                        : speed + " کیلوبیت‌برثانیه");
+                getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
+                        .putString("quick_speed_result", measurement).apply();
+                boolean wasComparing = quickSpeed.comparing();
+                switch (quickSpeed.measure(engine, speed, now)) {
+                    case RECHECK -> nextSpeedCheck = now + 5000L;
+                    case ACCEPT -> {
+                        if (wasComparing) appendAppDiagnostic("پایش سرعت", "موتور جایگزین پذیرفته شد — " + measurement);
+                    }
+                    case SWITCH -> {
+                        if (!wasComparing) {
+                            remainingEngines.clear();
+                            for (String candidate : quickEngineOrder) {
+                                if (!engine.equals(candidate)) remainingEngines.add(candidate);
+                            }
+                        }
+                        if (remainingEngines.isEmpty() && engine.equals(quickSpeed.bestEngine())) {
+                            quickSpeed.restoreBest(now);
+                            return;
+                        }
+                        appendAppDiagnostic("پایش سرعت", "آزمایش موتور جایگزین — " + measurement);
+                        stopBeforeQuickFallback();
+                    }
+                }
             });
         });
     }
