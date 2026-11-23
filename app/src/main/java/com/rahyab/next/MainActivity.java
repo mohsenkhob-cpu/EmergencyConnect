@@ -247,6 +247,7 @@ public class MainActivity extends Activity {
     private android.widget.ProgressBar connectionSpinner;
     private Button connectButton;
     private Button disconnectButton;
+    private Button nextEngineButton;
     private boolean singBoxReceiverRegistered = false;
     private android.content.SharedPreferences statusPreferences;
     private android.content.SharedPreferences.OnSharedPreferenceChangeListener statusPreferenceListener;
@@ -896,7 +897,7 @@ public class MainActivity extends Activity {
         page.addView(topEngines);
         page.addView(bottomEngines);
 
-        discoveryButton = engineButton(bottomEngines, "🛰 OpenVPN", this::startSmartOpenVpnSearch);
+        discoveryButton = engineButton(bottomEngines, "🛰 OpenVPN", () -> { if (canStartManualVpn()) startSmartOpenVpnSearch(); });
         // Standalone WireGuard has been retired from the user interface.
         // Keep the legacy view reference until its internal lifecycle handlers
         // are fully removed, so older callbacks remain null-safe.
@@ -906,11 +907,13 @@ public class MainActivity extends Activity {
 
         Button xrayFinder = engineButton(bottomEngines, "🌐 Xray", this::showXrayFinder);
         xrayFinder.setContentDescription("فایل‌یاب هوشمند Xray");
-        sstpButton = engineButton(topEngines, "🔐 SSTP", this::discoverSstp);
-        engineButton(topEngines, "🌊 فلاکس‌کور", () ->
-                requestNativeCore(NativeCoreVpnService.FLUXCORE));
-        engineButton(topEngines, "✨ اِتِر", () ->
-                requestNativeCore(NativeCoreVpnService.AETHER));
+        sstpButton = engineButton(topEngines, "🔐 SSTP", () -> { if (canStartManualVpn()) discoverSstp(); });
+        engineButton(topEngines, "🌊 فلاکس‌کور", () -> {
+            if (canStartManualVpn()) requestNativeCore(NativeCoreVpnService.FLUXCORE);
+        });
+        engineButton(topEngines, "✨ اِتِر", () -> {
+            if (canStartManualVpn()) requestNativeCore(NativeCoreVpnService.AETHER);
+        });
 
         Button directVpnGate = new Button(this);
         directVpnGate.setText("🌐  اتصال مستقیم SSTP از VPN Gate");
@@ -984,6 +987,16 @@ public class MainActivity extends Activity {
         disconnectParams.topMargin = dp(10);
         page.addView(disconnectButton, disconnectParams);
         disconnectButton.setOnClickListener(v -> stopFromScreen());
+        nextEngineButton = new Button(this);
+        nextEngineButton.setText("آزمون موتور بعدی");
+        nextEngineButton.setAllCaps(false);
+        nextEngineButton.setTextColor(Color.WHITE);
+        nextEngineButton.setBackground(gradientCard(0xff315286, 0xff286075, 18));
+        LinearLayout.LayoutParams nextEngineParams = new LinearLayout.LayoutParams(-1, dp(48));
+        nextEngineParams.topMargin = dp(8);
+        page.addView(nextEngineButton, nextEngineParams);
+        nextEngineButton.setVisibility(View.GONE);
+        nextEngineButton.setOnClickListener(v -> advanceAtUserRequest());
 
         Button advancedToggle = new Button(this);
         advancedToggle.setText("تنظیمات پیشرفته و ورود دستی  +");
@@ -1147,7 +1160,7 @@ public class MainActivity extends Activity {
     }
 
     private void requestNativeCore(String engine) {
-        if (!quickConnect && !canStartManualVpn()) return;
+        if (NativeCoreVpnService.isSessionRunning()) return;
         if (!NativeCoreVpnService.FLUXCORE.equals(engine)
                 && !NativeCoreVpnService.AETHER.equals(engine)) return;
         beginSmartAttempt("در حال آماده‌سازی " + engine + "…");
@@ -1167,7 +1180,8 @@ public class MainActivity extends Activity {
         publishDiscoveryStatus(engine + " — آماده‌سازی موتور و آزمون HTTPS…", "searching");
         Intent service = new Intent(this, NativeCoreVpnService.class)
                 .setAction(NativeCoreVpnService.START)
-                .putExtra(NativeCoreVpnService.EXTRA_ENGINE, engine);
+                .putExtra(NativeCoreVpnService.EXTRA_ENGINE, engine)
+                .putExtra(NativeCoreVpnService.EXTRA_AUTOMATIC, quickConnect);
         try { startForegroundService(service); }
         catch (RuntimeException error) {
             completeSmartAttempt(engine + " — سرویس شروع نشد", false);
@@ -1188,38 +1202,12 @@ public class MainActivity extends Activity {
         remainingEngines.clear();
         quickSpeed.reset();
         qualityNetwork = physicalNetworkSnapshot();
-        String operator = "";
-        if (ir.emergencyconnect.engine.RecentRelayStore.physicalTransport(this) == 2) {
-            try {
-                android.telephony.TelephonyManager phone =
-                        getSystemService(android.telephony.TelephonyManager.class);
-                if (phone != null) {
-                    operator = phone.createForSubscriptionId(
-                            android.telephony.SubscriptionManager.getDefaultDataSubscriptionId())
-                            .getNetworkOperatorName();
-                }
-            } catch (RuntimeException ignored) { }
-        }
-        boolean mci = NetworkConnectionPolicy.isMciOperator(operator);
-        String memoryKey = currentSstpMemoryKey();
-        android.content.SharedPreferences sstpMemory =
-                getSharedPreferences("sstp_recent_good", MODE_PRIVATE);
-        long savedAt = memoryKey.isEmpty() ? 0L
-                : sstpMemory.getLong("saved_at_" + memoryKey, 0L);
-        long memoryAge = System.currentTimeMillis() - savedAt;
-        String savedHost = memoryKey.isEmpty() ? ""
-                : sstpMemory.getString("host_" + memoryKey, "");
-        boolean recentVerifiedSstp = savedAt > 0L && memoryAge >= 0L
-                && memoryAge < 6L * 60L * 60L * 1000L
-                && NetworkConnectionPolicy.isValidSstpHost(savedHost);
-        quickEngineOrder = NetworkConnectionPolicy.quickOrder(mci, false, recentVerifiedSstp);
+        quickEngineOrder = NetworkConnectionPolicy.quickOrder();
         remainingEngines.addAll(quickEngineOrder);
-        appendAppDiagnostic("انتخاب خودکار",
-                "اولویت مسیرهای تأییدشده: فلاکس‌کور، اتر؛ سپس "
-                + (mci || recentVerifiedSstp ? "SSTP و OpenVPN" : "OpenVPN و SSTP"));
+        appendAppDiagnostic("انتخاب خودکار", "ترتیب آزمون: اتر، فلاکس‌کور، SSTP، سپس OpenVPN");
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                 .putString("quick_connection_started_at", diagnosticTimestamp())
-                .apply();
+                .remove("quick_speed_result").apply();
         tryNextQuickEngine();
         statusRefreshHandler.removeCallbacks(quickRefreshRunnable);
         statusRefreshHandler.post(quickRefreshRunnable);
@@ -1245,13 +1233,11 @@ public class MainActivity extends Activity {
             return;
         }
         quickAttemptDeadline = android.os.SystemClock.elapsedRealtime()
-                + (quickSpeed.comparing() ? 75_000L
-                    : "Fluxcore".equals(quickEngine) ? 145_000L
-                    : "Aether".equals(quickEngine) ? 335_000L
-                    : "OpenVPN".equals(quickEngine) ? 220_000L : 110_000L);
+                + NetworkConnectionPolicy.quickAttemptBudgetMs(quickEngine);
         appendAppDiagnostic("انتخاب خودکار", "آزمون " + quickEngine);
         getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
-                .putString("quick_connection_result", "در حال آزمون " + quickEngine).apply();
+                .putString("quick_connection_result", "در حال آزمون " + quickEngine)
+                .remove("quick_speed_result").apply();
         switch (quickEngine) {
             case "Fluxcore", "Aether" -> requestNativeCore(quickEngine);
             case "SSTP" -> discoverSstp();
@@ -1279,8 +1265,8 @@ public class MainActivity extends Activity {
         }
         boolean nativeCore = "Fluxcore".equals(quickEngine) || "Aether".equals(quickEngine);
         if (nativeCore && quickEngineConnected && "searching".equals(lamp)
-                && NativeCoreVpnService.isSessionRunning()) {
-            // The native service owns recovery after a successful connection.
+                && activeVpn && NativeCoreVpnService.isSessionRunning()) {
+            // Keep an established tunnel while the physical network is offline.
             return;
         }
         if ("failed".equals(lamp) || ("connected".equals(lamp) && !activeVpn
@@ -1292,7 +1278,7 @@ public class MainActivity extends Activity {
         if (!"connected".equals(lamp) || !activeVpn) return;
         if (!quickEngineConnected) {
             quickEngineConnected = true;
-            nextSpeedCheck = now + (quickSpeed.comparing() ? 3000L : 12_000L);
+            nextSpeedCheck = now + (quickSpeed.comparing() ? 2000L : 6000L);
             getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                     .putString("quick_connection_result", "تونل " + quickEngine + " فعال شد").apply();
         }
@@ -1343,12 +1329,14 @@ public class MainActivity extends Activity {
         worker.execute(() -> {
             long speed = nativeCore ? NativeCoreVpnService.sampleDownloadKbps()
                     : TunnelVerifier.sampleDownloadKbps(this);
+            boolean youtubeReachable = !nativeCore || speed <= 0
+                    || NativeCoreVpnService.youtubeReachable();
             runOnUiThread(() -> {
                 if (isDestroyed() || isFinishing() || !quickConnect || smartAttempt != attempt
                         || !engine.equals(quickEngine)) return;
                 speedCheckRunning = false;
                 long now = android.os.SystemClock.elapsedRealtime();
-                nextSpeedCheck = now + 90_000L;
+                nextSpeedCheck = now + 45_000L;
                 String currentNetwork = physicalNetworkSnapshot();
                 if (!qualityNetwork.equals(currentNetwork)) {
                     quickSpeed.reset();
@@ -1363,20 +1351,20 @@ public class MainActivity extends Activity {
                 }
                 String measurement = engine + " — " + (speed < 0 ? "نمونه در دسترس نبود"
                         : speed + " کیلوبیت‌برثانیه");
+                if (!youtubeReachable) measurement += "؛ صفحهٔ یوتیوب پاسخ نداد";
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                         .putString("quick_speed_result", measurement).apply();
                 boolean wasComparing = quickSpeed.comparing();
-                switch (quickSpeed.measure(engine, speed, now)) {
+                long qualitySpeed = youtubeReachable ? speed
+                        : Math.min(speed, QuickSpeedPolicy.MIN_DOWNLOAD_KBPS / 2L);
+                switch (quickSpeed.measure(engine, qualitySpeed, now)) {
                     case RECHECK -> nextSpeedCheck = now + 5000L;
                     case ACCEPT -> {
                         if (wasComparing) appendAppDiagnostic("پایش سرعت", "موتور جایگزین پذیرفته شد — " + measurement);
                     }
                     case SWITCH -> {
                         if (!wasComparing) {
-                            remainingEngines.clear();
-                            for (String candidate : quickEngineOrder) {
-                                if (!engine.equals(candidate)) remainingEngines.add(candidate);
-                            }
+                            refillAlternatives(engine);
                         }
                         if (remainingEngines.isEmpty() && engine.equals(quickSpeed.bestEngine())) {
                             quickSpeed.restoreBest(now);
@@ -1388,6 +1376,23 @@ public class MainActivity extends Activity {
                 }
             });
         });
+    }
+
+    private void refillAlternatives(String engine) {
+        remainingEngines.clear();
+        int current = quickEngineOrder.indexOf(engine);
+        for (int offset = 1; offset < quickEngineOrder.size(); offset++) {
+            remainingEngines.add(quickEngineOrder.get((current + offset) % quickEngineOrder.size()));
+        }
+    }
+
+    private void advanceAtUserRequest() {
+        if (!quickConnect || quickWaitingForStop || !quickEngineConnected || !hasActiveAndroidVpn()) return;
+        quickSpeed.reset();
+        if (remainingEngines.isEmpty()) refillAlternatives(quickEngine);
+        if (remainingEngines.isEmpty()) return;
+        appendAppDiagnostic("انتخاب خودکار", "آزمون موتور بعدی به درخواست کاربر");
+        stopBeforeQuickFallback();
     }
 
     private void stopBeforeQuickFallback() {
@@ -3021,6 +3026,10 @@ public class MainActivity extends Activity {
         if (smartWireGuardButton != null) smartWireGuardButton.setEnabled(!active && !wireGuardStopPending);
         if (disconnectButton != null) disconnectButton.setEnabled(active && !wireGuardStopPending && !xrayStopping);
         if (discoveryButton != null) discoveryButton.setEnabled(!active && !wireGuardStopPending);
+        if (nextEngineButton != null) {
+            nextEngineButton.setVisibility(quickConnect && !quickWaitingForStop && connected
+                    ? View.VISIBLE : View.GONE);
+        }
         if (disconnectButton != null) {
             disconnectButton.setVisibility(active ? View.VISIBLE : View.GONE);
             disconnectButton.setText(searching ? "لغو اتصال" : "قطع اتصال");

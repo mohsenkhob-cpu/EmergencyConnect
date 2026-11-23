@@ -8,7 +8,7 @@ public class QuickSpeedPolicyTest {
         QuickSpeedPolicy policy = new QuickSpeedPolicy();
         assertEquals(QuickSpeedPolicy.Decision.ACCEPT, policy.measure("Fluxcore", -1, 1));
         assertEquals(QuickSpeedPolicy.Decision.RECHECK, policy.measure("Fluxcore", 190, 2));
-        assertEquals(QuickSpeedPolicy.Decision.ACCEPT, policy.measure("Fluxcore", 900, 3));
+        assertEquals(QuickSpeedPolicy.Decision.ACCEPT, policy.measure("Fluxcore", 1550, 3));
         assertFalse(policy.comparing());
     }
 
@@ -30,7 +30,7 @@ public class QuickSpeedPolicyTest {
         policy.measure("Fluxcore", 150, 1);
         policy.measure("Fluxcore", 200, 2);
         policy.engineChanged();
-        assertEquals(QuickSpeedPolicy.Decision.ACCEPT, policy.measure("Aether", 1200, 3));
+        assertEquals(QuickSpeedPolicy.Decision.ACCEPT, policy.measure("Aether", 1789, 3));
         assertFalse(policy.comparing());
     }
 

@@ -29,6 +29,18 @@ final class NativeProxyProbe {
                     && httpsOverSocks(localPort, "api.ipify.org", "/", 200));
     }
 
+    static boolean youtubeReachable(int port) {
+        String host = "www.youtube.com";
+        try (Socket socket = new Socket(); SSLSocket tls = openSocksTls(socket, port, host)) {
+            tls.setSoTimeout(3000);
+            sendRequest(tls, host, "/");
+            String status = readLine(new BufferedInputStream(tls.getInputStream()), 160);
+            return status.matches("HTTP/1\\.[01] (?:200|30[12378]|429)(?: .*|$)");
+        } catch (IOException | RuntimeException error) {
+            return false;
+        }
+    }
+
     private static boolean httpsOverSocks(int port, String host, String path, int expected) {
         try (Socket socket = new Socket(); SSLSocket tls = openSocksTls(socket, port, host)) {
             sendRequest(tls, host, path);

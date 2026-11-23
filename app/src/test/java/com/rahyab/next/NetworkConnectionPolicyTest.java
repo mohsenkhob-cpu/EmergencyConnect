@@ -5,17 +5,11 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 public class NetworkConnectionPolicyTest {
-    @Test public void onMciTryVerifiedSstpBeforeOpenvpn() {
-        assertTrue(NetworkConnectionPolicy.isMciOperator("IR-MCI"));
-        assertTrue(NetworkConnectionPolicy.isMciOperator("همراه اول"));
-        assertFalse(NetworkConnectionPolicy.isMciOperator("Irancell"));
-        assertEquals(List.of("Fluxcore", "Aether", "SSTP", "OpenVPN"),
-                NetworkConnectionPolicy.quickOrder(true, false));
-    }
-
-    @Test public void otherNetworksPreserveVerifiedOpenvpnFirst() {
-        assertEquals(List.of("Fluxcore", "Aether", "OpenVPN", "SSTP"),
-                NetworkConnectionPolicy.quickOrder(false, true));
+    @Test public void automaticStartsWithAetherThenTriesOtherCores() {
+        assertEquals(List.of("Aether", "Fluxcore", "SSTP", "OpenVPN"),
+                NetworkConnectionPolicy.quickOrder());
+        assertTrue(NetworkConnectionPolicy.quickAttemptBudgetMs("Aether") <= 65_000L);
+        assertTrue(NetworkConnectionPolicy.quickAttemptBudgetMs("Fluxcore") <= 55_000L);
     }
 
     @Test public void lastSstpHostFirstWithoutDuplicatesOrUntrustedHosts() {
@@ -41,18 +35,6 @@ public class NetworkConnectionPolicyTest {
         assertEquals("", NetworkConnectionPolicy.sstpMemoryKey(-1, "IR-MCI"));
         assertEquals("", NetworkConnectionPolicy.sstpMemoryKey(0, "IR-MCI"));
         assertEquals("cell_other", NetworkConnectionPolicy.sstpMemoryKey(2, "Rightel"));
-    }
-
-    @Test public void preferRecentlyVerifiedSstpOnWifiWithoutRemovingOpenvpnFallback() {
-        assertEquals(List.of("Fluxcore", "Aether", "SSTP", "OpenVPN"),
-                NetworkConnectionPolicy.quickOrder(false, false, true));
-        assertEquals(List.of("Fluxcore", "Aether", "SSTP", "OpenVPN"),
-                NetworkConnectionPolicy.quickOrder(false, true, true));
-    }
-
-    @Test public void withoutCurrentNetworkEvidenceDoNotAssumeSstpIsBest() {
-        assertEquals(List.of("Fluxcore", "Aether", "OpenVPN", "SSTP"),
-                NetworkConnectionPolicy.quickOrder(false, false, false));
     }
 
     @Test public void acceptsExactSstpAddressCopiedFromVpnGate() {

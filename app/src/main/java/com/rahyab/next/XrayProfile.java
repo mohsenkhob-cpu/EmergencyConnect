@@ -202,11 +202,7 @@ final class XrayProfile {
             if ("asis".equalsIgnoreCase(socketOptions.optString("domainStrategy", "AsIs"))) {
                 socketOptions.put("domainStrategy", "UseIP");
             }
-            config.put("dns", new JSONObject()
-                    .put("hosts", new JSONObject().put(address, pinnedIp))
-                    .put("servers", new JSONArray().put("localhost")));
-        } else if (socketOptions != null) {
-            config.put("dns", new JSONObject().put("servers", new JSONArray().put("localhost")));
+            config.getJSONObject("dns").put("hosts", new JSONObject().put(address, pinnedIp));
         }
         return config.toString();
     }
@@ -370,13 +366,28 @@ final class XrayProfile {
                 .put("settings", new JSONObject().put("vnext", new JSONArray().put(server)));
         // Android VpnService already owns the interface. A name here keeps
         // Xray from enumerating system interfaces while it reads the config.
-        JSONObject inbound = new JSONObject().put("protocol", "tun")
+        JSONObject inbound = new JSONObject().put("protocol", "tun").put("tag", "android-tun")
                 .put("settings", new JSONObject().put("name", "mohsen0").put("mtu", 1400))
                 .put("sniffing", new JSONObject().put("enabled", true).put("routeOnly", false)
                         .put("destOverride", new JSONArray().put("http").put("tls").put("quic")));
+        // Bootstrap only the relay hostname with the protected physical resolver.
+        // All ordinary A/AAAA queries use DoH via the primary VLESS outbound.
+        JSONArray resolvers = new JSONArray();
+        if (!isIpLiteral(host)) {
+            resolvers.put(new JSONObject().put("address", "localhost").put("skipFallback", true)
+                    .put("domains", new JSONArray().put("full:" + host)));
+        }
+        resolvers.put("https://1.1.1.1/dns-query").put("https://8.8.8.8/dns-query");
+        JSONObject dns = new JSONObject().put("servers", resolvers).put("disableFallbackIfMatch", true);
+        JSONObject dnsOutbound = new JSONObject().put("protocol", "dns").put("tag", "tunnel-dns");
+        JSONObject dnsRule = new JSONObject().put("type", "field")
+                .put("inboundTag", new JSONArray().put("android-tun"))
+                .put("port", "53").put("network", "tcp,udp").put("outboundTag", "tunnel-dns");
         return new JSONObject().put("log", new JSONObject().put("loglevel", "none")
                         .put("access", "none").put("error", "none"))
+                .put("dns", dns)
                 .put("inbounds", new JSONArray().put(inbound))
-                .put("outbounds", new JSONArray().put(outbound));
+                .put("outbounds", new JSONArray().put(outbound).put(dnsOutbound))
+                .put("routing", new JSONObject().put("rules", new JSONArray().put(dnsRule)));
     }
 }

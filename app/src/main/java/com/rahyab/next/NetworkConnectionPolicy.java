@@ -36,29 +36,17 @@ final class NetworkConnectionPolicy {
         return "cell_other";
     }
 
-    static List<String> quickOrder(boolean onMci, boolean validWireGuardProfiles) {
-        return quickOrder(onMci, validWireGuardProfiles, false);
+    static List<String> quickOrder() {
+        return List.of("Aether", "Fluxcore", "SSTP", "OpenVPN");
     }
 
-    /** Prioritize a previously verified SSTP route only for the current network. */
-    static List<String> quickOrder(boolean onMci, boolean validWireGuardProfiles,
-                                   boolean recentSstpVerifiedOnThisNetwork) {
-        ArrayList<String> order = new ArrayList<>();
-        // Both new native engines were confirmed on MCI and Mokhaberat Wi-Fi
-        // in the reference app. Try them first, but still require actual
-        // on-device HTTPS verification before claiming this app connected.
-        order.add("Fluxcore");
-        order.add("Aether");
-        if (onMci || recentSstpVerifiedOnThisNetwork) {
-            order.add("SSTP");
-            order.add("OpenVPN");
-        } else {
-            order.add("OpenVPN");
-            order.add("SSTP");
-        }
-        // Standalone WireGuard is retired; Fluxcore will manage its own
-        // private WireGuard/AmneziaWG transport once separately integrated.
-        return order;
+    static long quickAttemptBudgetMs(String engine) {
+        return switch (engine) {
+            case "Aether" -> 65_000L;
+            case "Fluxcore" -> 55_000L;
+            case "SSTP" -> 65_000L;
+            default -> 175_000L;
+        };
     }
 
     static ArrayList<String> prioritizeSstp(List<String> endpoints, String lastWorkingHost) {

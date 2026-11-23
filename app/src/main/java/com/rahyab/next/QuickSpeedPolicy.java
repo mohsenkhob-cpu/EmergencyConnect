@@ -4,7 +4,7 @@ package com.rahyab.next;
 final class QuickSpeedPolicy {
     enum Decision { ACCEPT, RECHECK, SWITCH }
 
-    static final long MIN_DOWNLOAD_KBPS = 500L;
+    static final long MIN_DOWNLOAD_KBPS = 1500L;
     private static final long COOLDOWN_MS = 5 * 60_000L;
 
     private String bestEngine;

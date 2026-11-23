@@ -263,7 +263,7 @@ jobs:
             test -s "app/src/main/jniLibs/arm64-v8a/$LIB"
           done
       - name: Build debug APK
-        run: gradle --no-daemon -PciVersionCode=34 testDebugUnitTest assembleDebug
+        run: gradle --no-daemon -PciVersionCode=35 testDebugUnitTest assembleDebug
       - name: Verify APK signature, package, ABI, alignment and checksum
         run: |
           set -euo pipefail
@@ -295,7 +295,7 @@ jobs:
             unzip -l "$APK" | awk -v name="assets/engine-notices/$NOTICE" '$NF == name {found=1} END {exit !found}'
           done
           "$TOOLS/zipalign" -c -v 4 "$APK"
-          "$TOOLS/aapt" dump badging "$APK" | grep -F "package: name='com.mohsen.filter' versionCode='34' versionName='1.0.33'"
+          "$TOOLS/aapt" dump badging "$APK" | grep -F "package: name='com.mohsen.filter' versionCode='35' versionName='1.0.34'"
           "$TOOLS/aapt" dump badging "$APK" | grep -F "native-code: 'arm64-v8a'"
           {
             echo "APK bytes: $(stat -c%s "$APK")"

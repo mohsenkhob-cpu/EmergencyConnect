@@ -148,7 +148,10 @@ public final class TunnelVerifier {
             return true;
         }
         String reason = initial.message;
-        lastXrayProbeStage = reason.contains("DNS") ? "dns_failed"
+        boolean dnsFailed = reason.contains("DNS");
+        lastXrayProbeStage = dnsFailed
+                ? (reason.contains("مستقیم IP از مسیر VPN موفق بود")
+                   ? "dns_failed_ip_https_verified" : "dns_and_ip_https_unverified")
                 : reason.contains("Timeout") || reason.contains("timed out") ? "timeout"
                 : reason.contains("مسیر VPN") ? "vpn_route_missing"
                 : reason.contains("HTTP ") ? "unexpected_http" : "https_path_failed";
@@ -171,13 +174,13 @@ public final class TunnelVerifier {
             if (verified) lastXrayProbeStage = "cloudflare_204_verified";
             return verified;
         } catch (java.net.UnknownHostException error) {
-            lastXrayProbeStage = "dns_failed";
+            if (!dnsFailed) lastXrayProbeStage = "dns_failed";
             return false;
         } catch (java.net.SocketTimeoutException error) {
-            lastXrayProbeStage = "https_timeout";
+            if (!dnsFailed) lastXrayProbeStage = "https_timeout";
             return false;
         } catch (IOException | RuntimeException ignored) {
-            lastXrayProbeStage = "https_io_failed";
+            if (!dnsFailed) lastXrayProbeStage = "https_io_failed";
             return false;
         } finally {
             if (connection != null) connection.disconnect();

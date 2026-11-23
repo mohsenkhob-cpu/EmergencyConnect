@@ -39,6 +39,7 @@ public final class NativeCoreVpnService extends VpnService {
     public static final String START = "com.mohsen.filter.nativecore.START";
     public static final String STOP = "com.mohsen.filter.nativecore.STOP";
     public static final String EXTRA_ENGINE = "engine";
+    public static final String EXTRA_AUTOMATIC = "automatic";
     public static final String FLUXCORE = "Fluxcore";
     public static final String AETHER = "Aether";
 
@@ -114,7 +115,6 @@ public final class NativeCoreVpnService extends VpnService {
             return START_NOT_STICKY;
         }
         if (!stopped || closing) {
-            report("اتصال قبلی هنوز در حال آزادسازی است؛ پس از اتمام دوباره تلاش کنید", "failed");
             return START_NOT_STICKY;
         }
 
@@ -134,7 +134,8 @@ public final class NativeCoreVpnService extends VpnService {
         watchDefaultNetwork();
         int token = generation.incrementAndGet();
         report(requested + " — جست‌وجوی مسیر قابل‌دسترسی…", "searching");
-        Thread thread = new Thread(() -> runSession(requested, token),
+        boolean automatic = intent.getBooleanExtra(EXTRA_AUTOMATIC, false);
+        Thread thread = new Thread(() -> runSession(requested, token, automatic),
                 "mohsen-" + requested.toLowerCase(java.util.Locale.ROOT));
         worker = thread;
         thread.start();
@@ -178,24 +179,28 @@ public final class NativeCoreVpnService extends VpnService {
         }
     }
 
-    private void runSession(String name, int token) {
+    private void runSession(String name, int token, boolean automatic) {
         try {
             // A short bounded recovery window for network changes. Never run
             // overlapping native engines or two TUN bridges.
-            for (int attempt = 1; attempt <= 3 && current(token); attempt++) {
+            int maxAttempts = automatic ? 1 : 3;
+            for (int attempt = 1; attempt <= maxAttempts && current(token); attempt++) {
                 synchronized (teardownLock) { teardownNative(); }
                 establishedAt = 0L;
-                String error = startOne(name, token);
+                String error = startOne(name, token, automatic);
                 if (!current(token)) return;
                 if (error == null) return; // user-initiated stop
                 if (establishedAt > 0L && SystemClock.elapsedRealtime() - establishedAt >= 60_000L) {
                     // A healthy session gets a fresh recovery budget.
                     attempt = 1;
                 }
+                if (attempt == maxAttempts) {
+                    report(name + " — " + error, "failed");
+                    return;
+                }
                 report(name + " — " + error + "؛ تلاش " + attempt + " از ۳", "searching");
-                if (attempt < 3) Thread.sleep(2500L * attempt);
+                Thread.sleep(2500L * attempt);
             }
-            if (current(token)) report(name + " — اتصال قابل‌استفاده تأیید نشد", "failed");
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         } catch (RuntimeException | LinkageError error) {
@@ -215,7 +220,7 @@ public final class NativeCoreVpnService extends VpnService {
     }
 
     /** Returns a safe diagnostic string on error, null only when cancelled. */
-    private String startOne(String name, int token) throws InterruptedException {
+    private String startOne(String name, int token, boolean automatic) throws InterruptedException {
         boolean flux = FLUXCORE.equals(name);
         String binaryName = flux ? "libfluxcore.so" : "libaether.so";
         File binary = new File(getApplicationInfo().nativeLibraryDir, binaryName);
@@ -276,7 +281,9 @@ public final class NativeCoreVpnService extends VpnService {
             drain.setDaemon(true);
             drain.start();
 
-            final long budget = flux ? 125_000L : mode == 0 ? 90_000L : 220_000L;
+            final long budget = automatic
+                    ? (flux ? 38_000L : mode == 0 ? 26_000L : 17_000L)
+                    : (flux ? 125_000L : mode == 0 ? 90_000L : 220_000L);
             long deadline = SystemClock.elapsedRealtime() + budget;
             long nextProbe = 0L;
             while (current(token) && child.isAlive()
@@ -526,6 +533,10 @@ public final class NativeCoreVpnService extends VpnService {
 
     static long sampleDownloadKbps() {
         return hasRunningTunnel() ? NativeProxyProbe.sampleDownloadKbps(SOCKS_PORT) : -1L;
+    }
+
+    static boolean youtubeReachable() {
+        return hasRunningTunnel() && NativeProxyProbe.youtubeReachable(SOCKS_PORT);
     }
 
     public static long[] tunnelBytes() {
