@@ -4,6 +4,13 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class QuickSpeedPolicyTest {
+    @Test public void observedUsableAetherSpeedsDoNotStartReplacementSearch() {
+        QuickSpeedPolicy policy = new QuickSpeedPolicy();
+        assertEquals(QuickSpeedPolicy.Decision.ACCEPT, policy.measure("Aether", 1202, 1));
+        assertEquals(QuickSpeedPolicy.Decision.ACCEPT, policy.measure("Aether", 1292, 2));
+        assertFalse(policy.comparing());
+    }
+
     @Test public void oneSlowOrUnavailableSampleDoesNotSwitchWorkingEngine() {
         QuickSpeedPolicy policy = new QuickSpeedPolicy();
         assertEquals(QuickSpeedPolicy.Decision.ACCEPT, policy.measure("Fluxcore", -1, 1));
@@ -22,7 +29,7 @@ public class QuickSpeedPolicyTest {
         assertEquals("Fluxcore", policy.restoreBest(5));
         assertNull(policy.bestEngine());
         assertFalse(policy.canMeasure(6));
-        assertTrue(policy.canMeasure(300_005));
+        assertTrue(policy.canMeasure(900_005));
     }
 
     @Test public void fastReplacementEndsComparison() {

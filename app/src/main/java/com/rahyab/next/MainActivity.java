@@ -232,7 +232,6 @@ public class MainActivity extends Activity {
     private int healthFailures;
     private long nextSpeedCheck;
     private boolean speedCheckRunning;
-    private String qualityNetwork = "";
     private final QuickSpeedPolicy quickSpeed = new QuickSpeedPolicy();
     private java.util.List<String> quickEngineOrder = java.util.Collections.emptyList();
     private final java.util.ArrayDeque<String> remainingEngines = new java.util.ArrayDeque<>();
@@ -1201,7 +1200,6 @@ public class MainActivity extends Activity {
         quickWaitingForStop = false;
         remainingEngines.clear();
         quickSpeed.reset();
-        qualityNetwork = physicalNetworkSnapshot();
         quickEngineOrder = NetworkConnectionPolicy.quickOrder();
         remainingEngines.addAll(quickEngineOrder);
         appendAppDiagnostic("انتخاب خودکار", "ترتیب آزمون: اتر، فلاکس‌کور، SSTP، سپس OpenVPN");
@@ -1215,10 +1213,10 @@ public class MainActivity extends Activity {
 
     private void tryNextQuickEngine() {
         quickEngine = remainingEngines.poll();
-        if (quickEngine == null && qualityNetwork.equals(physicalNetworkSnapshot())) {
+        if (quickEngine == null && quickSpeed.comparing()) {
             quickEngine = quickSpeed.restoreBest(android.os.SystemClock.elapsedRealtime());
-            if (quickEngine != null) appendAppDiagnostic("پایش سرعت",
-                    "بازگشت به سریع‌ترین موتورِ اندازه‌گیری‌شده — " + quickEngine);
+            appendAppDiagnostic("پایش سرعت", "بازگشت به آخرین موتورِ سریع‌تر — " + quickEngine);
+            refillAlternatives(quickEngine);
         }
         quickSpeed.engineChanged();
         speedCheckRunning = false;
@@ -1299,7 +1297,9 @@ public class MainActivity extends Activity {
                 if (!verified) appendAppDiagnostic("پایش اتصال",
                         monitoredEngine + " — شکست بررسی " + healthFailures
                                 + "/2؛ علت: " + failureReason);
-                if (healthFailures < 2 || (remainingEngines.isEmpty() && !quickSpeed.comparing())) return;
+                if (healthFailures < 2) return;
+                if (remainingEngines.isEmpty() && !quickSpeed.comparing())
+                    refillAlternatives(monitoredEngine);
                 appendAppDiagnostic("پایش اتصال", quickEngine
                         + " — هر دو بررسی VPN ناموفق؛ آزمایش موتور بعدی");
                 stopBeforeQuickFallback();
@@ -1338,12 +1338,9 @@ public class MainActivity extends Activity {
                 long now = android.os.SystemClock.elapsedRealtime();
                 nextSpeedCheck = now + 45_000L;
                 String currentNetwork = physicalNetworkSnapshot();
-                if (!qualityNetwork.equals(currentNetwork)) {
-                    quickSpeed.reset();
-                    qualityNetwork = currentNetwork;
-                }
-                if (currentNetwork.isEmpty() || !network.equals(currentNetwork)
-                        || !hasActiveAndroidVpn() || !"connected".equals(
+                boolean changedNetwork = !network.isEmpty() && !currentNetwork.isEmpty()
+                        && !network.equals(currentNetwork);
+                if (changedNetwork || !hasActiveAndroidVpn() || !"connected".equals(
                                 statusPreferences.getString("connection_lamp_state", ""))) {
                     quickSpeed.engineChanged();
                     nextSpeedCheck = now + 5000L;
@@ -1354,20 +1351,28 @@ public class MainActivity extends Activity {
                 if (!youtubeReachable) measurement += "؛ صفحهٔ یوتیوب پاسخ نداد";
                 getSharedPreferences("rah_yab_diagnostics", MODE_PRIVATE).edit()
                         .putString("quick_speed_result", measurement).apply();
+                // Slow fallback engines can still carry traffic when neither native engine works.
+                if (!nativeCore) return;
                 boolean wasComparing = quickSpeed.comparing();
                 long qualitySpeed = youtubeReachable ? speed
                         : Math.min(speed, QuickSpeedPolicy.MIN_DOWNLOAD_KBPS / 2L);
                 switch (quickSpeed.measure(engine, qualitySpeed, now)) {
                     case RECHECK -> nextSpeedCheck = now + 5000L;
                     case ACCEPT -> {
-                        if (wasComparing) appendAppDiagnostic("پایش سرعت", "موتور جایگزین پذیرفته شد — " + measurement);
+                        if (wasComparing) {
+                            refillAlternatives(engine);
+                            appendAppDiagnostic("پایش سرعت", "موتور جایگزین پذیرفته شد — " + measurement);
+                        }
                     }
                     case SWITCH -> {
                         if (!wasComparing) {
-                            refillAlternatives(engine);
+                            remainingEngines.clear();
+                            remainingEngines.add(NetworkConnectionPolicy.nativeSpeedAlternative(engine));
                         }
                         if (remainingEngines.isEmpty() && engine.equals(quickSpeed.bestEngine())) {
                             quickSpeed.restoreBest(now);
+                            refillAlternatives(engine);
+                            appendAppDiagnostic("پایش سرعت", "اتصال فعلی حفظ شد — " + measurement);
                             return;
                         }
                         appendAppDiagnostic("پایش سرعت", "آزمایش موتور جایگزین — " + measurement);

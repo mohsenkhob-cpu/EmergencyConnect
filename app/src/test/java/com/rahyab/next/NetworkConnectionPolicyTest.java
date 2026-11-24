@@ -12,6 +12,11 @@ public class NetworkConnectionPolicyTest {
         assertTrue(NetworkConnectionPolicy.quickAttemptBudgetMs("Fluxcore") <= 55_000L);
     }
 
+    @Test public void speedComparisonBetweenNativeCoresDoesNotStartLegacySearch() {
+        assertEquals("Fluxcore", NetworkConnectionPolicy.nativeSpeedAlternative("Aether"));
+        assertEquals("Aether", NetworkConnectionPolicy.nativeSpeedAlternative("Fluxcore"));
+    }
+
     @Test public void lastSstpHostFirstWithoutDuplicatesOrUntrustedHosts() {
         assertEquals(List.of("public-vpn-66.opengw.net:443", "public-vpn-58.opengw.net:443"),
                 NetworkConnectionPolicy.prioritizeSstp(

@@ -40,6 +40,10 @@ final class NetworkConnectionPolicy {
         return List.of("Aether", "Fluxcore", "SSTP", "OpenVPN");
     }
 
+    static String nativeSpeedAlternative(String engine) {
+        return "Aether".equals(engine) ? "Fluxcore" : "Aether";
+    }
+
     static long quickAttemptBudgetMs(String engine) {
         return switch (engine) {
             case "Aether" -> 65_000L;

@@ -483,7 +483,7 @@ public final class NativeCoreVpnService extends VpnService {
         generation.incrementAndGet();
         Thread old = worker;
         if (old != null) old.interrupt();
-        report("اتصال " + currentEngine + " قطع شد", "disconnected");
+        if (!currentEngine.isEmpty()) report("اتصال " + currentEngine + " قطع شد", "disconnected");
         new Thread(() -> {
             try {
                 synchronized (teardownLock) { teardownNative(); }
